@@ -1,0 +1,43 @@
+{
+  "name": "gmc",
+  "version": "0.1.0",
+  "description": "Bind GitHub issues to AI coding sessions and commit messages",
+  "main": "bin/gmc.js",
+  "keywords": [
+    "git",
+    "issues",
+    "codex",
+    "claude",
+    "ai",
+    "cli"
+  ],
+  "files": [
+    "lib",
+    "bin"
+  ],
+  "bin": {
+    "gmc": "bin/gmc.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://taontech@github.com/taontech/gmc"
+  },
+  "dependencies": {
+    "colors": "^1.0.3",
+    "commander": "^2.16.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "start": "node bin/gmc.js",
+    "test": "node --check bin/gmc.js && node --check lib/git.js && node --check lib/github.js && node --check lib/config.js && node --check lib/prompts.js && node --check lib/agent.js && node --check lib/autogmc.js && node --check lib/web.js"
+  },
+  "engine-strict": true,
+  "engines": {
+    "node": ">= 18"
+  },
+  "licenses": [
+    {
+      "type": "MIT"
+    }
+  ]
+}

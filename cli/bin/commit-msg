@@ -1,0 +1,5 @@
+#!/bin/sh
+# GMHOOK
+
+command -v gmc >/dev/null 2>&1 || exit 0
+gmc hook commit-msg "$1"
