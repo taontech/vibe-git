@@ -1,26 +1,32 @@
 {
   "name": "gmc",
-  "version": "0.1.0",
-  "description": "Bind GitHub issues to AI coding sessions and commit messages",
+  "version": "0.1.11",
+  "description": "Local GitWeb dashboard and AI-assisted commit messages for Git repositories",
   "main": "bin/gmc.js",
   "keywords": [
     "git",
-    "issues",
+    "gitweb",
+    "commit",
+    "dashboard",
     "codex",
     "claude",
     "ai",
     "cli"
   ],
   "files": [
-    "lib",
-    "bin"
+    "bin/gmc.js",
+    "lib"
   ],
   "bin": {
     "gmc": "bin/gmc.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+ssh://taontech@github.com/taontech/gmc"
+    "url": "git+ssh://git@github.com/taontech/vibe-git.git"
+  },
+  "homepage": "https://github.com/taontech/vibe-git#readme",
+  "bugs": {
+    "url": "https://github.com/taontech/vibe-git/issues"
   },
   "dependencies": {
     "colors": "^1.0.3",
@@ -29,15 +35,12 @@
   "devDependencies": {},
   "scripts": {
     "start": "node bin/gmc.js",
-    "test": "node --check bin/gmc.js && node --check lib/git.js && node --check lib/github.js && node --check lib/config.js && node --check lib/prompts.js && node --check lib/agent.js && node --check lib/autogmc.js && node --check lib/web.js"
+    "test": "node --check bin/gmc.js && node --check lib/git.js && node --check lib/github.js && node --check lib/config.js && node --check lib/prompts.js && node --check lib/agent.js && node --check lib/autogmc.js && node --check lib/web.js",
+    "prepublishOnly": "npm test"
   },
   "engine-strict": true,
   "engines": {
     "node": ">= 18"
   },
-  "licenses": [
-    {
-      "type": "MIT"
-    }
-  ]
+  "license": "MIT"
 }

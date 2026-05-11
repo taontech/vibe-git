@@ -30,10 +30,11 @@ flowchart LR
 
 ## Quick Start
 
-Install from this repository:
+Install from npm:
 
 ```sh
-npm install -g ./cli
+npm install -g gmc
+gmc --version
 ```
 
 Then open any Git repository:
@@ -134,6 +135,7 @@ export GMC_CODEX_TIMEOUT_MS=600000
 
 | Command | Status | Purpose |
 | --- | --- | --- |
+| `gmc --version` | Ready | Print the installed CLI version. |
 | `gmc web [--port 4277] [--no-open]` | Ready | Start or open the local GitWeb dashboard. |
 | `gmc install --all [--port 4277]` | Ready | Install hooks and create the local Web link. |
 | `gmc install-hooks` | Ready | Install only the non-blocking commit-message hooks. |

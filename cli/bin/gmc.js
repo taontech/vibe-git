@@ -13,6 +13,7 @@ var prompts = require('../lib/prompts');
 var agent = require('../lib/agent');
 var autogmc = require('../lib/autogmc');
 var web = require('../lib/web');
+var packageInfo = require('../package.json');
 
 var COMMANDS = ['agent', 'bind', 'status', 'message', 'commit', 'retry', 'install', 'install-hooks', 'web', 'hook', 'hook-worker', 'help'];
 var DIFF_LIMIT = 120000;
@@ -25,6 +26,11 @@ main().catch(function(error) {
 async function main() {
   var parsed = parseArgs(process.argv.slice(2));
   var command = parsed.command;
+
+  if (parsed.flags.version) {
+    console.log(packageInfo.version);
+    return;
+  }
 
   if (!command || command === 'help' || parsed.flags.help) {
     printHelp();
@@ -104,7 +110,8 @@ function parseArgs(argv) {
     start: false,
     restart: false,
     quit: false,
-    watch: false
+    watch: false,
+    version: false
   };
   var positional = [];
 
@@ -140,6 +147,8 @@ function parseArgs(argv) {
       flags.quit = true;
     } else if (arg === '--watch' || arg === '--dev') {
       flags.watch = true;
+    } else if (arg === '--version' || arg === '-v') {
+      flags.version = true;
     } else if (arg === '-h' || arg === '--help') {
       flags.help = true;
     } else {
@@ -667,6 +676,7 @@ function printHelp() {
     'gmc - bind GitHub issues to AI coding sessions and commits',
     'git commit -m gmc - generate commit message with gmc hooks',
     'Usage:',
+    '  gmc --version',
     '  gmc <issue> [--agent codex|claude] [--exec] [--no-branch]',
     '  gmc agent [codex|claude]',
     '  gmc bind <issue> [--agent codex|claude]',
