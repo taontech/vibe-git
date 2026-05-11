@@ -3,17 +3,27 @@
 var childProcess = require('child_process');
 var fs = require('fs');
 var http = require('http');
+var os = require('os');
 var path = require('path');
 var url = require('url');
 var autogmc = require('./autogmc');
+var agent = require('./agent');
 var config = require('./config');
 var git = require('./git');
+var prompts = require('./prompts');
 
 var DEFAULT_PORT = 4277;
 var GITWEB_VERSION = 2;
+var DIFF_LIMIT = 120000;
+var RELOAD_TOKEN = process.env.GMC_GITWEB_RELOAD_TOKEN || String(Date.now());
+var RECENT_REPOS_FILE = path.join(os.homedir(), '.config', 'gmc', 'recent-repos.json');
+var RECENT_REPOS_LIMIT = 20;
+var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
+var recentRepoVisitTimes = {};
 
 function start(root, options) {
   options = options || {};
+  recordRepositoryVisitIfValid(root);
 
   var requestedPort = normalizePort(options.port || process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
   return listen(requestedPort, 0).then(function (serverInfo) {
@@ -41,7 +51,7 @@ function listen(port, attempt) {
       }
       reject(error);
     });
-    server.listen(port, '127.0.0.1', function () {
+    server.listen(port, '0.0.0.0', function () {
       resolve({
         server: server,
         port: server.address().port
@@ -115,6 +125,13 @@ function handleRequest(req, res) {
   try {
     var parsed = url.parse(req.url, true);
     if (req.method === 'POST') {
+      if (parsed.pathname === '/api/quit') {
+        sendJson(res, { status: 'ok' });
+        setTimeout(function () {
+          process.exit(0);
+        }, 100);
+        return;
+      }
       if (parsed.pathname === '/api/commit-selected') {
         handleCommitSelected(req, res, parsed.query.repo);
         return;
@@ -135,6 +152,14 @@ function handleRequest(req, res) {
         handlePull(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/install') {
+        handleInstall(req, res, parsed.query.repo);
+        return;
+      }
+      if (parsed.pathname === '/api/repositories/remove') {
+        handleRemoveRepository(req, res);
+        return;
+      }
       send(res, 405, 'text/plain; charset=utf-8', 'Method not allowed');
       return;
     }
@@ -145,12 +170,31 @@ function handleRequest(req, res) {
     }
 
     if (parsed.pathname === '/' || parsed.pathname === '/index.html') {
+      if (parsed.query.name && !parsed.query.repo) {
+        redirectRepositoryName(res, parsed.query.name);
+        return;
+      }
       send(res, 200, 'text/html; charset=utf-8', webHtml());
       return;
     }
 
+    if (parsed.pathname === '/readme' || parsed.pathname === '/readme.html') {
+      send(res, 200, 'text/html; charset=utf-8', readmeHtml());
+      return;
+    }
+
     if (parsed.pathname === '/api/ping') {
-      sendJson(res, { status: 'ok', service: 'gmc-gitweb', gitwebVersion: GITWEB_VERSION });
+      sendJson(res, { status: 'ok', service: 'gmc-gitweb', gitwebVersion: GITWEB_VERSION, reloadToken: RELOAD_TOKEN });
+      return;
+    }
+
+    if (parsed.pathname === '/api/repositories') {
+      sendJson(res, { repositories: readRecentRepositories() });
+      return;
+    }
+
+    if (parsed.pathname === '/api/repositories/resolve') {
+      sendJson(res, { repository: findRecentRepositoryByName(parsed.query.name) });
       return;
     }
 
@@ -164,6 +208,11 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/status') {
       sendJson(res, collectStatus(targetRepo));
+      return;
+    }
+
+    if (parsed.pathname === '/api/readme') {
+      sendJson(res, readmeContent(targetRepo));
       return;
     }
 
@@ -235,6 +284,115 @@ function handlePull(req, res, targetRepo) {
   sendJson(res, { status: 'ok', output: ((result.stdout || '') + (result.stderr || '')).trim() });
 }
 
+function handleInstall(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  try {
+    var repoRoot = git.repoRoot(targetRepo);
+    installHooksAndWeb(repoRoot);
+    sendJson(res, { status: 'ok', install: checkInstallStatus(repoRoot) });
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleRemoveRepository(req, res) {
+  readJsonBody(req).then(function (body) {
+    sendJson(res, { repositories: removeRecentRepository(body.repo || body.path) });
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function redirectRepositoryName(res, name) {
+  var repository = findRecentRepositoryByName(name);
+  if (!repository) {
+    send(res, 404, 'text/plain; charset=utf-8', 'No recent repository named "' + String(name || '') + '".');
+    return;
+  }
+  res.writeHead(302, {
+    Location: '/?repo=' + encodeURIComponent(repository.path),
+    'Cache-Control': 'no-store'
+  });
+  res.end();
+}
+
+function checkInstallStatus(root) {
+  var repoRoot = git.repoRoot(root);
+  var gitDirPath = git.gitDir(root);
+  var hooks = { commitMsg: false, postCommit: false };
+  try {
+    var cmPath = path.join(gitDirPath, 'hooks', 'commit-msg');
+    if (fs.existsSync(cmPath)) {
+      var content = fs.readFileSync(cmPath, 'utf8');
+      hooks.commitMsg = content.indexOf('# GMHOOK') >= 0;
+    }
+  } catch (e) { /* ignore */ }
+  try {
+    var pcPath = path.join(gitDirPath, 'hooks', 'post-commit');
+    if (fs.existsSync(pcPath)) {
+      var content = fs.readFileSync(pcPath, 'utf8');
+      hooks.postCommit = content.indexOf('# GMHOOK') >= 0;
+    }
+  } catch (e) { /* ignore */ }
+  var weblocPath = path.join(repoRoot, 'git.webloc');
+  return {
+    hooks: hooks.commitMsg && hooks.postCommit,
+    webloc: fs.existsSync(weblocPath)
+  };
+}
+
+function installHooksAndWeb(repoRoot) {
+  var gitDirPath = git.gitDir(repoRoot);
+  var hooksDir = path.join(gitDirPath, 'hooks');
+  if (!fs.existsSync(hooksDir)) {
+    fs.mkdirSync(hooksDir, { recursive: true });
+  }
+  ['commit-msg', 'post-commit'].forEach(function (hookName) {
+    var hookPath = path.join(hooksDir, hookName);
+    var existing = fs.existsSync(hookPath) ? fs.readFileSync(hookPath, 'utf8') : null;
+    if (existing && existing.indexOf('# GMHOOK') < 0) {
+      throw new Error(hookPath + ' already exists and is not managed by gmc.');
+    }
+    var gmcBin = path.resolve(__dirname, '..', 'bin', 'gmc.js');
+    var script = hookScript(hookName, gmcBin);
+    fs.writeFileSync(hookPath, script);
+    fs.chmodSync(hookPath, 0o755);
+  });
+  // create webloc
+  var port = normalizePort(process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
+  var address = 'http://127.0.0.1:' + port + '/?repo=' + encodeURIComponent(repoRoot);
+  var linkPath = path.join(repoRoot, 'git.webloc');
+  var content = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"',
+    '  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    '<dict>',
+    '  <key>URL</key>',
+    '  <string>' + escapeXml(address) + '</string>',
+    '</dict>',
+    '</plist>'
+  ].join('\n') + '\n';
+  fs.writeFileSync(linkPath, content);
+}
+
+function hookScript(hookName, gmcBin) {
+  var base = '#!/bin/sh\n# GMHOOK\n\n';
+  var node = shellQuote(process.execPath);
+  var gmc = shellQuote(gmcBin);
+  if (hookName === 'commit-msg') {
+    return base + 'exec ' + node + ' ' + gmc + ' hook commit-msg "$1"\n';
+  }
+  if (hookName === 'post-commit') {
+    return base + 'exec ' + node + ' ' + gmc + ' hook post-commit\n';
+  }
+  throw new Error('Unknown hook: ' + hookName);
+}
+
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
 function readJsonBody(req) {
   return new Promise(function (resolve, reject) {
     var body = '';
@@ -285,7 +443,110 @@ function send(res, status, type, body) {
   res.end(body);
 }
 
+function readRecentRepositories() {
+  var raw;
+  try {
+    if (!fs.existsSync(RECENT_REPOS_FILE)) {
+      return [];
+    }
+    raw = JSON.parse(fs.readFileSync(RECENT_REPOS_FILE, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+
+  var repositories = Array.isArray(raw) ? raw : raw.repositories;
+  if (!Array.isArray(repositories)) {
+    return [];
+  }
+
+  return repositories
+    .filter(function (item) { return item && item.path; })
+    .map(function (item) {
+      var repoPath = String(item.path);
+      return {
+        name: String(item.name || repoName(repoPath)),
+        path: repoPath,
+        lastVisited: Number(item.lastVisited) || 0
+      };
+    })
+    .sort(function (a, b) { return b.lastVisited - a.lastVisited; })
+    .slice(0, RECENT_REPOS_LIMIT);
+}
+
+function writeRecentRepositories(repositories) {
+  var recent = repositories.slice(0, RECENT_REPOS_LIMIT);
+  fs.mkdirSync(path.dirname(RECENT_REPOS_FILE), { recursive: true });
+  fs.writeFileSync(RECENT_REPOS_FILE, JSON.stringify({
+    repositories: recent
+  }, null, 2) + '\n');
+  return recent;
+}
+
+function recordRepositoryVisit(root) {
+  var repoRoot = git.repoRoot(root);
+  var repositories = readRecentRepositories().filter(function (item) {
+    return item.path !== repoRoot;
+  });
+  recentRepoVisitTimes[repoRoot] = Date.now();
+  repositories.unshift({
+    name: repoName(repoRoot),
+    path: repoRoot,
+    lastVisited: recentRepoVisitTimes[repoRoot]
+  });
+  return writeRecentRepositories(repositories);
+}
+
+function recordRepositoryVisitIfStale(root) {
+  var repoRoot = git.repoRoot(root);
+  var lastVisit = recentRepoVisitTimes[repoRoot] || 0;
+  if (Date.now() - lastVisit < RECENT_REPOS_VISIT_INTERVAL_MS) {
+    return readRecentRepositories();
+  }
+  return recordRepositoryVisit(repoRoot);
+}
+
+function recordRepositoryVisitIfValid(root) {
+  try {
+    return recordRepositoryVisit(root);
+  } catch (e) {
+    return readRecentRepositories();
+  }
+}
+
+function removeRecentRepository(repoPath) {
+  if (!repoPath) {
+    return readRecentRepositories();
+  }
+  return writeRecentRepositories(readRecentRepositories().filter(function (item) {
+    return item.path !== repoPath;
+  }));
+}
+
+function findRecentRepositoryByName(name) {
+  var key = normalizeRepoName(name);
+  if (!key) return null;
+  var repositories = readRecentRepositories();
+  for (var i = 0; i < repositories.length; i++) {
+    var item = repositories[i];
+    if (normalizeRepoName(item.name) === key || normalizeRepoName(repoName(item.path)) === key) {
+      return item;
+    }
+  }
+  return null;
+}
+
+function repoName(repoPath) {
+  var parts = String(repoPath || '').replace(/[\\\/]+$/, '').split(/[\\\/]+/);
+  return parts[parts.length - 1] || repoPath || '';
+}
+
+function normalizeRepoName(name) {
+  return String(name || '').trim().toLowerCase();
+}
+
 function collectStatus(root) {
+  root = git.repoRoot(root);
+  recordRepositoryVisitIfStale(root);
   var branch = git.currentBranch(root) || '(detached)';
   var upstream = runGitOptional(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   var status = parseStatusOutput(runGitOptional(root, ['status', '--porcelain=v1', '-b', '-z']));
@@ -294,6 +555,8 @@ function collectStatus(root) {
     ahead: 0,
     behind: 0
   };
+
+  var installStatus = checkInstallStatus(root);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -317,7 +580,8 @@ function collectStatus(root) {
     commits: commits(root, 44),
     contributions: contributions(root),
     binding: safeBinding(root),
-    tasks: safeTasks(root)
+    tasks: safeTasks(root),
+    install: installStatus
   };
 }
 
@@ -544,10 +808,46 @@ function commitSelectedFiles(root, selectedFiles) {
     throwHttpError('Selected files have no staged changes.');
   }
 
-  var result = childProcess.spawnSync('git', ['commit', '-m', 'gmc', '--'].concat(gitPaths), {
-    cwd: repoRoot,
-    encoding: 'utf8'
-  });
+  var installed = checkInstallStatus(repoRoot);
+  var result;
+
+  if (installed.hooks) {
+    // Hooks installed: git commit -m gmc triggers the commit-msg hook which generates AI message
+    result = childProcess.spawnSync('git', ['commit', '-m', 'gmc', '--'].concat(gitPaths), {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    });
+  } else {
+    // No hooks: generate AI commit message directly
+    var binding = safeBinding(repoRoot);
+    var diff = git.stagedDiff(repoRoot);
+    if (diff.length > DIFF_LIMIT) {
+      diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
+    }
+    var prompt = prompts.commitMessagePrompt(
+      binding,
+      diff,
+      git.statusShort(repoRoot),
+      git.recentCommitSubjects(repoRoot, 20)
+    );
+    var aiMessage;
+    try {
+      aiMessage = prompts.appendCreatedBy(
+        agent.generateCommitMessage(prompt, repoRoot),
+        binding ? binding.agent : config.currentAgent()
+      );
+    } catch (aiError) {
+      var err = new Error('AI commit message generation failed: ' + aiError.message);
+      err.httpStatus = 500;
+      throw err;
+    }
+    var messageFile = git.writeGitFile(repoRoot, 'GMC_WEB_COMMIT_EDITMSG', aiMessage);
+    result = childProcess.spawnSync('git', ['commit', '-F', messageFile, '--'].concat(gitPaths), {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    });
+  }
+
   if (result.error) {
     throw result.error;
   }
@@ -673,6 +973,64 @@ function safeTasks(root) {
   }
 }
 
+function readmeContent(root) {
+  var repoRoot = git.repoRoot(root);
+  var names = ['README.md', 'readme.md', 'Readme.md', 'README.MD'];
+  for (var i = 0; i < names.length; i++) {
+    var readmePath = path.join(repoRoot, names[i]);
+    if (fs.existsSync(readmePath)) {
+      try {
+        return { type: 'readme', content: fs.readFileSync(readmePath, 'utf8') };
+      } catch (e) {
+        break;
+      }
+    }
+  }
+  return { type: 'help', content: gmcHelpText() };
+}
+
+function gmcHelpText() {
+  return [
+    'gmc - bind GitHub issues to AI coding sessions and commits',
+    'git commit -m gmc - generate commit message with gmc hooks',
+    '',
+    'Usage:',
+    '  gmc <issue> [--agent codex|claude] [--exec] [--no-branch]',
+    '  gmc agent [codex|claude]',
+    '  gmc bind <issue> [--agent codex|claude]',
+    '  gmc status',
+    '  gmc message [--print-prompt]',
+    '  gmc commit [--no-edit]',
+    '  gmc retry [commit]',
+    '  gmc install --all [--port 4277]',
+    '  gmc install-hooks',
+    '  gmc web [--port 4277] [--no-open]',
+    '  git commit -m gmc',
+    '',
+    'Environment:',
+    '  GITHUB_TOKEN or GH_TOKEN is used for GitHub API authentication.',
+    '  GMC_CODEX_MODEL overrides the model used for commit message generation.',
+    '  GMC_CODEX_TIMEOUT_MS overrides the Codex generation timeout.',
+    '  GMC_GITWEB_PORT overrides the default local GitWeb port.',
+    '  gmc install --all installs hooks and writes a repository-specific git.webloc.',
+    '  gmc install-hooks sets up Git hooks to automatically create background tasks',
+    '    for new commits and commit messages.',
+    '  gmc web serves the Git Web UI. If a server is already running, it will just',
+    '    open the current repository in the browser.',
+    '',
+    'Examples:',
+    '  git commit -m gmc',
+    '  gmc agent claude',
+    '  gmc GH-234 --agent codex',
+    '  git add . && gmc message',
+    '  git add . && gmc commit',
+    '  gmc retry HEAD',
+    '  gmc install --all',
+    '  gmc install-hooks && git commit -m gmc',
+    '  gmc web'
+  ].join('\n');
+}
+
 function runGitOptional(root, args) {
   var result = git.runGit(args, {
     cwd: root,
@@ -755,21 +1113,145 @@ function webHtml() {
   --muted: #6b7280;
   --line: #dbe2ea;
   --line-soft: #edf1f5;
-  --accent: #2563eb;
+  --accent: #068d6dff;
   --accent-soft: #eff6ff;
   --green: #0f9f6e;
   --rose: #dc2626;
   --amber: #b45309;
-  --shadow: 0 18px 48px rgba(15, 23, 42, .12);
+  --shadow: 0 18px 45px rgba(15, 23, 42, .12);
+  --sidebar-w: 260px;
+  --sidebar-bg: #f1f5f9;
+  --sidebar-border: #e2e8f0;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-x: hidden; }
 body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
-.shell { width: min(1480px, calc(100vw - 32px)); margin: 0 auto; padding: 24px 0 32px; }
-.topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
-h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; }
+.app-container { display: flex; min-width: 0; min-height: 100vh; }
+.sidebar {
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.72), rgba(241,245,249,.92)),
+    var(--sidebar-bg);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-right: 1px solid var(--sidebar-border);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  z-index: 1000;
+  overflow: hidden;
+}
+.sidebar.collapsed {
+  margin-left: calc(-1 * var(--sidebar-w));
+  transform: translateX(-100%);
+}
+.sidebar-header {
+  padding: 18px 18px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 62px;
+}
+.sidebar-header h2 { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.1em; margin: 0; }
+.repo-list { flex: 1; overflow-y: auto; padding: 8px 12px 18px; }
+.repo-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 14px;
+  background: rgba(255,255,255,.48);
+}
+.repo-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 8px;
+  transition: background .18s, border-color .18s, box-shadow .18s, transform .18s;
+  color: inherit;
+  background: rgba(255,255,255,.72);
+  border: 1px solid rgba(226,232,240,.72);
+  box-shadow: 0 1px 2px rgba(15,23,42,.035);
+  outline: none;
+}
+.repo-item:hover, .repo-item:focus-visible {
+  border-color: #c7d2fe;
+  background: rgba(255,255,255,.95);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px rgba(37,99,235,.10);
+}
+.repo-item.active {
+  border-color: #039c67ff;
+  background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+  box-shadow: inset 3px 0 0 var(--accent), 0 10px 24px rgba(37,99,235,.10);
+}
+.repo-item-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #2563eb;
+  background: #e0edff;
+  border: 1px solid #bfdbfe;
+  font-weight: 800;
+  font-size: 13px;
+}
+.repo-item-body { min-width: 0; padding-right: 22px; }
+.repo-item-name { font-weight: 750; font-size: 13.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo-item-path { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; opacity: 0.86; }
+.repo-item-time { font-size: 10.5px; color: #94a3b8; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo-item.active .repo-item-name { color: var(--accent); }
+.repo-item.active .repo-item-path { color: var(--muted); opacity: 0.7; }
+.repo-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #64748b;
+  background: rgba(255,255,255,.92);
+  opacity: 0;
+  transform: scale(.92);
+  cursor: pointer;
+  transition: opacity .14s, transform .14s, color .14s, background .14s, border-color .14s;
+}
+.repo-item:hover .repo-remove,
+.repo-item:focus-within .repo-remove,
+.repo-remove:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+.repo-remove:hover {
+  color: var(--rose);
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+.repo-remove svg { width: 14px; height: 14px; pointer-events: none; }
+
+.shell { flex: 1; min-width: 0; padding: 0 32px 32px; }
+.shell-inner { width: min(1480px, 100%); margin: 0 auto; }
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; height: 64px; }
+h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
-.repo { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); }
+.repo { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); }
 .actions { display: flex; gap: 8px; }
 .actions button, .commit-button, .ignore-button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 7px; min-height: 34px; padding: 7px 12px; cursor: pointer; font-weight: 650; }
 .actions button:hover, .commit-button:hover:not(:disabled), .ignore-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
@@ -778,9 +1260,18 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .ignore-button { color: var(--rose); }
 .ignore-button:hover:not(:disabled) { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
 .commit-button:disabled, .ignore-button:disabled { opacity: .45; cursor: not-allowed; }
-.grid { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 16px; align-items: start; }
+.install-banner { display: none; background: #dc2626; color: #fff; padding: 10px 20px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; font-weight: 600; align-items: center; justify-content: space-between; gap: 12px; }
+.install-banner.visible { display: flex; }
+.install-banner .install-text { flex: 1; }
+.install-banner button { background: #fff; color: #dc2626; border: none; border-radius: 6px; padding: 6px 16px; font-weight: 700; cursor: pointer; white-space: nowrap; font-size: 13px; }
+.install-banner button:hover { background: #fef2f2; }
+.install-banner button:disabled { opacity: .6; cursor: not-allowed; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 440px); gap: 16px; align-items: start; min-width: 0; }
+.grid > *, .summary-panel > *, .side, .panel { min-width: 0; }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
-.summary-panel { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 16px; margin-bottom: 16px; align-items: stretch; }
+.summary-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 440px); gap: 16px; margin-bottom: 16px; align-items: stretch; min-width: 0; }
+.branch-summary-panel { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; overflow: hidden; }
+.branch-summary-text { min-width: 0; flex: 1 1 auto; }
 .branch-name { font-size: 32px; font-weight: 780; margin: 3px 0 2px; letter-spacing: 0; overflow-wrap: anywhere; }
 .meters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; height: 100%; }
 .meter { padding: 12px; border-radius: 8px; background: var(--panel-soft); border: 1px solid var(--line-soft); position: relative; }
@@ -792,15 +1283,20 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .timeline-container { --graph-width: 30px; display: grid; grid-template-columns: var(--graph-width) minmax(0, 1fr); column-gap: 6px; align-items: flex-start; position: relative; height: min(66vh, 680px); min-height: 430px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; background: linear-gradient(90deg, #fbfdff 0, #fbfdff calc(var(--graph-width) + 10px), #ffffff calc(var(--graph-width) + 10px)); padding: 10px 10px 10px 4px; }
 #graph { width: var(--graph-width); min-width: var(--graph-width); pointer-events: auto; overflow: visible; }
 .timeline { display: grid; gap: 9px; min-width: 0; padding-right: 2px; }
-.commit { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 10px; padding: 6px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: default; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; min-height: 48px; }
+.commit { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 10px; padding: 6px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: pointer; touch-action: manipulation; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; min-height: 48px; }
 .commit:hover { background: var(--accent-soft); border-color: #bfdbfe; box-shadow: 0 8px 22px rgba(37, 99, 235, .10); transform: translateY(-1px); }
 .hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; align-self: center; }
 .subject { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; }
+.ai-status { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 16px; margin-left: 7px; vertical-align: -3px; color: var(--accent); position: relative; }
+.ai-status svg { display: block; }
+.ai-status-loader { width: 15px; height: 15px; animation: spin 1.05s linear infinite; opacity: .9; }
+.ai-status-loader circle { opacity: .22; }
+.ai-status-sparkles { position: absolute; right: -1px; top: -3px; width: 11px; height: 11px; color: #0f9f6e; animation: aiPulse 1.35s ease-in-out infinite; filter: drop-shadow(0 1px 2px rgba(15, 159, 110, .18)); }
 .side { display: grid; gap: 16px; }
 .file-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .file-toolbar label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
-.file-actions { display: flex; gap: 8px; }
+.file-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
 .files-list { display: grid; max-height: 310px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; }
 .file-row { display: grid; grid-template-columns: 24px 42px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 38px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
 .file-row:last-child { border-bottom: none; }
@@ -815,44 +1311,133 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .branch-tree-row:hover { background: #f8fafc; }
 .tree-lines { color: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; margin-right: 4px; }
 #branches { max-height: 330px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; }
+.readme-panel { margin-top: 0; }
+.readme-panel .readme-body { padding: 4px 0 0; font-size: 14px; line-height: 1.65; overflow-wrap: break-word; word-break: break-word; }
+.readme-body h1, .readme-body h2, .readme-body h3, .readme-body h4 { margin: 1.2em 0 .6em; font-weight: 700; }
+.readme-body h1 { font-size: 22px; border-bottom: 1px solid var(--line-soft); padding-bottom: 6px; }
+.readme-body h2 { font-size: 18px; border-bottom: 1px solid var(--line-soft); padding-bottom: 4px; }
+.readme-body h3 { font-size: 15px; }
+.readme-body p { margin: .6em 0; }
+.readme-body ul, .readme-body ol { padding-left: 24px; margin: .5em 0; }
+.readme-body li { margin: .3em 0; }
+.readme-body pre { background: #f1f5f9; border: 1px solid var(--line-soft); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+.readme-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
+.readme-body pre code { background: none; padding: 0; font-size: inherit; }
+.readme-body blockquote { margin: .6em 0; padding: 4px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; color: #334155; }
+.readme-body table { border-collapse: collapse; margin: .8em 0; width: 100%; }
+.readme-body th, .readme-body td { border: 1px solid var(--line-soft); padding: 6px 10px; text-align: left; }
+.readme-body th { background: #f8fafc; font-weight: 700; }
+.readme-body img { max-width: 100%; border-radius: 6px; }
+.readme-body a { color: var(--accent); text-decoration: none; }
+.readme-body a:hover { text-decoration: underline; }
+.readme-body .mermaid { margin: .8em 0; overflow-x: auto; }
+.readme-help pre { white-space: pre-wrap; background: #f8fafc; border: 1px solid var(--line-soft); padding: 14px; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.6; color: #334155; }
+.readme-link { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; }
+.readme-link:hover { border-color: var(--accent); background: var(--accent-soft); }
 .drawer { position: fixed; left: 20px; top: 88px; width: min(520px, calc(100vw - 40px)); max-height: calc(100vh - 116px); background: #ffffff; border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 8px; padding: 16px; transform: translateY(8px) scale(.98); opacity: 0; pointer-events: none; transition: opacity .16s, transform .16s; z-index: 10; display: flex; flex-direction: column; }
 .drawer.open { transform: translateY(0) scale(1); opacity: 1; pointer-events: auto; }
 .drawer pre { overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #334155; background: #f8fafc; border: 1px solid var(--line-soft); padding: 12px; border-radius: 7px; flex: 1 1 auto; max-height: 240px; }
-.drawer-head { display: flex; justify-content: space-between; margin-bottom: 12px; }
+.drawer-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.drawer-actions { display: flex; gap: 8px; flex: 0 0 auto; }
 .copy-button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 7px; height: 30px; padding: 4px 10px; cursor: pointer; font-weight: 650; }
 .copy-button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.close-button:hover { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
 #graph path { pointer-events: stroke; stroke-linecap: round; stroke-linejoin: round; transition: stroke-width 0.16s, opacity 0.16s; }
 #graph path:hover { stroke-width: 3; opacity: 1 !important; }
 #graph circle.node { transition: r 0.16s, stroke-width 0.16s; pointer-events: auto; }
 #graph circle.node:hover { r: 4.8; stroke-width: 2.4; }
-.calendar-grid { display: flex; gap: 3px; align-items: flex-end; }
-.calendar-col { display: flex; flex-direction: column; gap: 3px; }
-.calendar-cell { width: 10px; height: 10px; border-radius: 2px; background: #ebedf0; }
+.calendar-grid { --calendar-cell: 10px; --calendar-gap: 3px; display: flex; flex: 0 1 min(638px, 78%); width: min(638px, 78%); justify-content: flex-end; gap: var(--calendar-gap); align-items: flex-end; max-width: 100%; min-width: 0; overflow: hidden; }
+.calendar-col { display: flex; flex-direction: column; gap: var(--calendar-gap); flex: 0 0 var(--calendar-cell); }
+.calendar-cell { width: var(--calendar-cell); height: var(--calendar-cell); border-radius: 2px; background: #ebedf0; }
 .calendar-cell[data-level="1"] { background: #9be9a8; }
 .calendar-cell[data-level="2"] { background: #40c463; }
 .calendar-cell[data-level="3"] { background: #30a14e; }
 .calendar-cell[data-level="4"] { background: #216e39; }
 @keyframes spin { 100% { transform: rotate(360deg); } }
-@media (max-width: 1080px) { .grid, .summary-panel { grid-template-columns: 1fr; } .repo { max-width: 70vw; } }
-@media (max-width: 620px) { .shell { width: min(100vw - 20px, 1480px); } .topbar { align-items: flex-start; flex-direction: column; } .commit { grid-template-columns: 1fr; } .hash { display: none; } .meters { grid-template-columns: 1fr; } .timeline-container { height: 520px; } }
+@keyframes aiPulse { 0%, 100% { opacity: .52; transform: scale(.86); } 50% { opacity: 1; transform: scale(1.08); } }
+@media (prefers-reduced-motion: reduce) {
+  .ai-status-loader, .ai-status-sparkles { animation: none; }
+}
+@media (max-width: 1280px) { 
+  .grid, .summary-panel { grid-template-columns: 1fr; } 
+  .repo { max-width: 70vw; } 
+  .shell { padding: 20px 16px; }
+}
+@media (max-width: 1024px) {
+  .sidebar {
+    position: fixed;
+    box-shadow: 25px 0 60px rgba(15, 23, 42, 0.15);
+  }
+  .sidebar-toggle#sidebarClose { display: flex !important; }
+}
+@media (max-width: 620px) { 
+  .topbar { align-items: flex-start; flex-direction: column; height: auto; padding-top: 16px; margin-bottom: 24px; } 
+  .commit { grid-template-columns: 1fr; } 
+  .hash { display: none; } 
+  .meters { grid-template-columns: 1fr; } 
+  .timeline-container { height: 520px; } 
+  .branch-summary-panel { flex-direction: column; align-items: stretch; gap: 12px; }
+  .branch-summary-text { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .branch-summary-text h2 { flex: 0 0 auto; }
+  .branch-name { font-size: 20px; margin: 0; min-width: 0; flex: 0 1 auto; }
+  .branch-summary-text .meta { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .calendar-grid { --calendar-cell: 9px; --calendar-gap: 2px; flex: 0 0 auto; width: 100%; justify-content: flex-start; }
+}
+.sidebar-toggle {
+  background: none;
+  border: none;
+  padding: 8px;
+  cursor: pointer;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  transition: all 0.2s;
+}
+.sidebar-toggle:hover { background: rgba(0,0,0,0.05); color: var(--text); }
+.sidebar-toggle svg { width: 20px; height: 20px; }
+#sidebarToggle { margin-left: -12px; margin-right: 8px; }
+#sidebarClose { margin-right: -8px; display: none; }
 </style>
 </head>
 <body>
-<main class="shell">
-  <header class="topbar">
-    <div>
-      <h1 id="appTitle">GMC GitWeb</h1>
-      <div id="repo" class="repo">Loading...</div>
+<div class="app-container">
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <h2>Recent Repos</h2>
+      <button id="sidebarClose" class="sidebar-toggle" title="Close Sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
     </div>
-    <div class="actions">
-      <button id="refresh">Refresh</button>
-      <button id="auto">Auto: on</button>
-    </div>
-  </header>
+    <div id="repoList" class="repo-list"></div>
+  </aside>
+
+  <main class="shell">
+    <div class="shell-inner">
+      <div id="installBanner" class="install-banner">
+        <span class="install-text"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
+        <button id="btnInstall" type="button">Install Hooks and Webloc</button>
+      </div>
+      <header class="topbar">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+          </button>
+          <div>
+            <h1 id="appTitle">GMC GitWeb</h1>
+            <div id="repo" class="repo">Loading...</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="refresh">Refresh</button>
+          <button id="auto">Auto: on</button>
+        </div>
+      </header>
   
   <section class="summary-panel">
-    <div class="panel" style="display:flex; justify-content:space-between;">
-      <div>
+    <div class="panel branch-summary-panel">
+      <div class="branch-summary-text">
         <h2>Current Branch</h2>
         <div id="branch" class="branch-name">...</div>
         <div id="upstream" class="meta"></div>
@@ -861,7 +1446,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
     </div>
     <div class="meters">
       <div class="meter"><strong id="ahead">0</strong><span>ahead</span> <button id="btnPush" class="action-btn" style="display:none">Push</button></div>
-      <div class="meter"><strong id="behind">0</strong><span>behind</span> <button id="btnPull" class="action-btn" style="display:none">Pull</button></div>
+      <div class="meter"><strong id="behind">0</strong><span>behind</span> <button id="btnPull" class="action-btn">Pull</button></div>
       <div class="meter"><strong id="dirty">0</strong><span>changed files</span></div>
     </div>
   </section>
@@ -881,6 +1466,12 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
         </div>
         <div id="branches"></div>
       </div>
+      <div class="panel readme-panel">
+        <div class="panel-head">
+          <h2>README</h2>
+        </div>
+        <a id="readmeLink" class="readme-link" href="#">Open README</a>
+      </div>
     </aside>
     <div class="panel">
       <div class="panel-head">
@@ -893,7 +1484,9 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       </div>
     </div>
   </section>
-</main>
+    </div>
+  </main>
+</div>
 
 <aside id="drawer" class="drawer">
   <div class="drawer-head">
@@ -901,7 +1494,10 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       <h2 id="drawerTitle" style="margin: 0;">Commit</h2>
       <div id="drawerMeta" class="meta"></div>
     </div>
-    <button id="copyDetail" class="copy-button" type="button">Copy</button>
+    <div class="drawer-actions">
+      <button id="copyDetail" class="copy-button" type="button">Copy</button>
+      <button id="closeDetail" class="copy-button close-button" type="button">Close</button>
+    </div>
   </div>
   <pre id="message"></pre>
   <pre id="stat"></pre>
@@ -910,12 +1506,177 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 <script>
 var urlParams = new URLSearchParams(window.location.search);
 var targetRepo = urlParams.get('repo') || '';
-var state = { auto: true, timer: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, hideTimer: null };
+var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
+var AUTO_STATUS_INTERVAL_MS = 10000;
+var HIDDEN_STATUS_INTERVAL_MS = 60000;
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null };
 var $ = function(id) { return document.getElementById(id); };
+
+function updateReadmeLink() {
+  var link = $('readmeLink');
+  if (!link) return;
+  if (!targetRepo) {
+    link.removeAttribute('href');
+    link.textContent = 'Select a repository first';
+    return;
+  }
+  link.href = '/readme?repo=' + encodeURIComponent(targetRepo);
+  link.textContent = 'Open README';
+}
+
+function loadRepoHistory() {
+  return fetch('/api/repositories', { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      state.repoHistory = data.repositories || [];
+      renderSidebar();
+      return state.repoHistory;
+    })
+    .catch(function() {
+      state.repoHistory = [];
+      renderSidebar();
+      return state.repoHistory;
+    });
+}
+
+function renderSidebar() {
+  var list = $('repoList');
+  if (!list) return;
+  var history = state.repoHistory || [];
+
+  if (!history.length) {
+    list.innerHTML = '<div class="repo-empty">No recent repositories yet.</div>';
+    return;
+  }
+
+  list.innerHTML = history.map(function(item) {
+    var name = item.name || repoDisplayName(item.path);
+    var active = item.path === targetRepo ? ' active' : '';
+    return '<div class="repo-item' + active + '" role="link" tabindex="0" data-repo="' + escapeHtml(item.path) + '">' +
+      '<div class="repo-item-icon" aria-hidden="true">' + escapeHtml(repoInitial(name)) + '</div>' +
+      '<div class="repo-item-body">' +
+        '<div class="repo-item-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
+        '<div class="repo-item-path" title="' + escapeHtml(item.path) + '">' + escapeHtml(item.path) + '</div>' +
+        '<div class="repo-item-time">' + escapeHtml(formatRepoVisit(item.lastVisited)) + '</div>' +
+      '</div>' +
+      '<button class="repo-remove" type="button" title="Remove from recent" aria-label="Remove ' + escapeHtml(name) + ' from recent repositories" data-repo="' + escapeHtml(item.path) + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+      '</button>' +
+    '</div>';
+  }).join('');
+}
+
+function bindSidebarEvents() {
+  var list = $('repoList');
+  if (!list || list.dataset.bound === 'true') return;
+  list.dataset.bound = 'true';
+
+  list.addEventListener('click', function(event) {
+    var removeButton = event.target.closest('.repo-remove');
+    if (removeButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      removeRepoHistory(removeButton.getAttribute('data-repo'));
+      return;
+    }
+
+    var item = event.target.closest('.repo-item');
+    if (item) {
+      openRepoFromHistory(item.getAttribute('data-repo'));
+    }
+  });
+
+  list.addEventListener('keydown', function(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    var removeButton = event.target.closest('.repo-remove');
+    if (removeButton) {
+      event.preventDefault();
+      removeRepoHistory(removeButton.getAttribute('data-repo'));
+      return;
+    }
+    var item = event.target.closest('.repo-item');
+    if (item) {
+      event.preventDefault();
+      openRepoFromHistory(item.getAttribute('data-repo'));
+    }
+  });
+}
+
+function openRepoFromHistory(repoPath) {
+  if (!repoPath) return;
+  window.location.href = '?repo=' + encodeURIComponent(repoPath);
+}
+
+function removeRepoHistory(repoPath) {
+  if (!repoPath) return;
+  fetch('/api/repositories/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repo: repoPath })
+  })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      state.repoHistory = data.repositories || [];
+      renderSidebar();
+    })
+    .catch(loadRepoHistory);
+}
+
+function toggleSidebar() {
+  state.sidebarCollapsed = !state.sidebarCollapsed;
+  localStorage.setItem('gmc_sidebar_collapsed', state.sidebarCollapsed);
+  applySidebarState();
+}
+
+function applySidebarState() {
+  if (state.sidebarCollapsed) {
+    $('sidebar').classList.add('collapsed');
+  } else {
+    $('sidebar').classList.remove('collapsed');
+  }
+}
+
+function initSidebar() {
+  var saved = localStorage.getItem('gmc_sidebar_collapsed');
+  if (saved !== null) {
+    state.sidebarCollapsed = saved === 'true';
+  } else {
+    // Default: collapse on small screens, expand on large
+    state.sidebarCollapsed = window.innerWidth < 1024;
+  }
+  applySidebarState();
+  bindSidebarEvents();
+  loadRepoHistory();
+}
 
 function repoDisplayName(repoPath) {
   var parts = String(repoPath || '').replace(/[\\\/]+$/, '').split(/[\\\/]+/);
   return parts[parts.length - 1] || repoPath || '';
+}
+
+function repoInitial(name) {
+  var trimmed = String(name || '').trim();
+  return (trimmed.charAt(0) || 'G').toUpperCase();
+}
+
+function formatRepoVisit(timestamp) {
+  var time = Number(timestamp);
+  if (!time) return 'Recently visited';
+  var diff = Date.now() - time;
+  var minute = 60 * 1000;
+  var hour = 60 * minute;
+  var day = 24 * hour;
+  if (diff < minute) return 'Just now';
+  if (diff < hour) return Math.floor(diff / minute) + 'm ago';
+  if (diff < day) return Math.floor(diff / hour) + 'h ago';
+  if (diff < day * 7) return Math.floor(diff / day) + 'd ago';
+  return new Date(time).toLocaleDateString();
 }
 
 function setPageTitle(repoPath) {
@@ -925,16 +1686,22 @@ function setPageTitle(repoPath) {
 }
 
 setPageTitle(targetRepo);
+updateReadmeLink();
 
 if (!targetRepo) {
   $('repo').textContent = 'GMC GitWeb is running. Use "gmc web" in a git repository to view its status.';
   $('branch').textContent = 'No repository selected';
+  initSidebar();
 } else {
   $('repo').textContent = targetRepo;
+  initSidebar();
   load();
 }
 
-$('refresh').addEventListener('click', load);
+$('sidebarToggle').addEventListener('click', toggleSidebar);
+$('sidebarClose').addEventListener('click', toggleSidebar);
+
+$('refresh').addEventListener('click', function() { load({ force: true }); });
 $('auto').addEventListener('click', function() {
   state.auto = !state.auto;
   $('auto').textContent = 'Auto: ' + (state.auto ? 'on' : 'off');
@@ -947,27 +1714,96 @@ $('drawer').addEventListener('mouseleave', function() {
   hideCommit();
 });
 $('copyDetail').addEventListener('click', copyCommitDetail);
+$('closeDetail').addEventListener('click', closeCommitDetail);
+$('btnInstall').addEventListener('click', installGmc);
+bindCommitDetailEvents();
 window.addEventListener('resize', function() {
   if (state.commits.length) renderGraph(state.commits);
+  if (state.contributions) renderCalendar(state.contributions);
 });
+document.addEventListener('visibilitychange', function() {
+  if (!document.hidden && state.auto && targetRepo) {
+    load({ force: true });
+  } else {
+    schedule();
+  }
+});
+
+if (${process.env.GMC_GITWEB_LIVE_RELOAD ? 'true' : 'false'}) {
+  setInterval(function() {
+    fetch('/api/ping', { cache: 'no-store' })
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.reloadToken && data.reloadToken !== initialReloadToken) {
+          window.location.reload();
+        }
+      })
+      .catch(function() {});
+  }, 1000);
+}
 
 function schedule() {
   clearTimeout(state.timer);
-  if (state.auto && targetRepo) state.timer = setTimeout(load, 5000);
+  if (!state.auto || !targetRepo) return;
+  state.timer = setTimeout(load, document.hidden ? HIDDEN_STATUS_INTERVAL_MS : AUTO_STATUS_INTERVAL_MS);
 }
 
-function load() {
+function load(options) {
+  options = options || {};
   if (!targetRepo) return;
+  if (state.loading) {
+    if (options.force) state.pendingForceLoad = true;
+    return;
+  }
+  state.loading = true;
   fetch('/api/status?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
     .then(function(res) { 
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json(); 
     })
-    .then(render)
+    .then(function(data) {
+      var signature = statusSignature(data);
+      if (!options.force && signature === state.statusSignature) {
+        return false;
+      }
+      state.statusSignature = signature;
+      render(data);
+      return true;
+    })
+    .then(function(didRender) {
+      if (didRender && state.repoHistoryNeedsRefresh) {
+        state.repoHistoryNeedsRefresh = false;
+        return loadRepoHistory();
+      }
+    })
     .catch(function(error) {
       $('repo').textContent = 'Error loading status: ' + error.message;
     })
-    .finally(schedule);
+    .finally(function() {
+      state.loading = false;
+      if (state.pendingForceLoad) {
+        state.pendingForceLoad = false;
+        load({ force: true });
+        return;
+      }
+      schedule();
+    });
+}
+
+function statusSignature(data) {
+  if (!data || data.error) return JSON.stringify(data || {});
+  return JSON.stringify({
+    repository: data.repository,
+    branch: data.branch,
+    status: data.status,
+    stats: data.stats,
+    branches: data.branches,
+    commits: data.commits,
+    contributions: data.contributions,
+    binding: data.binding,
+    tasks: data.tasks,
+    install: data.install
+  });
 }
 
 function getBranchColor(name) {
@@ -1031,29 +1867,65 @@ function render(data) {
   $('btnPush').onclick = function() { executeAction('/api/push', 'Pushing...'); };
   
   $('behind').textContent = data.branch.behind;
-  $('btnPull').style.display = data.branch.behind > 0 ? 'inline-block' : 'none';
   $('btnPull').onclick = function() { executeAction('/api/pull', 'Pulling...'); };
   
   $('dirty').textContent = data.status.files.length;
   
   state.tasks = data.tasks || [];
+  state.install = data.install || { hooks: true, webloc: true };
+  renderInstallBanner();
   
-  renderCalendar(data.contributions);
+  state.contributions = data.contributions || {};
+  renderCalendar(state.contributions);
   renderFiles(data.status.files);
   
   processTopology(data);
   renderBranches();
   renderCommits(state.commits);
   
-  setTimeout(function() { renderGraph(state.commits); }, 50);
+  clearTimeout(state.graphTimer);
+  state.graphTimer = setTimeout(function() { renderGraph(state.commits); }, 50);
+}
+
+function renderInstallBanner() {
+  var banner = $('installBanner');
+  if (!banner) return;
+  var needsInstall = !state.install.hooks || !state.install.webloc;
+  if (needsInstall) {
+    banner.classList.add('visible');
+  } else {
+    banner.classList.remove('visible');
+  }
+}
+
+function installGmc() {
+  var btn = $('btnInstall');
+  if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
+  fetch('/api/install?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) { return res.json().then(function(data) { if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
+    .then(function(data) {
+      state.install = data.install || { hooks: true, webloc: true };
+      renderInstallBanner();
+      if (btn) { btn.textContent = 'Installed'; }
+    })
+    .catch(function(err) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Install Failed'; }
+      alert('Install failed: ' + err.message);
+    });
 }
 
 function renderCalendar(contributions) {
   var cal = $('calendar');
   if (!cal || !contributions) return;
+  var styles = window.getComputedStyle(cal);
+  var cellSize = parseFloat(styles.getPropertyValue('--calendar-cell')) || 10;
+  var gapSize = parseFloat(styles.getPropertyValue('--calendar-gap')) || 3;
+  var availableWidth = cal.clientWidth || cal.parentElement && cal.parentElement.clientWidth || 0;
+  var maxColumns = Math.floor((availableWidth + gapSize) / (cellSize + gapSize));
+  var columns = Math.max(8, Math.min(54, maxColumns || 54));
   var html = '';
   var now = new Date();
-  for (var c = 25; c >= 0; c--) {
+  for (var c = columns - 1; c >= 0; c--) {
     html += '<div class="calendar-col">';
     for (var r = 0; r < 7; r++) {
       var d = new Date(now);
@@ -1081,7 +1953,7 @@ function executeAction(url, loadingMsg) {
     .then(function(res) { return res.json().then(function(data) { if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
     .then(function(data) { setCommitStatus('Success: ' + firstLine(data.output), false); })
     .catch(function(err) { setCommitStatus('Error: ' + err.message, true); })
-    .finally(function() { state.auto = prevAuto; load(); });
+    .finally(function() { state.auto = prevAuto; load({ force: true }); });
 }
 
 function renderFiles(files) {
@@ -1199,8 +2071,43 @@ function setCommitStatus(message, isError) {
 function commitSelectedFiles() {
   var files = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
   if (!files.length || state.committing) return;
+
+  if (!state.install.hooks) {
+    var choice = confirm(
+      'GMC Git Hooks 未安装！\\n\\n' +
+      '安装 Hooks 后，每次 git commit -m gmc 都会自动触发 AI 辅助生成提交信息。\\n\\n' +
+      '点击「确定」安装 Hooks 后再提交\\n' +
+      '点击「取消」本次直接使用 AI 生成提交信息（较慢）'
+    );
+    if (choice) {
+      // Install hooks first, then commit
+      var btn = $('btnInstall');
+      if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
+      setCommitStatus('Installing hooks...', false);
+      fetch('/api/install?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+        .then(function(res) { return res.json().then(function(data) { if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
+        .then(function(data) {
+          state.install = data.install || { hooks: true, webloc: true };
+          renderInstallBanner();
+          if (btn) { btn.textContent = 'Installed'; }
+          doCommit(files);
+        })
+        .catch(function(err) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Install Failed'; }
+          setCommitStatus('Hook install failed: ' + err.message, true);
+        });
+      return;
+    }
+    // User declined install, proceed with direct AI commit
+  }
+
+  doCommit(files);
+}
+
+function doCommit(files) {
   state.committing = true;
-  setCommitStatus('Committing selected files...', false);
+  var statusMsg = state.install.hooks ? 'Committing selected files...' : 'Generating AI commit message and committing...';
+  setCommitStatus(statusMsg, false);
   updateCommitControls();
 
   fetch('/api/commit-selected?repo=' + encodeURIComponent(targetRepo), {
@@ -1219,7 +2126,7 @@ function commitSelectedFiles() {
     .then(function(data) {
       state.selected = {};
       setCommitStatus(firstLine(data.output) || 'Committed selected files.', false);
-      load();
+      load({ force: true });
     })
     .catch(function(error) {
       setCommitStatus(error.message, true);
@@ -1253,7 +2160,7 @@ function ignoreSelectedFiles() {
     .then(function(data) {
       state.selected = {};
       setCommitStatus((data.added || []).length + ' ignore rule(s) added to .gitignore.', false);
-      load();
+      load({ force: true });
     })
     .catch(function(error) {
       setCommitStatus(error.message, true);
@@ -1286,7 +2193,7 @@ function restoreSelectedFilesAction() {
     .then(function(data) {
       state.selected = {};
       setCommitStatus('Restored ' + (data.restored || []).length + ' file(s).', false);
-      load();
+      load({ force: true });
     })
     .catch(function(error) {
       setCommitStatus(error.message, true);
@@ -1353,9 +2260,12 @@ function renderCommits(commits) {
     var aiStatus = '';
     var task = (state.tasks || []).find(function(t) { return t.targetOid === c.hash; });
     if (task && (task.status === 'pending' || task.status === 'running' || task.status === 'waiting')) {
-      aiStatus = '<span title="Waiting for AI generation" style="display:inline-block;animation:spin 2s linear infinite;font-size:12px;margin-left:6px;">⏳</span>';
+      aiStatus = '<span class="ai-status" title="AI is generating a commit message" aria-label="AI is generating a commit message">' +
+        '<svg class="ai-status-loader" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M21 12a9 9 0 0 0-9-9"></path></svg>' +
+        '<svg class="ai-status-sparkles" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l1.8 5.1 5.1 1.8-5.1 1.8-1.8 5.1-1.8-5.1-5.1-1.8 5.1-1.8L12 2.5z"></path><path d="M5.4 14.2l.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5z"></path></svg>' +
+      '</span>';
     }
-    return '<article class="commit" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</div><div><div class="subject">' + escapeHtml(c.subject || '(no subject)') + aiStatus + '</div><div class="meta">' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
+    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</div><div><div class="subject">' + escapeHtml(c.subject || '(no subject)') + aiStatus + '</div><div class="meta">' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
   }).join('');
 }
 
@@ -1458,7 +2368,7 @@ function renderGraph(commits) {
 
   nodes.forEach(function(node) {
     var cx = getX(node.x), cy = node.y;
-    svgHTML += '<circle cx="' + cx + '" cy="' + cy + '" r="' + nodeRadius + '" fill="' + node.color + '" stroke="#ffffff" stroke-width="2" class="node" onmouseenter="showCommit(\\'' + node.hash + '\\', this)" onmouseleave="hideCommit()" />';
+    svgHTML += '<circle cx="' + cx + '" cy="' + cy + '" r="' + nodeRadius + '" fill="' + node.color + '" stroke="#ffffff" stroke-width="2" class="node" data-oid="' + escapeHtml(node.hash) + '" onmouseenter="showCommit(\\'' + node.hash + '\\', this)" onmouseleave="hideCommit()" />';
   });
 
   if (graphBox) graphBox.style.setProperty('--graph-width', graphWidth + 'px');
@@ -1470,8 +2380,70 @@ function renderGraph(commits) {
   graphSvg.innerHTML = svgHTML;
 }
 
-window.showCommit = function(oid, trigger) {
+function bindCommitDetailEvents() {
+  var timeline = document.querySelector('.timeline-container');
+  if (!timeline || timeline.dataset.commitDetailBound === 'true') return;
+  timeline.dataset.commitDetailBound = 'true';
+
+  timeline.addEventListener('click', function(event) {
+    var target = commitDetailTarget(event);
+    if (!target) return;
+    if (Date.now() - state.lastTouchCommitAt < 500) return;
+    event.preventDefault();
+    showCommit(target.getAttribute('data-oid'), target, true);
+  });
+
+  timeline.addEventListener('keydown', function(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    var target = commitDetailTarget(event);
+    if (!target) return;
+    event.preventDefault();
+    showCommit(target.getAttribute('data-oid'), target, true);
+  });
+
+  timeline.addEventListener('touchstart', function(event) {
+    var target = commitDetailTarget(event);
+    if (!target || !event.touches || !event.touches.length) return;
+    var touch = event.touches[0];
+    state.touchCommit = {
+      target: target,
+      oid: target.getAttribute('data-oid'),
+      x: touch.clientX,
+      y: touch.clientY,
+      moved: false
+    };
+  }, { passive: true });
+
+  timeline.addEventListener('touchmove', function(event) {
+    if (!state.touchCommit || !event.touches || !event.touches.length) return;
+    var touch = event.touches[0];
+    if (Math.abs(touch.clientX - state.touchCommit.x) > 10 || Math.abs(touch.clientY - state.touchCommit.y) > 10) {
+      state.touchCommit.moved = true;
+    }
+  }, { passive: true });
+
+  timeline.addEventListener('touchend', function() {
+    if (!state.touchCommit) return;
+    var touchCommit = state.touchCommit;
+    state.touchCommit = null;
+    if (touchCommit.moved) return;
+    state.lastTouchCommitAt = Date.now();
+    showCommit(touchCommit.oid, touchCommit.target, true);
+  }, { passive: true });
+}
+
+function commitDetailTarget(event) {
+  var target = event.target && event.target.closest ? event.target.closest('[data-oid]') : null;
+  if (!target) return null;
+  var timeline = document.querySelector('.timeline-container');
+  if (!timeline || !timeline.contains(target)) return null;
+  return target;
+}
+
+window.showCommit = function(oid, trigger, pinned) {
   if (!targetRepo) return;
+  if (!pinned && Date.now() - state.lastTouchCommitAt < 800) return;
+  state.detailPinned = !!pinned;
   clearTimeout(state.hideTimer);
   var token = ++state.detailToken;
   positionCommitDrawer(trigger);
@@ -1489,12 +2461,20 @@ window.showCommit = function(oid, trigger) {
 };
 
 window.hideCommit = function() {
+  if (state.detailPinned) return;
   clearTimeout(state.hideTimer);
   state.hideTimer = setTimeout(function() {
     state.detailToken++;
     $('drawer').classList.remove('open');
   }, 1000);
 };
+
+function closeCommitDetail() {
+  clearTimeout(state.hideTimer);
+  state.detailPinned = false;
+  state.detailToken++;
+  $('drawer').classList.remove('open');
+}
 
 function positionCommitDrawer(trigger) {
   var drawer = $('drawer');
@@ -1555,10 +2535,151 @@ function escapeHtml(value) {
 </html>`;
 }
 
+function readmeHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GMC README</title>
+<style>
+:root { color-scheme: light; --bg: #f4f6f8; --panel: #ffffff; --text: #111827; --muted: #6b7280; --line: #dbe2ea; --line-soft: #edf1f5; --accent: #068d6dff; --accent-soft: #eff6ff; }
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
+.shell { width: min(980px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 40px; }
+.topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
+h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-height: 1.12; }
+.repo { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.button { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; white-space: nowrap; }
+.button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
+.readme-body { font-size: 14px; line-height: 1.65; overflow-wrap: break-word; word-break: break-word; }
+.readme-body h1, .readme-body h2, .readme-body h3, .readme-body h4 { margin: 1.2em 0 .6em; font-weight: 700; }
+.readme-body h1 { font-size: 24px; border-bottom: 1px solid var(--line-soft); padding-bottom: 6px; }
+.readme-body h2 { font-size: 19px; border-bottom: 1px solid var(--line-soft); padding-bottom: 4px; }
+.readme-body h3 { font-size: 16px; }
+.readme-body p { margin: .6em 0; }
+.readme-body ul, .readme-body ol { padding-left: 24px; margin: .5em 0; }
+.readme-body li { margin: .3em 0; }
+.readme-body pre { background: #f1f5f9; border: 1px solid var(--line-soft); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+.readme-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
+.readme-body pre code { background: none; padding: 0; font-size: inherit; }
+.readme-body blockquote { margin: .6em 0; padding: 4px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; color: #334155; }
+.readme-body table { border-collapse: collapse; margin: .8em 0; width: 100%; }
+.readme-body th, .readme-body td { border: 1px solid var(--line-soft); padding: 6px 10px; text-align: left; }
+.readme-body th { background: #f8fafc; font-weight: 700; }
+.readme-body img { max-width: 100%; border-radius: 6px; }
+.readme-body a { color: var(--accent); text-decoration: none; }
+.readme-body a:hover { text-decoration: underline; }
+.readme-body .mermaid { margin: .8em 0; overflow-x: auto; }
+.readme-help pre { white-space: pre-wrap; }
+.meta { color: var(--muted); font-size: 12px; }
+@media (max-width: 620px) { .topbar { flex-direction: column; } .shell { width: min(100% - 24px, 980px); padding-top: 16px; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <div>
+      <h1 id="title">README</h1>
+      <div id="repo" class="repo"></div>
+    </div>
+    <a id="backLink" class="button" href="/">Back to GitWeb</a>
+  </header>
+  <section class="panel">
+    <div id="readmeBody" class="readme-body"><div class="meta">Loading README...</div></div>
+  </section>
+</main>
+<script>
+mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+var urlParams = new URLSearchParams(window.location.search);
+var targetRepo = urlParams.get('repo') || '';
+var bodyEl = document.getElementById('readmeBody');
+document.getElementById('repo').textContent = targetRepo || 'No repository selected';
+document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
+
+if (!targetRepo) {
+  bodyEl.innerHTML = '<div class="meta">No repository selected.</div>';
+} else {
+  fetch('/api/readme?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(renderReadme)
+    .catch(function(err) {
+      bodyEl.innerHTML = '<div class="meta">Failed to load README: ' + escapeHtml(err.message) + '</div>';
+    });
+}
+
+function renderReadme(data) {
+  if (data.type === 'help') {
+    document.getElementById('title').textContent = 'GMC HELP';
+    bodyEl.className = 'readme-body readme-help';
+    bodyEl.innerHTML = '<pre>' + escapeHtml(data.content) + '</pre>';
+    return;
+  }
+
+  document.getElementById('title').textContent = 'README';
+  bodyEl.className = 'readme-body';
+  bodyEl.innerHTML = marked.parse(data.content || '', { gfm: true, breaks: false });
+
+  var codeBlocks = bodyEl.querySelectorAll('pre code.language-mermaid');
+  codeBlocks.forEach(function(codeEl) {
+    var pre = codeEl.parentElement;
+    var mermaidDiv = document.createElement('div');
+    mermaidDiv.className = 'mermaid';
+    mermaidDiv.textContent = codeEl.textContent;
+    pre.parentNode.replaceChild(mermaidDiv, pre);
+  });
+
+  try {
+    mermaid.run({ nodes: bodyEl.querySelectorAll('.mermaid') });
+  } catch (e) {
+    console.warn('Mermaid rendering error:', e);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+  });
+}
+</script>
+</body>
+</html>`;
+}
+
+function quit(port) {
+  return new Promise(function (resolve) {
+    var req = http.request({
+      hostname: '127.0.0.1',
+      port: port,
+      path: '/api/quit',
+      method: 'POST'
+    }, function (res) {
+      res.on('data', function () { });
+      res.on('end', resolve);
+    });
+    req.on('error', function () {
+      resolve();
+    });
+    req.setTimeout(1000, function () {
+      req.destroy();
+      resolve();
+    });
+    req.end();
+  });
+}
+
 module.exports = {
   start: start,
   collectStatus: collectStatus,
   checkRunning: checkRunning,
+  quit: quit,
   resolveWeblocPort: resolveWeblocPort,
   createWebloc: createWebloc,
   openBrowser: openBrowser,

@@ -3,6 +3,7 @@
 'use strict';
 
 var childProcess = require('child_process');
+var crypto = require('crypto');
 var fs = require('fs');
 var path = require('path');
 var git = require('../lib/git');
@@ -99,7 +100,11 @@ function parseArgs(argv) {
     all: false,
     help: false,
     printPrompt: false,
-    port: null
+    port: null,
+    start: false,
+    restart: false,
+    quit: false,
+    watch: false
   };
   var positional = [];
 
@@ -127,6 +132,14 @@ function parseArgs(argv) {
       flags.port = arg.slice('--port='.length);
     } else if (arg === '--print-prompt') {
       flags.printPrompt = true;
+    } else if (arg === '--start') {
+      flags.start = true;
+    } else if (arg === '--restart') {
+      flags.restart = true;
+    } else if (arg === '--quit') {
+      flags.quit = true;
+    } else if (arg === '--watch' || arg === '--dev') {
+      flags.watch = true;
     } else if (arg === '-h' || arg === '--help') {
       flags.help = true;
     } else {
@@ -301,6 +314,46 @@ async function gitWebCommand(flags) {
   var isRunning = await web.checkRunning(port);
   var root = tryGetRepoRoot();
 
+  if (flags.watch) {
+    await runWatchedGitWeb(root || process.cwd(), flags, port, isRunning);
+    return;
+  }
+
+  if (flags.quit) {
+    if (isRunning) {
+      await web.quit(port);
+      console.log('GMC Web server stopped.');
+    } else {
+      console.log('GMC Web is not running on port ' + port + '.');
+    }
+    return;
+  }
+
+  if (flags.restart) {
+    if (isRunning) {
+      await web.quit(port);
+      console.log('GMC Web server stopped.');
+      await new Promise(function(resolve) { setTimeout(resolve, 500); });
+      isRunning = false;
+    }
+    flags.start = true;
+  }
+
+  if (flags.start) {
+    if (isRunning) {
+      console.log('GMC Web is already running on port ' + port + '.');
+      return;
+    }
+    var childArgs = ['web', '--port', port, '--no-open'];
+    var child = childProcess.spawn(process.execPath, [__filename].concat(childArgs), {
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+    console.log('GMC Web server started in background on port ' + port + '.');
+    return;
+  }
+
   if (isRunning) {
     if (root) {
       var address = 'http://127.0.0.1:' + port + '/?repo=' + encodeURIComponent(root);
@@ -335,6 +388,108 @@ async function gitWebCommand(flags) {
     console.log('Started in global mode (no repository found).');
   }
   console.log('Press Ctrl-C to stop.');
+}
+
+async function runWatchedGitWeb(root, flags, port, isRunning) {
+  if (isRunning) {
+    await web.quit(port);
+    await delay(500);
+  }
+
+  var child = null;
+  var quietChildren = [];
+  var restarting = false;
+  var stopping = false;
+  var address = 'http://127.0.0.1:' + port + '/?repo=' + encodeURIComponent(root);
+  var watchFiles = [
+    path.resolve(__dirname, '../lib/web.js')
+  ];
+  var fileHashes = {};
+  watchFiles.forEach(function(filePath) {
+    fileHashes[filePath] = fileHash(filePath);
+  });
+
+  function startChild() {
+    var env = Object.assign({}, process.env, {
+      GMC_GITWEB_LIVE_RELOAD: '1',
+      GMC_GITWEB_RELOAD_TOKEN: String(Date.now())
+    });
+    var spawned = childProcess.spawn(process.execPath, [__filename, 'web', '--port', String(port), '--no-open'], {
+      env: env,
+      stdio: 'inherit'
+    });
+    child = spawned;
+    spawned.on('exit', function(code, signal) {
+      var quietIndex = quietChildren.indexOf(spawned);
+      if (quietIndex >= 0) {
+        quietChildren.splice(quietIndex, 1);
+        return;
+      }
+      if (!stopping && !restarting) {
+        console.error('GMC Web child exited' + (signal ? ' by ' + signal : ' with code ' + code) + '.');
+      }
+    });
+  }
+
+  async function restartChild(filePath) {
+    if (restarting || stopping) return;
+    restarting = true;
+    console.log('Reloading GitWeb after ' + path.basename(filePath) + ' changed...');
+    if (child && child.exitCode == null) {
+      quietChildren.push(child);
+      await web.quit(port);
+      await delay(300);
+      if (child.exitCode == null) child.kill();
+    }
+    startChild();
+    restarting = false;
+  }
+
+  startChild();
+  if (!flags.noOpen) {
+    web.openBrowser(address);
+  }
+  console.log('GMC Web watch: ' + address);
+  console.log('Watching: ' + watchFiles.map(function(filePath) { return path.relative(process.cwd(), filePath); }).join(', '));
+  console.log('Press Ctrl-C to stop.');
+
+  var debounceTimer = null;
+  watchFiles.forEach(function(filePath) {
+    fs.watch(filePath, { persistent: true }, function() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function() {
+        var nextHash = fileHash(filePath);
+        if (!nextHash || nextHash === fileHashes[filePath]) return;
+        fileHashes[filePath] = nextHash;
+        restartChild(filePath);
+      }, 500);
+    });
+  });
+
+  await new Promise(function(resolve) {
+    function stop() {
+      if (stopping) return;
+      stopping = true;
+      if (child && child.exitCode == null) child.kill();
+      resolve();
+    }
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
+}
+
+function delay(ms) {
+  return new Promise(function(resolve) {
+    setTimeout(resolve, ms);
+  });
+}
+
+function fileHash(filePath) {
+  try {
+    return crypto.createHash('sha1').update(fs.readFileSync(filePath)).digest('hex');
+  } catch (error) {
+    return null;
+  }
 }
 
 function installHook(root, fileName) {
@@ -521,7 +676,7 @@ function printHelp() {
     '  gmc retry [commit]',
     '  gmc install --all [--port 4277]',
     '  gmc install-hooks',
-    '  gmc web [--port 4277] [--no-open]',
+    '  gmc web [--port 4277] [--no-open] [--start] [--restart] [--quit] [--watch]',
     '  git commit -m gmc',
     '',
     'Environment:',
@@ -532,6 +687,10 @@ function printHelp() {
     '  gmc install --all installs hooks and writes a repository-specific git.webloc.',
     '  gmc install-hooks sets up Git hooks to automatically create background tasks for new commits and commit messages.',
     '  gmc web serves the Git Web UI. If a server is already running, it will just open the current repository in the browser.',
+    '  gmc web --start starts the Git Web UI in the background as a daemon.',
+    '  gmc web --restart restarts the background Git Web UI daemon.',
+    '  gmc web --quit stops the background Git Web UI daemon.',
+    '  gmc web --watch restarts GitWeb when cli/lib/web.js changes and refreshes the browser.',
     'Examples:',
     '  git commit -m gmc',  // commit message generated by gmc hooks
     '  gmc agent claude',
@@ -541,6 +700,7 @@ function printHelp() {
     '  gmc retry HEAD',
     '  gmc install --all',
     '  gmc install-hooks && git commit -m gmc',
-    '  gmc web'
+    '  gmc web',
+    '  gmc web --watch'
   ].join('\n'));
 }
