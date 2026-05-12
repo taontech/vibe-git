@@ -1412,6 +1412,9 @@ ${faviconLink()}
   --sidebar-w: 260px;
   --sidebar-bg: #f1f5f9;
   --sidebar-border: #e2e8f0;
+  --z-sidebar: 1000;
+  --z-drawer: 1100;
+  --z-modal: 1200;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-x: hidden; }
@@ -1432,7 +1435,7 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
   position: sticky;
   top: 0;
   height: 100vh;
-  z-index: 1000;
+  z-index: var(--z-sidebar);
   overflow: hidden;
 }
 .sidebar.collapsed {
@@ -1636,12 +1639,12 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .readme-help pre { white-space: pre-wrap; background: #f8fafc; border: 1px solid var(--line-soft); padding: 14px; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.6; color: #334155; }
 .readme-link { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; }
 .readme-link:hover { border-color: var(--accent); background: var(--accent-soft); }
-.drawer { position: fixed; left: 20px; top: 88px; width: min(520px, calc(100vw - 40px)); max-height: calc(100vh - 116px); background: #ffffff; border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 8px; padding: 16px; transform: translateY(8px) scale(.98); opacity: 0; pointer-events: none; transition: opacity .16s, transform .16s; z-index: 10; display: flex; flex-direction: column; }
+.drawer { position: fixed; left: 20px; top: 88px; width: min(520px, calc(100vw - 40px)); max-height: calc(100vh - 116px); background: #ffffff; border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 8px; padding: 16px; transform: translateY(8px) scale(.98); opacity: 0; pointer-events: none; transition: opacity .16s, transform .16s; z-index: var(--z-drawer); display: flex; flex-direction: column; }
 .drawer.open { transform: translateY(0) scale(1); opacity: 1; pointer-events: auto; }
 .drawer pre { overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #334155; background: #f8fafc; border: 1px solid var(--line-soft); padding: 12px; border-radius: 7px; flex: 1 1 auto; max-height: 240px; }
 .drawer-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .drawer-actions { display: flex; gap: 8px; flex: 0 0 auto; }
-.modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(15,23,42,.32); opacity: 0; pointer-events: none; transition: opacity .16s; z-index: 30; }
+.modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(15,23,42,.32); opacity: 0; pointer-events: none; transition: opacity .16s; z-index: var(--z-modal); }
 .modal-backdrop.visible { opacity: 1; pointer-events: auto; }
 .modal { width: min(460px, 100%); background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 18px; transform: translateY(8px) scale(.98); transition: transform .16s; }
 .modal-backdrop.visible .modal { transform: translateY(0) scale(1); }
