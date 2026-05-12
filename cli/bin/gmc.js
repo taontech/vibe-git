@@ -365,7 +365,9 @@ async function gitWebCommand(flags) {
 
   if (isRunning) {
     if (root) {
-      var address = 'http://127.0.0.1:' + port + '/?repo=' + encodeURIComponent(root);
+      var address = web.authenticatedUrl(root, {
+        port: port
+      });
       var linkPath = web.createWebloc(root, {
         port: port
       });
@@ -409,7 +411,9 @@ async function runWatchedGitWeb(root, flags, port, isRunning) {
   var quietChildren = [];
   var restarting = false;
   var stopping = false;
-  var address = 'http://127.0.0.1:' + port + '/?repo=' + encodeURIComponent(root);
+  var address = web.authenticatedUrl(root, {
+    port: port
+  });
   var watchFiles = [
     path.resolve(__dirname, '../lib/web.js')
   ];

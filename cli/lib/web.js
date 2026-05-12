@@ -1,6 +1,7 @@
 'use strict';
 
 var childProcess = require('child_process');
+var crypto = require('crypto');
 var fs = require('fs');
 var http = require('http');
 var os = require('os');
@@ -17,6 +18,10 @@ var GITWEB_VERSION = 2;
 var DIFF_LIMIT = 120000;
 var RELOAD_TOKEN = process.env.GMC_GITWEB_RELOAD_TOKEN || String(Date.now());
 var RECENT_REPOS_FILE = path.join(os.homedir(), '.config', 'gmc', 'recent-repos.json');
+var AUTH_TOKEN_FILE = path.join(os.homedir(), '.config', 'gmc', 'gitweb-token');
+var SECURITY_SETTINGS_FILE = path.join(os.homedir(), '.config', 'gmc', 'gitweb-security.json');
+var AUTH_QUERY_PARAM = 'gmc_auth';
+var AUTH_COOKIE = 'gmc_gitweb_auth';
 var RECENT_REPOS_LIMIT = 20;
 var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
 var recentRepoVisitTimes = {};
@@ -27,7 +32,7 @@ function start(root, options) {
 
   var requestedPort = normalizePort(options.port || process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
   return listen(requestedPort, 0).then(function (serverInfo) {
-    var address = 'http://127.0.0.1:' + serverInfo.port + '/?repo=' + encodeURIComponent(root);
+    var address = authenticatedUrl(root, { port: serverInfo.port });
     if (!options.noOpen) {
       openBrowser(address);
     }
@@ -66,6 +71,24 @@ function normalizePort(value) {
     throw new Error('Invalid GitWeb port: ' + value);
   }
   return port;
+}
+
+function authenticatedUrl(root, options) {
+  options = options || {};
+  var port = normalizePort(options.port || DEFAULT_PORT);
+  var host = options.host || '127.0.0.1';
+  var displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+  var query = { repo: root };
+  query[AUTH_QUERY_PARAM] = getAuthToken();
+  return 'http://' + formatUrlHost(displayHost) + ':' + port + '/?' + new URLSearchParams(query).toString();
+}
+
+function formatUrlHost(host) {
+  host = String(host || '127.0.0.1');
+  if (host.indexOf(':') >= 0 && host.charAt(0) !== '[') {
+    return '[' + host + ']';
+  }
+  return host;
 }
 
 function checkRunning(port) {
@@ -124,6 +147,18 @@ function findAvailablePort(port, attempt) {
 function handleRequest(req, res) {
   try {
     var parsed = url.parse(req.url, true);
+    if (isExternalAccessBlocked(req)) {
+      sendUnauthorized(req, res, parsed, 'External GitWeb access is disabled. Open this page from 127.0.0.1 to enable it.');
+      return;
+    }
+    if (handleAuthQuery(req, res, parsed)) {
+      return;
+    }
+    if (requiresAuth(req, parsed) && !isAuthorizedRequest(req)) {
+      sendUnauthorized(req, res, parsed);
+      return;
+    }
+
     if (req.method === 'POST') {
       if (parsed.pathname === '/api/quit') {
         sendJson(res, { status: 'ok' });
@@ -156,8 +191,20 @@ function handleRequest(req, res) {
         handleInstall(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/open-repository') {
+        handleOpenRepository(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/repositories/remove') {
         handleRemoveRepository(req, res);
+        return;
+      }
+      if (parsed.pathname === '/api/security/external-access') {
+        handleExternalAccessSetting(req, res);
+        return;
+      }
+      if (parsed.pathname === '/api/security/rotate-token') {
+        handleRotateToken(req, res);
         return;
       }
       send(res, 405, 'text/plain; charset=utf-8', 'Method not allowed');
@@ -174,12 +221,12 @@ function handleRequest(req, res) {
         redirectRepositoryName(res, parsed.query.name);
         return;
       }
-      send(res, 200, 'text/html; charset=utf-8', webHtml());
+      send(res, 200, 'text/html; charset=utf-8', webHtml(getAuthToken()));
       return;
     }
 
     if (parsed.pathname === '/readme' || parsed.pathname === '/readme.html') {
-      send(res, 200, 'text/html; charset=utf-8', readmeHtml());
+      send(res, 200, 'text/html; charset=utf-8', readmeHtml(getAuthToken()));
       return;
     }
 
@@ -195,6 +242,11 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/repositories/resolve') {
       sendJson(res, { repository: findRecentRepositoryByName(parsed.query.name) });
+      return;
+    }
+
+    if (parsed.pathname === '/api/security') {
+      sendJson(res, publicSecuritySettings());
       return;
     }
 
@@ -295,12 +347,55 @@ function handleInstall(req, res, targetRepo) {
   }
 }
 
+function handleOpenRepository(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Opening repositories in Finder is only available from 127.0.0.1.');
+  }
+  try {
+    sendJson(res, openRepositoryInFinder(targetRepo));
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function isLoopbackRequest(req) {
+  var address = req && req.socket && req.socket.remoteAddress;
+  return address === '127.0.0.1' ||
+    address === '::1' ||
+    address === '::ffff:127.0.0.1';
+}
+
 function handleRemoveRepository(req, res) {
   readJsonBody(req).then(function (body) {
     sendJson(res, { repositories: removeRecentRepository(body.repo || body.path) });
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
+}
+
+function handleExternalAccessSetting(req, res) {
+  readJsonBody(req).then(function (body) {
+    var enabled = body.enabled === true;
+    var settings = writeSecuritySettings({ allowExternalAccess: enabled });
+    sendJson(res, publicSecuritySettings(settings));
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleRotateToken(req, res) {
+  try {
+    var token = rotateAuthToken();
+    sendJson(res, {
+      status: 'ok',
+      token: token
+    }, {
+      'Set-Cookie': authCookieHeader(token)
+    });
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
 }
 
 function redirectRepositoryName(res, name) {
@@ -393,6 +488,26 @@ function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
+function openRepositoryInFinder(root) {
+  var repoRoot = git.repoRoot(root);
+  if (process.platform !== 'darwin') {
+    throwHttpError('Opening repositories in Finder is only supported on macOS.');
+  }
+  if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+    throwHttpError('Repository path does not exist: ' + repoRoot);
+  }
+
+  var result = childProcess.spawnSync('open', [repoRoot], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    var message = (result.stderr || result.stdout || result.error && result.error.message || 'open failed').trim();
+    throwHttpError(message || 'Failed to open repository in Finder.');
+  }
+  return {
+    status: 'ok',
+    path: repoRoot
+  };
+}
+
 function readJsonBody(req) {
   return new Promise(function (resolve, reject) {
     var body = '';
@@ -417,11 +532,11 @@ function readJsonBody(req) {
   });
 }
 
-function sendJson(res, payload) {
-  res.writeHead(200, {
+function sendJson(res, payload, headers) {
+  res.writeHead(200, Object.assign({
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store'
-  });
+  }, headers || {}));
   res.end(JSON.stringify(payload));
 }
 
@@ -441,6 +556,178 @@ function send(res, status, type, body) {
     'Cache-Control': 'no-store'
   });
   res.end(body);
+}
+
+function handleAuthQuery(req, res, parsed) {
+  var supplied = parsed.query && parsed.query[AUTH_QUERY_PARAM];
+  if (!supplied) return false;
+
+  if (!isValidAuthToken(String(supplied))) {
+    sendUnauthorized(req, res, parsed);
+    return true;
+  }
+
+  var cleanQuery = Object.assign({}, parsed.query);
+  delete cleanQuery[AUTH_QUERY_PARAM];
+  var location = url.format({
+    pathname: parsed.pathname || '/',
+    query: cleanQuery
+  });
+  res.writeHead(302, {
+    Location: location,
+    'Set-Cookie': authCookieHeader(),
+    'Cache-Control': 'no-store'
+  });
+  res.end();
+  return true;
+}
+
+function requiresAuth(req, parsed) {
+  if (parsed.pathname === '/api/ping') return !isLoopbackRequest(req);
+  if (req.method === 'POST') return true;
+  return !isLoopbackRequest(req);
+}
+
+function isExternalAccessBlocked(req) {
+  return !isLoopbackRequest(req) && !readSecuritySettings().allowExternalAccess;
+}
+
+function isAuthorizedRequest(req) {
+  return isValidAuthToken(requestAuthToken(req));
+}
+
+function requestAuthToken(req) {
+  var headerToken = req.headers['x-gmc-auth'];
+  if (headerToken) return String(headerToken);
+
+  var authorization = req.headers.authorization || '';
+  var match = /^Bearer\s+(.+)$/i.exec(authorization);
+  if (match) return match[1];
+
+  return readCookie(req, AUTH_COOKIE);
+}
+
+function readCookie(req, name) {
+  var cookieHeader = req.headers.cookie || '';
+  var parts = cookieHeader.split(';');
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    var eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq) === name) {
+      try {
+        return decodeURIComponent(part.slice(eq + 1));
+      } catch (e) {
+        return '';
+      }
+    }
+  }
+  return '';
+}
+
+function isValidAuthToken(value) {
+  var expected = getAuthToken();
+  var provided = String(value || '');
+  if (!provided || provided.length !== expected.length) return false;
+  var providedBuffer = Buffer.from(provided);
+  var expectedBuffer = Buffer.from(expected);
+  if (providedBuffer.length !== expectedBuffer.length) return false;
+  return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+function authCookieHeader(token) {
+  return AUTH_COOKIE + '=' + encodeURIComponent(token || getAuthToken()) + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000';
+}
+
+function getAuthToken() {
+  try {
+    var existing = fs.readFileSync(AUTH_TOKEN_FILE, 'utf8').trim();
+    if (/^[a-f0-9]{64}$/i.test(existing)) {
+      return existing;
+    }
+  } catch (e) { /* create below */ }
+
+  ensureConfigDir();
+  var token = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(AUTH_TOKEN_FILE, token + '\n', { mode: 0o600 });
+  try {
+    fs.chmodSync(AUTH_TOKEN_FILE, 0o600);
+  } catch (e) { /* best effort */ }
+  return token;
+}
+
+function rotateAuthToken() {
+  ensureConfigDir();
+  var token = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(AUTH_TOKEN_FILE, token + '\n', { mode: 0o600 });
+  try {
+    fs.chmodSync(AUTH_TOKEN_FILE, 0o600);
+  } catch (e) { /* best effort */ }
+  return token;
+}
+
+function ensureConfigDir() {
+  var dir = path.dirname(AUTH_TOKEN_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+}
+
+function readSecuritySettings() {
+  try {
+    var raw = JSON.parse(fs.readFileSync(SECURITY_SETTINGS_FILE, 'utf8'));
+    return {
+      allowExternalAccess: raw.allowExternalAccess === true
+    };
+  } catch (e) {
+    return { allowExternalAccess: false };
+  }
+}
+
+function writeSecuritySettings(patch) {
+  ensureConfigDir();
+  var settings = Object.assign(readSecuritySettings(), patch || {});
+  settings.allowExternalAccess = settings.allowExternalAccess === true;
+  fs.writeFileSync(SECURITY_SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 });
+  try {
+    fs.chmodSync(SECURITY_SETTINGS_FILE, 0o600);
+  } catch (e) { /* best effort */ }
+  return settings;
+}
+
+function publicSecuritySettings(settings) {
+  settings = settings || readSecuritySettings();
+  return {
+    allowExternalAccess: settings.allowExternalAccess === true
+  };
+}
+
+function sendUnauthorized(req, res, parsed, customMessage) {
+  var message = customMessage || 'GitWeb access denied. Open GMC Web from the host user account, or use the authenticated URL printed by gmc web.';
+  if (parsed.pathname && parsed.pathname.indexOf('/api/') === 0) {
+    sendJsonError(res, 403, message);
+    return;
+  }
+  send(res, 403, 'text/html; charset=utf-8', unauthorizedHtml(message));
+}
+
+function unauthorizedHtml(message) {
+  return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<title>GMC GitWeb Access Denied</title>' +
+    faviconLink() +
+    '<style>body{font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#111827;margin:0;display:grid;min-height:100vh;place-items:center}main{max-width:520px;padding:28px;background:#fff;border:1px solid #dbe2ea;border-radius:8px;box-shadow:0 18px 45px rgba(15,23,42,.12)}h1{font-size:20px;margin:0 0 10px}p{color:#4b5563;line-height:1.55;margin:0}</style>' +
+    '</head><body><main><h1>Access denied</h1><p>' + escapeHtmlText(message) + '</p></main></body></html>';
+}
+
+function faviconLink() {
+  return '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2064%2064%27%3E%3Crect%20width=%2764%27%20height=%2764%27%20rx=%2712%27%20fill=%27%23068d6d%27/%3E%3Cpath%20d=%27M48%2017c-4-5-10-8-17-8C18%209%208%2019%208%2032s10%2023%2023%2023c8%200%2015-4%2019-10V33H32%27%20fill=%27none%27%20stroke=%27white%27%20stroke-width=%277%27%20stroke-linecap=%27round%27%20stroke-linejoin=%27round%27/%3E%3C/svg%3E">';
+}
+
+function escapeHtmlText(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+  });
 }
 
 function readRecentRepositories() {
@@ -1012,6 +1299,8 @@ function gmcHelpText() {
     '  GMC_CODEX_MODEL overrides the model used for commit message generation.',
     '  GMC_CODEX_TIMEOUT_MS overrides the Codex generation timeout.',
     '  GMC_GITWEB_PORT overrides the default local GitWeb port.',
+    '  GMC Web prints an authenticated URL. Remote browsers must use that URL',
+    '    before GitWeb APIs can read or modify repositories.',
     '  gmc install --all installs hooks and writes a repository-specific git.webloc.',
     '  gmc install-hooks sets up Git hooks to automatically create background tasks',
     '    for new commits and commit messages.',
@@ -1096,13 +1385,14 @@ function escapeXml(value) {
   });
 }
 
-function webHtml() {
+function webHtml(clientAuthToken) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GMC GitWeb</title>
+${faviconLink()}
 <style>
 :root {
   color-scheme: light;
@@ -1251,10 +1541,21 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; height: 64px; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
-.repo { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); }
-.actions { display: flex; gap: 8px; }
+.repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); text-decoration: none; }
+.repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .actions button, .commit-button, .ignore-button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 7px; min-height: 34px; padding: 7px 12px; cursor: pointer; font-weight: 650; }
 .actions button:hover, .commit-button:hover:not(:disabled), .ignore-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.toggle-control { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); font-size: 13px; font-weight: 650; cursor: pointer; user-select: none; }
+.toggle-control:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.toggle-control input { position: absolute; opacity: 0; pointer-events: none; }
+.toggle-track { width: 34px; height: 20px; border-radius: 999px; background: #cbd5e1; position: relative; transition: background .15s; flex: 0 0 auto; }
+.toggle-track::after { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(15,23,42,.24); transition: transform .15s; }
+.toggle-control input:checked + .toggle-track { background: var(--accent); }
+.toggle-control input:checked + .toggle-track::after { transform: translateX(14px); }
+.toggle-control input:focus-visible + .toggle-track { outline: 2px solid #93c5fd; outline-offset: 2px; }
+#rotateToken { opacity: 0; transform: translateY(-4px) scale(.98); pointer-events: none; max-width: 0; padding-left: 0; padding-right: 0; border-width: 0; overflow: hidden; transition: opacity .16s, transform .16s, max-width .2s, padding .2s, border-width .2s; white-space: nowrap; }
+#rotateToken.visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; max-width: 120px; padding-left: 12px; padding-right: 12px; border-width: 1px; }
 .commit-button { background: var(--accent); border-color: var(--accent); color: #fff; }
 .commit-button:hover:not(:disabled) { color: #fff; background: #1d4ed8; }
 .ignore-button { color: var(--rose); }
@@ -1279,13 +1580,14 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .meter span { font-size: 12px; color: var(--muted); }
 .meter .action-btn { position: absolute; right: 12px; top: 12px; font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--line); background: #fff; cursor: pointer; color: var(--text); font-weight: 600; }
 .meter .action-btn:hover { border-color: var(--accent); color: var(--accent); }
+.meter .action-btn:disabled { opacity: .62; cursor: progress; color: var(--muted); background: #f8fafc; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
 .timeline-container { --graph-width: 30px; display: grid; grid-template-columns: var(--graph-width) minmax(0, 1fr); column-gap: 6px; align-items: flex-start; position: relative; height: min(66vh, 680px); min-height: 430px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; background: linear-gradient(90deg, #fbfdff 0, #fbfdff calc(var(--graph-width) + 10px), #ffffff calc(var(--graph-width) + 10px)); padding: 10px 10px 10px 4px; }
 #graph { width: var(--graph-width); min-width: var(--graph-width); pointer-events: auto; overflow: visible; }
 .timeline { display: grid; gap: 9px; min-width: 0; padding-right: 2px; }
-.commit { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 10px; padding: 6px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: pointer; touch-action: manipulation; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; min-height: 48px; }
+.commit { display: grid; grid-template-columns: minmax(0, 1fr); padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: pointer; touch-action: manipulation; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; }
 .commit:hover { background: var(--accent-soft); border-color: #bfdbfe; box-shadow: 0 8px 22px rgba(37, 99, 235, .10); transform: translateY(-1px); }
-.hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; align-self: center; }
+.hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
 .subject { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; }
 .ai-status { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 16px; margin-left: 7px; vertical-align: -3px; color: var(--accent); position: relative; }
@@ -1339,6 +1641,15 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .drawer pre { overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #334155; background: #f8fafc; border: 1px solid var(--line-soft); padding: 12px; border-radius: 7px; flex: 1 1 auto; max-height: 240px; }
 .drawer-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .drawer-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(15,23,42,.32); opacity: 0; pointer-events: none; transition: opacity .16s; z-index: 30; }
+.modal-backdrop.visible { opacity: 1; pointer-events: auto; }
+.modal { width: min(460px, 100%); background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 18px; transform: translateY(8px) scale(.98); transition: transform .16s; }
+.modal-backdrop.visible .modal { transform: translateY(0) scale(1); }
+.modal h2 { margin: 0 0 8px; color: var(--text); font-size: 16px; letter-spacing: 0; text-transform: none; }
+.modal p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
+.modal-token { display: none; width: 100%; min-height: 76px; margin-top: 12px; padding: 10px; resize: none; border: 1px solid var(--line); border-radius: 7px; color: #334155; background: #f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45; box-sizing: border-box; }
+.modal.show-token .modal-token { display: block; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .copy-button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 7px; height: 30px; padding: 4px 10px; cursor: pointer; font-weight: 650; }
 .copy-button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .close-button:hover { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
@@ -1346,9 +1657,15 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 #graph path:hover { stroke-width: 3; opacity: 1 !important; }
 #graph circle.node { transition: r 0.16s, stroke-width 0.16s; pointer-events: auto; }
 #graph circle.node:hover { r: 4.8; stroke-width: 2.4; }
-.calendar-grid { --calendar-cell: 10px; --calendar-gap: 3px; display: flex; flex: 0 1 min(638px, 78%); width: min(638px, 78%); justify-content: flex-end; gap: var(--calendar-gap); align-items: flex-end; max-width: 100%; min-width: 0; overflow: hidden; }
+.calendar-grid { --calendar-cell: 10px; --calendar-gap: 3px; --calendar-label-width: 24px; display: grid; grid-template-columns: var(--calendar-label-width) minmax(0, 1fr); grid-template-rows: 13px auto; column-gap: 6px; row-gap: 4px; flex: 0 1 min(674px, 78%); width: min(674px, 78%); justify-content: flex-end; align-items: start; max-width: 100%; min-width: 0; overflow: hidden; }
+.calendar-months { grid-column: 2; grid-row: 1; display: flex; gap: var(--calendar-gap); overflow: hidden; min-width: 0; }
+.calendar-month { flex: 0 0 var(--calendar-cell); height: 13px; color: var(--muted); font-size: 10px; line-height: 12px; white-space: nowrap; overflow: visible; }
+.calendar-weekdays { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; gap: var(--calendar-gap); }
+.calendar-weekday { height: var(--calendar-cell); color: var(--muted); font-size: 10px; line-height: var(--calendar-cell); text-align: right; white-space: nowrap; }
+.calendar-weeks { grid-column: 2; grid-row: 2; display: flex; gap: var(--calendar-gap); align-items: flex-start; overflow: hidden; min-width: 0; }
 .calendar-col { display: flex; flex-direction: column; gap: var(--calendar-gap); flex: 0 0 var(--calendar-cell); }
-.calendar-cell { width: var(--calendar-cell); height: var(--calendar-cell); border-radius: 2px; background: #ebedf0; }
+.calendar-cell { flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); height: var(--calendar-cell); border-radius: 2px; background: #ebedf0; }
+.calendar-cell.empty { background: transparent; }
 .calendar-cell[data-level="1"] { background: #9be9a8; }
 .calendar-cell[data-level="2"] { background: #40c463; }
 .calendar-cell[data-level="3"] { background: #30a14e; }
@@ -1381,7 +1698,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   .branch-summary-text h2 { flex: 0 0 auto; }
   .branch-name { font-size: 20px; margin: 0; min-width: 0; flex: 0 1 auto; }
   .branch-summary-text .meta { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .calendar-grid { --calendar-cell: 9px; --calendar-gap: 2px; flex: 0 0 auto; width: 100%; justify-content: flex-start; }
+  .calendar-grid { --calendar-cell: 9px; --calendar-gap: 2px; --calendar-label-width: 24px; flex: 0 0 auto; width: 100%; justify-content: flex-start; }
 }
 .sidebar-toggle {
   background: none;
@@ -1426,12 +1743,16 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </button>
           <div>
             <h1 id="appTitle">GMC GitWeb</h1>
-            <div id="repo" class="repo">Loading...</div>
+            <a id="repo" class="repo">Loading...</a>
           </div>
         </div>
         <div class="actions">
-          <button id="refresh">Refresh</button>
-          <button id="auto">Auto: on</button>
+          <label class="toggle-control" title="Allow authenticated devices on the local network to access GitWeb">
+            <input id="allowExternalAccess" type="checkbox">
+            <span class="toggle-track" aria-hidden="true"></span>
+            <span>External Access</span>
+          </label>
+          <button id="rotateToken" type="button">Refresh Token</button>
         </div>
       </header>
   
@@ -1503,13 +1824,37 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   <pre id="stat"></pre>
 </aside>
 
+<div id="tokenModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tokenModalTitle">
+  <div class="modal">
+    <h2 id="tokenModalTitle">Update token</h2>
+    <p id="tokenModalBody">this will revoke the original token. devices that have already obtained the old token will immediately lose access and need to use the new token to access again.</p>
+    <textarea id="tokenModalValue" class="modal-token" readonly></textarea>
+    <div class="modal-actions">
+      <button id="cancelRotateToken" class="copy-button" type="button">cancel</button>
+      <button id="confirmRotateToken" class="commit-button" type="button">update and copy</button>
+    </div>
+  </div>
+</div>
+
 <script>
+var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
+(function() {
+  var nativeFetch = window.fetch.bind(window);
+  window.fetch = function(input, init) {
+    init = init || {};
+    var headers = new Headers(init.headers || {});
+    var fetchUrl = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+    if (GMC_AUTH_TOKEN && fetchUrl.origin === window.location.origin) headers.set('X-GMC-Auth', GMC_AUTH_TOKEN);
+    init.headers = headers;
+    return nativeFetch(input, init);
+  };
+})();
 var urlParams = new URLSearchParams(window.location.search);
 var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, security: { allowExternalAccess: false } };
 var $ = function(id) { return document.getElementById(id); };
 
 function updateReadmeLink() {
@@ -1522,6 +1867,46 @@ function updateReadmeLink() {
   }
   link.href = '/readme?repo=' + encodeURIComponent(targetRepo);
   link.textContent = 'Open README';
+}
+
+function updateRepoLink(text, repoPath) {
+  var link = $('repo');
+  if (!link) return;
+  link.textContent = text;
+  if (repoPath && canOpenRepositoryLocally()) {
+    link.href = '#';
+    link.title = 'Open in Finder: ' + repoPath;
+  } else {
+    link.removeAttribute('href');
+    if (repoPath) {
+      link.title = 'Finder opening is available only from 127.0.0.1.';
+    } else {
+      link.removeAttribute('title');
+    }
+  }
+}
+
+function openCurrentRepository(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-repository?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      alert('Open in Finder failed: ' + error.message);
+    });
+}
+
+function canOpenRepositoryLocally() {
+  return window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '::1' ||
+    window.location.hostname === '[::1]';
 }
 
 function loadRepoHistory() {
@@ -1655,6 +2040,216 @@ function initSidebar() {
   loadRepoHistory();
 }
 
+function initSecurityControls() {
+  var external = $('allowExternalAccess');
+  var rotate = $('rotateToken');
+  if (!external || !rotate) return;
+
+  external.addEventListener('change', function() {
+    if (!external.checked) {
+      if (!confirm('Are you sure you want to disable External Access?\\n\\nOnce disabled, this setting can only be re-enabled from the machine where the GitWeb service is running.')) {
+        external.checked = true;
+        return;
+      }
+    }
+    updateExternalAccess(external.checked);
+  });
+  rotate.addEventListener('click', showTokenModal);
+  $('cancelRotateToken').addEventListener('click', function() {
+    if ($('tokenModal').dataset.mode === 'result') {
+      copyTokenFromModal();
+      return;
+    }
+    hideTokenModal();
+  });
+  $('confirmRotateToken').addEventListener('click', rotateToken);
+  $('tokenModal').addEventListener('click', function(event) {
+    if (event.target === $('tokenModal')) hideTokenModal();
+  });
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') hideTokenModal();
+  });
+  loadSecuritySettings();
+}
+
+function loadSecuritySettings() {
+  return fetch('/api/security', { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(settings) {
+      state.security.allowExternalAccess = settings.allowExternalAccess === true;
+      renderSecurityControls();
+    })
+    .catch(function() {
+      renderSecurityControls();
+    });
+}
+
+function renderSecurityControls() {
+  var external = $('allowExternalAccess');
+  var rotate = $('rotateToken');
+  if (!external) return;
+  external.checked = state.security.allowExternalAccess === true;
+  if (!rotate) return;
+  rotate.classList.toggle('visible', state.security.allowExternalAccess === true);
+  rotate.setAttribute('aria-hidden', state.security.allowExternalAccess === true ? 'false' : 'true');
+  rotate.disabled = state.security.allowExternalAccess !== true;
+  rotate.tabIndex = state.security.allowExternalAccess === true ? 0 : -1;
+}
+
+function updateExternalAccess(enabled) {
+  var external = $('allowExternalAccess');
+  if (external) external.disabled = true;
+  fetch('/api/security/external-access', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: enabled === true })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(settings) {
+      state.security.allowExternalAccess = settings.allowExternalAccess === true;
+      if (!state.security.allowExternalAccess) hideTokenModal();
+      renderSecurityControls();
+    })
+    .catch(function(error) {
+      state.security.allowExternalAccess = !enabled;
+      renderSecurityControls();
+      alert('Failed to update External Access settings: ' + error.message);
+    })
+    .finally(function() {
+      if (external) external.disabled = false;
+    });
+}
+
+function showTokenModal() {
+  if (!state.security.allowExternalAccess) return;
+  setTokenModalConfirmMode();
+  $('confirmRotateToken').focus();
+}
+
+function hideTokenModal() {
+  var modal = $('tokenModal');
+  if (!modal) return;
+  modal.classList.remove('visible');
+}
+
+function setTokenModalConfirmMode() {
+  var backdrop = $('tokenModal');
+  var panel = backdrop.querySelector('.modal');
+  backdrop.dataset.mode = 'confirm';
+  panel.classList.remove('show-token');
+  $('tokenModalTitle').textContent = 'update token';
+  $('tokenModalBody').textContent = 'this will revoke the original token. devices that have already obtained the old token will immediately lose access and need to use the new token to access again.';
+  $('tokenModalValue').value = '';
+  $('cancelRotateToken').textContent = 'cancel';
+  $('confirmRotateToken').style.display = '';
+  $('confirmRotateToken').textContent = 'update and copy';
+  backdrop.classList.add('visible');
+}
+
+function setTokenModalResultMode(token) {
+  var backdrop = $('tokenModal');
+  var panel = backdrop.querySelector('.modal');
+  backdrop.dataset.mode = 'result';
+  panel.classList.add('show-token');
+  $('tokenModalTitle').textContent = 'token updated';
+  $('tokenModalBody').textContent = 'token has been updated, click to copy and send it to the device that needs to access it.';
+  $('tokenModalValue').value = token;
+  $('cancelRotateToken').textContent = 'copy';
+  $('confirmRotateToken').style.display = 'none';
+  backdrop.classList.add('visible');
+  var field = $('tokenModalValue');
+  field.focus();
+  field.select();
+}
+
+function copyTokenFromModal() {
+  var token = $('tokenModalValue').value;
+  copyText(token).then(function() {
+    hideTokenModal();
+    alert('token copied to clipboard');
+  }).catch(function() {
+    var field = $('tokenModalValue');
+    field.focus();
+    field.select();
+  });
+}
+
+function rotateToken() {
+  hideTokenModal();
+  var button = $('rotateToken');
+  var confirmButton = $('confirmRotateToken');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Updating...';
+  }
+  if (confirmButton) confirmButton.disabled = true;
+  fetch('/api/security/rotate-token', { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      GMC_AUTH_TOKEN = data.token || '';
+      return copyText(GMC_AUTH_TOKEN).then(function() {
+        alert('token updated and copied');
+      }).catch(function() {
+        setTokenModalResultMode(GMC_AUTH_TOKEN);
+      });
+    })
+    .catch(function(error) {
+      alert('token update failed: ' + error.message);
+    })
+    .finally(function() {
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'update token';
+      }
+      if (confirmButton) confirmButton.disabled = false;
+    });
+}
+
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(function() {
+      return copyTextWithSelection(text);
+    });
+  }
+  return copyTextWithSelection(text);
+}
+
+function copyTextWithSelection(text) {
+  return new Promise(function(resolve, reject) {
+    var input = document.createElement('textarea');
+    input.value = text;
+    input.setAttribute('readonly', 'readonly');
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    try {
+      if (document.execCommand('copy')) {
+        resolve();
+      } else {
+        reject(new Error('Clipboard is unavailable'));
+      }
+    } catch (error) {
+      reject(error);
+    } finally {
+      document.body.removeChild(input);
+    }
+  });
+}
+
 function repoDisplayName(repoPath) {
   var parts = String(repoPath || '').replace(/[\\\/]+$/, '').split(/[\\\/]+/);
   return parts[parts.length - 1] || repoPath || '';
@@ -1687,26 +2282,22 @@ function setPageTitle(repoPath) {
 
 setPageTitle(targetRepo);
 updateReadmeLink();
+initSecurityControls();
 
 if (!targetRepo) {
-  $('repo').textContent = 'GMC GitWeb is running. Use "gmc web" in a git repository to view its status.';
+  updateRepoLink('GMC GitWeb is running. Use "gmc web" in a git repository to view its status.', null);
   $('branch').textContent = 'No repository selected';
   initSidebar();
 } else {
-  $('repo').textContent = targetRepo;
+  updateRepoLink(targetRepo, targetRepo);
   initSidebar();
   load();
 }
 
+$('repo').addEventListener('click', openCurrentRepository);
 $('sidebarToggle').addEventListener('click', toggleSidebar);
 $('sidebarClose').addEventListener('click', toggleSidebar);
 
-$('refresh').addEventListener('click', function() { load({ force: true }); });
-$('auto').addEventListener('click', function() {
-  state.auto = !state.auto;
-  $('auto').textContent = 'Auto: ' + (state.auto ? 'on' : 'off');
-  schedule();
-});
 $('drawer').addEventListener('mouseenter', function() {
   clearTimeout(state.hideTimer);
 });
@@ -1750,13 +2341,13 @@ function schedule() {
 
 function load(options) {
   options = options || {};
-  if (!targetRepo) return;
+  if (!targetRepo) return Promise.resolve(false);
   if (state.loading) {
     if (options.force) state.pendingForceLoad = true;
-    return;
+    return Promise.resolve(false);
   }
   state.loading = true;
-  fetch('/api/status?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
+  return fetch('/api/status?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
     .then(function(res) { 
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json(); 
@@ -1777,14 +2368,13 @@ function load(options) {
       }
     })
     .catch(function(error) {
-      $('repo').textContent = 'Error loading status: ' + error.message;
+      updateRepoLink('Error loading status: ' + error.message, null);
     })
     .finally(function() {
       state.loading = false;
       if (state.pendingForceLoad) {
         state.pendingForceLoad = false;
-        load({ force: true });
-        return;
+        return load({ force: true });
       }
       schedule();
     });
@@ -1857,17 +2447,18 @@ function processTopology(data) {
 
 function render(data) {
   if (data.error) {
-    $('repo').textContent = 'Error: ' + data.error;
+    updateRepoLink('Error: ' + data.error, null);
     return;
   }
+  updateRepoLink(data.repository && data.repository.root ? data.repository.root : targetRepo, targetRepo);
   $('branch').textContent = data.branch.current;
   $('upstream').textContent = data.branch.upstream || 'No upstream';
   $('ahead').textContent = data.branch.ahead;
   $('btnPush').style.display = data.branch.ahead > 0 ? 'inline-block' : 'none';
-  $('btnPush').onclick = function() { executeAction('/api/push', 'Pushing...'); };
+  $('btnPush').onclick = function(event) { executeAction('/api/push', 'Pushing...', event.currentTarget); };
   
   $('behind').textContent = data.branch.behind;
-  $('btnPull').onclick = function() { executeAction('/api/pull', 'Pulling...'); };
+  $('btnPull').onclick = function(event) { executeAction('/api/pull', 'Pulling...', event.currentTarget); };
   
   $('dirty').textContent = data.status.files.length;
   
@@ -1914,37 +2505,93 @@ function installGmc() {
     });
 }
 
+function addCalendarDays(date, days) {
+  var d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function calendarDateKey(date) {
+  var y = date.getFullYear();
+  var m = date.getMonth() + 1;
+  var d = date.getDate();
+  return y + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
+}
+
 function renderCalendar(contributions) {
   var cal = $('calendar');
   if (!cal || !contributions) return;
   var styles = window.getComputedStyle(cal);
   var cellSize = parseFloat(styles.getPropertyValue('--calendar-cell')) || 10;
   var gapSize = parseFloat(styles.getPropertyValue('--calendar-gap')) || 3;
+  var labelWidth = parseFloat(styles.getPropertyValue('--calendar-label-width')) || 24;
   var availableWidth = cal.clientWidth || cal.parentElement && cal.parentElement.clientWidth || 0;
-  var maxColumns = Math.floor((availableWidth + gapSize) / (cellSize + gapSize));
+  var maxColumns = Math.floor((availableWidth - labelWidth - 6 + gapSize) / (cellSize + gapSize));
   var columns = Math.max(8, Math.min(54, maxColumns || 54));
-  var html = '';
+  var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var weekdays = ['Sun', '', '', 'Wed', '', '', 'Sat'];
   var now = new Date();
-  for (var c = columns - 1; c >= 0; c--) {
-    html += '<div class="calendar-col">';
+  var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var currentWeekStart = addCalendarDays(today, -today.getDay());
+  var start = addCalendarDays(currentWeekStart, -(columns - 1) * 7);
+  var monthHtml = '';
+  var weekdayHtml = '';
+  var weeksHtml = '';
+
+  weekdays.forEach(function (day) {
+    weekdayHtml += '<div class="calendar-weekday">' + day + '</div>';
+  });
+
+  for (var c = 0; c < columns; c++) {
+    var weekStart = addCalendarDays(start, c * 7);
+    var monthLabel = '';
+    for (var mr = 0; mr < 7; mr++) {
+      var md = addCalendarDays(weekStart, mr);
+      if ((c === 0 && mr === 0) || md.getDate() === 1) {
+        monthLabel = monthNames[md.getMonth()];
+        break;
+      }
+    }
+    monthHtml += '<div class="calendar-month">' + monthLabel + '</div>';
+    weeksHtml += '<div class="calendar-col">';
     for (var r = 0; r < 7; r++) {
-      var d = new Date(now);
-      d.setDate(d.getDate() - (c * 7 + (6 - r)));
+      var d = addCalendarDays(weekStart, r);
       if (d > now) {
-        html += '<div class="calendar-cell" style="background:transparent"></div>';
+        weeksHtml += '<div class="calendar-cell empty"></div>';
         continue;
       }
-      var ds = d.toISOString().split('T')[0];
+      var ds = calendarDateKey(d);
       var count = contributions[ds] || 0;
       var level = count > 10 ? 4 : count > 5 ? 3 : count > 2 ? 2 : count > 0 ? 1 : 0;
-      html += '<div class="calendar-cell" data-level="' + level + '" title="' + count + ' commits on ' + ds + '"></div>';
+      weeksHtml += '<div class="calendar-cell" data-level="' + level + '" title="' + count + ' commits on ' + ds + '"></div>';
     }
-    html += '</div>';
+    weeksHtml += '</div>';
   }
-  cal.innerHTML = html;
+  cal.innerHTML = '<div class="calendar-months">' + monthHtml + '</div>' +
+    '<div class="calendar-weekdays">' + weekdayHtml + '</div>' +
+    '<div class="calendar-weeks">' + weeksHtml + '</div>';
 }
 
-function executeAction(url, loadingMsg) {
+function setActionButtonWorking(button) {
+  if (!button) return null;
+  var previous = {
+    disabled: button.disabled,
+    text: button.textContent
+  };
+  button.disabled = true;
+  button.textContent = 'Working...';
+  return previous;
+}
+
+function restoreActionButton(button, previous) {
+  if (!button || !previous) return;
+  button.disabled = previous.disabled;
+  button.textContent = previous.text;
+}
+
+function executeAction(url, loadingMsg, button) {
+  if (button && button.disabled) return;
+  var buttonState = setActionButtonWorking(button);
   var prevAuto = state.auto;
   state.auto = false;
   clearTimeout(state.timer);
@@ -1953,7 +2600,13 @@ function executeAction(url, loadingMsg) {
     .then(function(res) { return res.json().then(function(data) { if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
     .then(function(data) { setCommitStatus('Success: ' + firstLine(data.output), false); })
     .catch(function(err) { setCommitStatus('Error: ' + err.message, true); })
-    .finally(function() { state.auto = prevAuto; load({ force: true }); });
+    .finally(function() {
+      state.auto = prevAuto;
+      return load({ force: true });
+    })
+    .finally(function() {
+      restoreActionButton(button, buttonState);
+    });
 }
 
 function renderFiles(files) {
@@ -2074,10 +2727,10 @@ function commitSelectedFiles() {
 
   if (!state.install.hooks) {
     var choice = confirm(
-      'GMC Git Hooks 未安装！\\n\\n' +
-      '安装 Hooks 后，每次 git commit -m gmc 都会自动触发 AI 辅助生成提交信息。\\n\\n' +
-      '点击「确定」安装 Hooks 后再提交\\n' +
-      '点击「取消」本次直接使用 AI 生成提交信息（较慢）'
+      'GMC Git Hooks is not installed!\\n\\n' +
+      'After installing hooks, each git commit -m gmc will automatically trigger AI-assisted commit message generation.\\n\\n' +
+      'Click "ok" to install hooks and commit\\n' +
+      'Click "cancel" to use AI to generate commit message directly this time (slower)'
     );
     if (choice) {
       // Install hooks first, then commit
@@ -2265,7 +2918,7 @@ function renderCommits(commits) {
         '<svg class="ai-status-sparkles" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l1.8 5.1 5.1 1.8-5.1 1.8-1.8 5.1-1.8-5.1-5.1-1.8 5.1-1.8L12 2.5z"></path><path d="M5.4 14.2l.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5z"></path></svg>' +
       '</span>';
     }
-    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</div><div><div class="subject">' + escapeHtml(c.subject || '(no subject)') + aiStatus + '</div><div class="meta">' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
+    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div><div class="subject">' + escapeHtml(c.subject || '(no subject)') + aiStatus + '</div><div class="meta"><span class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</span> &bull; ' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
   }).join('');
 }
 
@@ -2535,13 +3188,14 @@ function escapeHtml(value) {
 </html>`;
 }
 
-function readmeHtml() {
+function readmeHtml(clientAuthToken) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GMC README</title>
+${faviconLink()}
 <style>
 :root { color-scheme: light; --bg: #f4f6f8; --panel: #ffffff; --text: #111827; --muted: #6b7280; --line: #dbe2ea; --line-soft: #edf1f5; --accent: #068d6dff; --accent-soft: #eff6ff; }
 * { box-sizing: border-box; }
@@ -2550,7 +3204,8 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .shell { width: min(980px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 40px; }
 .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-height: 1.12; }
-.repo { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; text-decoration: none; }
+.repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .button { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; white-space: nowrap; }
 .button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
@@ -2585,7 +3240,7 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
   <header class="topbar">
     <div>
       <h1 id="title">README</h1>
-      <div id="repo" class="repo"></div>
+      <a id="repo" class="repo"></a>
     </div>
     <a id="backLink" class="button" href="/">Back to GitWeb</a>
   </header>
@@ -2595,11 +3250,24 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
 </main>
 <script>
 mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
+(function() {
+  var nativeFetch = window.fetch.bind(window);
+  window.fetch = function(input, init) {
+    init = init || {};
+    var headers = new Headers(init.headers || {});
+    var fetchUrl = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+    if (GMC_AUTH_TOKEN && fetchUrl.origin === window.location.origin) headers.set('X-GMC-Auth', GMC_AUTH_TOKEN);
+    init.headers = headers;
+    return nativeFetch(input, init);
+  };
+})();
 var urlParams = new URLSearchParams(window.location.search);
 var targetRepo = urlParams.get('repo') || '';
 var bodyEl = document.getElementById('readmeBody');
-document.getElementById('repo').textContent = targetRepo || 'No repository selected';
+updateRepoLink(targetRepo || 'No repository selected', targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
+document.getElementById('repo').addEventListener('click', openCurrentRepository);
 
 if (!targetRepo) {
   bodyEl.innerHTML = '<div class="meta">No repository selected.</div>';
@@ -2643,6 +3311,45 @@ function renderReadme(data) {
   }
 }
 
+function updateRepoLink(text, repoPath) {
+  var link = document.getElementById('repo');
+  link.textContent = text;
+  if (repoPath && canOpenRepositoryLocally()) {
+    link.href = '#';
+    link.title = 'Open in Finder: ' + repoPath;
+  } else {
+    link.removeAttribute('href');
+    if (repoPath) {
+      link.title = 'Finder opening is available only from 127.0.0.1.';
+    } else {
+      link.removeAttribute('title');
+    }
+  }
+}
+
+function openCurrentRepository(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-repository?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      alert('Open in Finder failed: ' + error.message);
+    });
+}
+
+function canOpenRepositoryLocally() {
+  return window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '::1' ||
+    window.location.hostname === '[::1]';
+}
+
 function escapeHtml(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
     return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
@@ -2659,7 +3366,10 @@ function quit(port) {
       hostname: '127.0.0.1',
       port: port,
       path: '/api/quit',
-      method: 'POST'
+      method: 'POST',
+      headers: {
+        'X-GMC-Auth': getAuthToken()
+      }
     }, function (res) {
       res.on('data', function () { });
       res.on('end', resolve);
@@ -2682,6 +3392,7 @@ module.exports = {
   quit: quit,
   resolveWeblocPort: resolveWeblocPort,
   createWebloc: createWebloc,
+  authenticatedUrl: authenticatedUrl,
   openBrowser: openBrowser,
   DEFAULT_PORT: DEFAULT_PORT
 };

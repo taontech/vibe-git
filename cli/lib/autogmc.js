@@ -68,7 +68,7 @@ function worker(targetOid) {
   var logFile = gitFile(root, path.join(LOG_DIR, targetOid + '.log'));
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
 
-  return withLog(logFile, function(log) {
+  return withLog(logFile, function (log) {
     var lockPath = gitFile(root, LOCK_FILE);
     var lockFd = waitForLock(root, lockPath, targetOid, log);
     if (lockFd === null) {
@@ -153,12 +153,12 @@ function printPostCommitNotice(root, targetOid) {
   var logPath = path.relative(root, gitFile(root, path.join(LOG_DIR, targetOid + '.log')));
 
   process.stderr.write([
-    'GMC >>> 已启动后台 AI 总结，正在根据本次提交生成提交日志。',
-    'GMC >>> git commit 已完成，你可以继续工作；生成完成后会自动更新当前 HEAD 的提交日志。',
-    'GMC >>> 如果 HEAD 已移动，GMC 会跳过自动更新，避免改写旧提交。',
-    'GMC >>> 目标提交: ' + shortOid,
-    'GMC >>> 任务日志: ' + logPath,
-    'GMC >>> 查看状态: gmc status',
+    'GMC >>> Background AI summarization started. Generating commit message for this submission...',
+    'GMC >>> git commit complete. You can continue working; the commit message will be updated automatically.',
+    'GMC >>> If HEAD has moved, GMC will skip the update to avoid overwriting newer commits.',
+    'GMC >>> Target commit: ' + shortOid,
+    'GMC >>> Task log: ' + logPath,
+    'GMC >>> View status: gmc status',
     ''
   ].join('\n'));
 }
@@ -173,7 +173,7 @@ function rewriteHeadMessage(root, targetOid, message) {
   var messageFile = git.writeGitFile(root, 'gmc/generated-message-' + targetOid + '.txt', message);
   var args = ['commit-tree', tree];
 
-  parents.forEach(function(parent) {
+  parents.forEach(function (parent) {
     args.push('-p', parent);
   });
   args.push('-F', messageFile);
@@ -225,7 +225,7 @@ function validateCommitMessage(message, binding) {
   if (firstLine.length > 72) {
     throw new Error('Generated commit subject is longer than 72 characters: ' + firstLine);
   }
-  forbiddenPatterns.forEach(function(pattern) {
+  forbiddenPatterns.forEach(function (pattern) {
     if (pattern.test(text)) {
       throw new Error('Generated commit message looks like Codex logs instead of a commit message. Aborting.');
     }
@@ -235,7 +235,7 @@ function validateCommitMessage(message, binding) {
 function cleanupCommitMessage(message) {
   return String(message || '')
     .split(/\r?\n/)
-    .filter(function(line) {
+    .filter(function (line) {
       return line.charAt(0) !== '#';
     })
     .join('\n')
@@ -250,7 +250,7 @@ function repositoryHasOperationInProgress(root) {
     'REVERT_HEAD',
     'rebase-apply',
     'rebase-merge'
-  ].some(function(relativePath) {
+  ].some(function (relativePath) {
     return fs.existsSync(path.join(dir, relativePath));
   });
 }
@@ -288,10 +288,10 @@ function taskSummaries(root, limit) {
   }
 
   return fs.readdirSync(dir)
-    .filter(function(fileName) {
+    .filter(function (fileName) {
       return /\.json$/.test(fileName);
     })
-    .map(function(fileName) {
+    .map(function (fileName) {
       var oid = fileName.replace(/\.json$/, '');
       var task;
       try {
@@ -305,7 +305,7 @@ function taskSummaries(root, limit) {
       }
       return summarizeTask(root, oid, task || {});
     })
-    .sort(function(a, b) {
+    .sort(function (a, b) {
       return timestamp(b.createdAt || b.startedAt || b.completedAt) - timestamp(a.createdAt || a.startedAt || a.completedAt);
     })
     .slice(0, limit);
@@ -548,7 +548,7 @@ function failExpiredRunningTasks(root, reason) {
   if (!fs.existsSync(dir)) {
     return;
   }
-  fs.readdirSync(dir).forEach(function(fileName) {
+  fs.readdirSync(dir).forEach(function (fileName) {
     if (!/\.json$/.test(fileName)) {
       return;
     }
@@ -617,7 +617,7 @@ function updateTask(root, oid, updates) {
   var task = readGitJson(root, relativePath) || {
     targetOid: oid
   };
-  Object.keys(updates).forEach(function(key) {
+  Object.keys(updates).forEach(function (key) {
     task[key] = updates[key];
   });
   writeGitJson(root, relativePath, task);
