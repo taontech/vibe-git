@@ -4,7 +4,7 @@
 
 [简体中文](./README.zh-CN.md) | English
 
-![GMC Web dashboard](./docs/assets/gmc-web-dashboard.png)
+![GMC Web dashboard](./docs/assets/gmc-web-dashboard2.png)
 
 ## Why GMC Web
 
