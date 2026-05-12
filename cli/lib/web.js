@@ -1413,16 +1413,16 @@ ${faviconLink()}
   --sidebar-bg: #f1f5f9;
   --sidebar-border: #e2e8f0;
   --z-sidebar: 1000;
+  --z-navbar: 900;
   --z-drawer: 1100;
   --z-modal: 1200;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-x: hidden; }
 body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
-.app-container { display: flex; min-width: 0; min-height: 100vh; }
+.app-container { min-width: 0; min-height: 100vh; }
 .sidebar {
   width: var(--sidebar-w);
-  flex: 0 0 var(--sidebar-w);
   background:
     linear-gradient(180deg, rgba(255,255,255,.72), rgba(241,245,249,.92)),
     var(--sidebar-bg);
@@ -1431,15 +1431,15 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
   border-right: 1px solid var(--sidebar-border);
   display: flex;
   flex-direction: column;
-  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  position: sticky;
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  position: fixed;
+  left: 0;
   top: 0;
   height: 100vh;
   z-index: var(--z-sidebar);
   overflow: hidden;
 }
 .sidebar.collapsed {
-  margin-left: calc(-1 * var(--sidebar-w));
   transform: translateX(-100%);
 }
 .sidebar-header {
@@ -1539,9 +1539,12 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 }
 .repo-remove svg { width: 14px; height: 14px; pointer-events: none; }
 
-.shell { flex: 1; min-width: 0; padding: 0 32px 32px; }
+.shell { min-width: 0; min-height: 100vh; margin-left: var(--sidebar-w); padding: 82px 32px 32px; transition: margin-left 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.sidebar.collapsed + .shell { margin-left: 0; }
 .shell-inner { width: min(1480px, 100%); margin: 0 auto; }
-.topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; height: 64px; }
+.topbar { position: fixed; left: var(--sidebar-w); right: 0; top: 0; z-index: var(--z-navbar); padding: 0 32px; background: rgba(255,255,255,.92); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-bottom: 1px solid rgba(219,226,234,.82); box-shadow: 0 1px 2px rgba(15, 23, 42, .04); transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.sidebar.collapsed + .shell .topbar { left: 0; }
+.topbar-inner { width: min(1480px, 100%); min-height: 64px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
 .repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); text-decoration: none; }
@@ -1681,17 +1684,22 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 @media (max-width: 1280px) { 
   .grid, .summary-panel { grid-template-columns: 1fr; } 
   .repo { max-width: 70vw; } 
-  .shell { padding: 20px 16px; }
+  .shell { padding: 82px 16px 24px; }
+  .topbar { padding-left: 16px; padding-right: 16px; }
 }
 @media (max-width: 1024px) {
   .sidebar {
-    position: fixed;
     box-shadow: 25px 0 60px rgba(15, 23, 42, 0.15);
   }
+  .shell,
+  .sidebar.collapsed + .shell { margin-left: 0; }
+  .topbar,
+  .sidebar.collapsed + .shell .topbar { left: 0; }
   .sidebar-toggle#sidebarClose { display: flex !important; }
 }
 @media (max-width: 620px) { 
-  .topbar { align-items: flex-start; flex-direction: column; height: auto; padding-top: 16px; margin-bottom: 24px; } 
+  .shell { padding-top: 132px; }
+  .topbar-inner { align-items: flex-start; flex-direction: column; min-height: auto; padding: 14px 0; } 
   .commit { grid-template-columns: 1fr; } 
   .hash { display: none; } 
   .meters { grid-template-columns: 1fr; } 
@@ -1734,12 +1742,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   </aside>
 
   <main class="shell">
-    <div class="shell-inner">
-      <div id="installBanner" class="install-banner">
-        <span class="install-text"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
-        <button id="btnInstall" type="button">Install Hooks and Webloc</button>
-      </div>
-      <header class="topbar">
+    <header class="topbar">
+      <div class="topbar-inner">
         <div style="display: flex; align-items: center; gap: 12px;">
           <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
@@ -1757,7 +1761,13 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </label>
           <button id="rotateToken" type="button">Refresh Token</button>
         </div>
-      </header>
+      </div>
+    </header>
+    <div class="shell-inner">
+      <div id="installBanner" class="install-banner">
+        <span class="install-text"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
+        <button id="btnInstall" type="button">Install Hooks and Webloc</button>
+      </div>
   
   <section class="summary-panel">
     <div class="panel branch-summary-panel">
@@ -2020,14 +2030,28 @@ function toggleSidebar() {
   state.sidebarCollapsed = !state.sidebarCollapsed;
   localStorage.setItem('gmc_sidebar_collapsed', state.sidebarCollapsed);
   applySidebarState();
+  refreshLayoutSoon();
 }
 
 function applySidebarState() {
+  var sidebar = $('sidebar');
+  var toggle = $('sidebarToggle');
   if (state.sidebarCollapsed) {
-    $('sidebar').classList.add('collapsed');
+    sidebar.classList.add('collapsed');
   } else {
-    $('sidebar').classList.remove('collapsed');
+    sidebar.classList.remove('collapsed');
   }
+  if (toggle) toggle.setAttribute('aria-expanded', state.sidebarCollapsed ? 'false' : 'true');
+}
+
+function refreshLayoutSoon() {
+  refreshResponsiveContent();
+  window.setTimeout(refreshResponsiveContent, 430);
+}
+
+function refreshResponsiveContent() {
+  if (state.commits.length) renderGraph(state.commits);
+  if (state.contributions) renderCalendar(state.contributions);
 }
 
 function initSidebar() {
