@@ -221,7 +221,7 @@ function handleRequest(req, res) {
         redirectRepositoryName(res, parsed.query.name);
         return;
       }
-      send(res, 200, 'text/html; charset=utf-8', webHtml(getAuthToken()));
+      send(res, 200, 'text/html; charset=utf-8', webHtml(getAuthToken(), req));
       return;
     }
 
@@ -246,7 +246,7 @@ function handleRequest(req, res) {
     }
 
     if (parsed.pathname === '/api/security') {
-      sendJson(res, publicSecuritySettings());
+      sendJson(res, publicSecuritySettings(null, req));
       return;
     }
 
@@ -360,10 +360,30 @@ function handleOpenRepository(req, res, targetRepo) {
 }
 
 function isLoopbackRequest(req) {
-  var address = req && req.socket && req.socket.remoteAddress;
+  var address = normalizeSocketAddress(req && req.socket && req.socket.remoteAddress);
   return address === '127.0.0.1' ||
-    address === '::1' ||
-    address === '::ffff:127.0.0.1';
+    address === '::1';
+}
+
+function normalizeSocketAddress(address) {
+  address = String(address || '').trim();
+  if (address.indexOf('::ffff:') === 0) return address.slice(7);
+  if (address.charAt(0) === '[' && address.charAt(address.length - 1) === ']') {
+    return address.slice(1, -1);
+  }
+  return address;
+}
+
+function requestAccessAddress(req) {
+  var localAddress = normalizeSocketAddress(req && req.socket && req.socket.localAddress);
+  if (localAddress && localAddress !== '::' && localAddress !== '0.0.0.0') return localAddress;
+  var host = String(req && req.headers && req.headers.host || '').trim();
+  if (!host) return '';
+  if (host.charAt(0) === '[') {
+    var end = host.indexOf(']');
+    return end >= 0 ? host.slice(1, end) : host;
+  }
+  return host.split(':')[0];
 }
 
 function handleRemoveRepository(req, res) {
@@ -375,16 +395,22 @@ function handleRemoveRepository(req, res) {
 }
 
 function handleExternalAccessSetting(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'External Access settings can only be changed from the host machine.');
+  }
   readJsonBody(req).then(function (body) {
     var enabled = body.enabled === true;
     var settings = writeSecuritySettings({ allowExternalAccess: enabled });
-    sendJson(res, publicSecuritySettings(settings));
+    sendJson(res, publicSecuritySettings(settings, req));
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
 }
 
 function handleRotateToken(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Token refresh can only be run from the host machine.');
+  }
   try {
     var token = rotateAuthToken();
     sendJson(res, {
@@ -695,10 +721,12 @@ function writeSecuritySettings(patch) {
   return settings;
 }
 
-function publicSecuritySettings(settings) {
+function publicSecuritySettings(settings, req) {
   settings = settings || readSecuritySettings();
   return {
-    allowExternalAccess: settings.allowExternalAccess === true
+    allowExternalAccess: settings.allowExternalAccess === true,
+    localAccess: req ? isLoopbackRequest(req) : true,
+    accessAddress: req ? requestAccessAddress(req) : ''
   };
 }
 
@@ -1385,7 +1413,7 @@ function escapeXml(value) {
   });
 }
 
-function webHtml(clientAuthToken) {
+function webHtml(clientAuthToken, req) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1550,8 +1578,14 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.local-security-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.local-security-controls[hidden] { display: none; }
 .actions button, .commit-button, .ignore-button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 7px; min-height: 34px; padding: 7px 12px; cursor: pointer; font-weight: 650; }
 .actions button:hover, .commit-button:hover:not(:disabled), .ignore-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.lan-access { display: none; align-items: center; gap: 8px; min-height: 34px; max-width: min(420px, 46vw); padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); font-size: 13px; font-weight: 650; }
+.lan-access.visible { display: inline-flex; }
+.lan-access svg { width: 17px; height: 17px; color: var(--accent); flex: 0 0 auto; }
+.lan-access span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .toggle-control { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); font-size: 13px; font-weight: 650; cursor: pointer; user-select: none; }
 .toggle-control:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .toggle-control input { position: absolute; opacity: 0; pointer-events: none; }
@@ -1754,12 +1788,18 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </div>
         </div>
         <div class="actions">
-          <label class="toggle-control" title="Allow authenticated devices on the local network to access GitWeb">
-            <input id="allowExternalAccess" type="checkbox">
-            <span class="toggle-track" aria-hidden="true"></span>
-            <span>External Access</span>
-          </label>
-          <button id="rotateToken" type="button">Refresh Token</button>
+          <div id="localSecurityControls" class="local-security-controls">
+            <label class="toggle-control" title="Allow authenticated devices on the local network to access GitWeb">
+              <input id="allowExternalAccess" type="checkbox">
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span>External Access</span>
+            </label>
+            <button id="rotateToken" type="button">Refresh Token</button>
+          </div>
+          <div id="lanAccess" class="lan-access" hidden title="GitWeb LAN address" aria-label="GitWeb LAN address">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="6" rx="1.5"></rect><rect x="3" y="15" width="6" height="6" rx="1.5"></rect><rect x="15" y="15" width="6" height="6" rx="1.5"></rect><path d="M12 9v3"></path><path d="M6 15v-2.5h12V15"></path></svg>
+            <span id="lanAccessAddress"></span>
+          </div>
         </div>
       </div>
     </header>
@@ -1851,6 +1891,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
+var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
 (function() {
   var nativeFetch = window.fetch.bind(window);
   window.fetch = function(input, init) {
@@ -1867,7 +1908,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, security: { allowExternalAccess: false } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '' } };
 var $ = function(id) { return document.getElementById(id); };
 
 function updateReadmeLink() {
@@ -2071,6 +2112,7 @@ function initSecurityControls() {
   var external = $('allowExternalAccess');
   var rotate = $('rotateToken');
   if (!external || !rotate) return;
+  renderSecurityControls();
 
   external.addEventListener('change', function() {
     if (!external.checked) {
@@ -2107,6 +2149,8 @@ function loadSecuritySettings() {
     })
     .then(function(settings) {
       state.security.allowExternalAccess = settings.allowExternalAccess === true;
+      state.security.localAccess = settings.localAccess !== false;
+      state.security.accessAddress = settings.accessAddress || state.security.accessAddress || '';
       renderSecurityControls();
     })
     .catch(function() {
@@ -2117,9 +2161,34 @@ function loadSecuritySettings() {
 function renderSecurityControls() {
   var external = $('allowExternalAccess');
   var rotate = $('rotateToken');
+  var localControls = $('localSecurityControls');
+  var lanAccess = $('lanAccess');
+  var lanAddress = $('lanAccessAddress');
   if (!external) return;
+  var isLocal = state.security.localAccess !== false;
+
+  if (localControls) localControls.hidden = !isLocal;
+  if (lanAccess) {
+    lanAccess.hidden = isLocal;
+    lanAccess.classList.toggle('visible', !isLocal);
+  }
+  if (lanAddress) {
+    lanAddress.textContent = state.security.accessAddress || window.location.hostname || 'LAN';
+  }
+
   external.checked = state.security.allowExternalAccess === true;
   if (!rotate) return;
+  if (!isLocal) {
+    rotate.classList.remove('visible');
+    rotate.setAttribute('aria-hidden', 'true');
+    rotate.disabled = true;
+    rotate.tabIndex = -1;
+    external.disabled = true;
+    hideTokenModal();
+    return;
+  }
+
+  external.disabled = false;
   rotate.classList.toggle('visible', state.security.allowExternalAccess === true);
   rotate.setAttribute('aria-hidden', state.security.allowExternalAccess === true ? 'false' : 'true');
   rotate.disabled = state.security.allowExternalAccess !== true;
@@ -2142,6 +2211,8 @@ function updateExternalAccess(enabled) {
     })
     .then(function(settings) {
       state.security.allowExternalAccess = settings.allowExternalAccess === true;
+      state.security.localAccess = settings.localAccess !== false;
+      state.security.accessAddress = settings.accessAddress || state.security.accessAddress || '';
       if (!state.security.allowExternalAccess) hideTokenModal();
       renderSecurityControls();
     })
@@ -2151,12 +2222,12 @@ function updateExternalAccess(enabled) {
       alert('Failed to update External Access settings: ' + error.message);
     })
     .finally(function() {
-      if (external) external.disabled = false;
+      if (external && state.security.localAccess !== false) external.disabled = false;
     });
 }
 
 function showTokenModal() {
-  if (!state.security.allowExternalAccess) return;
+  if (!state.security.allowExternalAccess || state.security.localAccess === false) return;
   setTokenModalConfirmMode();
   $('confirmRotateToken').focus();
 }
