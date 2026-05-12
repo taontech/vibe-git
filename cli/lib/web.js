@@ -207,6 +207,10 @@ function handleRequest(req, res) {
         handleRotateToken(req, res);
         return;
       }
+      if (parsed.pathname === '/api/security/qr-code') {
+        handleQrCode(req, res);
+        return;
+      }
       send(res, 405, 'text/plain; charset=utf-8', 'Method not allowed');
       return;
     }
@@ -386,6 +390,20 @@ function requestAccessAddress(req) {
   return host.split(':')[0];
 }
 
+function preferredLanAddress() {
+  var interfaces = os.networkInterfaces();
+  var fallback = '';
+  Object.keys(interfaces).forEach(function (name) {
+    (interfaces[name] || []).forEach(function (item) {
+      if (!item || item.internal) return;
+      if (item.family === 'IPv4') {
+        if (!fallback || /^en|^eth|^wlan|^wi-fi/i.test(name)) fallback = item.address;
+      }
+    });
+  });
+  return fallback;
+}
+
 function handleRemoveRepository(req, res) {
   readJsonBody(req).then(function (body) {
     sendJson(res, { repositories: removeRecentRepository(body.repo || body.path) });
@@ -422,6 +440,32 @@ function handleRotateToken(req, res) {
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
+}
+
+function handleQrCode(req, res) {
+  readJsonBody(req).then(function (body) {
+    var QRCode = require('qrcode');
+    var value = String(body.url || '').trim();
+    if (!value || value.length > 4096) {
+      var error = new Error('Invalid QR URL');
+      error.httpStatus = 400;
+      throw error;
+    }
+    return QRCode.toString(value, {
+      type: 'svg',
+      width: 224,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+      color: {
+        dark: '#111827',
+        light: '#ffffff'
+      }
+    });
+  }).then(function (svg) {
+    sendJson(res, { svg: svg });
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
 }
 
 function redirectRepositoryName(res, name) {
@@ -726,7 +770,8 @@ function publicSecuritySettings(settings, req) {
   return {
     allowExternalAccess: settings.allowExternalAccess === true,
     localAccess: req ? isLoopbackRequest(req) : true,
-    accessAddress: req ? requestAccessAddress(req) : ''
+    accessAddress: req ? requestAccessAddress(req) : '',
+    lanAddress: preferredLanAddress()
   };
 }
 
@@ -1582,6 +1627,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .local-security-controls[hidden] { display: none; }
 .actions button, .commit-button, .ignore-button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 7px; min-height: 34px; padding: 7px 12px; cursor: pointer; font-weight: 650; }
 .actions button:hover, .commit-button:hover:not(:disabled), .ignore-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.settings-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.settings-button svg { width: 16px; height: 16px; pointer-events: none; }
 .lan-access { display: none; align-items: center; gap: 8px; min-height: 34px; max-width: min(420px, 46vw); padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); font-size: 13px; font-weight: 650; }
 .lan-access.visible { display: inline-flex; }
 .lan-access svg { width: 17px; height: 17px; color: var(--accent); flex: 0 0 auto; }
@@ -1596,6 +1643,30 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .toggle-control input:focus-visible + .toggle-track { outline: 2px solid #93c5fd; outline-offset: 2px; }
 #rotateToken { opacity: 0; transform: translateY(-4px) scale(.98); pointer-events: none; max-width: 0; padding-left: 0; padding-right: 0; border-width: 0; overflow: hidden; transition: opacity .16s, transform .16s, max-width .2s, padding .2s, border-width .2s; white-space: nowrap; }
 #rotateToken.visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; max-width: 120px; padding-left: 12px; padding-right: 12px; border-width: 1px; }
+.settings-page #rotateToken { opacity: 1; transform: none; pointer-events: auto; max-width: none; padding-left: 12px; padding-right: 12px; border-width: 1px; }
+.settings-page { display: grid; gap: 16px; }
+.settings-page[hidden] { display: none; }
+.settings-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 2px; }
+.settings-hero h2 { margin: 0; color: var(--text); font-size: 22px; line-height: 1.15; letter-spacing: 0; text-transform: none; }
+.settings-hero p { margin: 6px 0 0; color: var(--muted); max-width: 720px; line-height: 1.6; }
+.settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 16px; align-items: start; }
+.settings-card { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
+.settings-card h3 { margin: 0; color: var(--text); font-size: 15px; line-height: 1.25; }
+.settings-card p { margin: 7px 0 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
+.settings-row:last-child { border-bottom: none; padding-bottom: 0; }
+.settings-row-main { min-width: 0; }
+.settings-row-main strong { display: block; font-size: 14px; }
+.settings-row-main span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.access-address { display: inline-flex; max-width: 100%; margin-top: 10px; padding: 7px 9px; border-radius: 7px; background: #f8fafc; border: 1px solid var(--line-soft); color: #334155; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qr-shell { display: grid; gap: 12px; justify-items: center; }
+.qr-box { display: grid; place-items: center; width: 244px; height: 244px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.qr-box svg { display: block; width: 224px; height: 224px; }
+.qr-placeholder { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 7px; background: #f8fafc; color: var(--muted); text-align: center; font-size: 13px; line-height: 1.5; padding: 20px; }
+.access-url { width: 100%; min-height: 62px; padding: 10px; resize: none; border: 1px solid var(--line); border-radius: 7px; background: #f8fafc; color: #334155; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45; }
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; }
+.settings-warning { display: none; margin-top: 12px; padding: 10px 12px; border: 1px solid #fed7aa; border-radius: 7px; background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.5; }
+.settings-warning.visible { display: block; }
 .commit-button { background: var(--accent); border-color: var(--accent); color: #fff; }
 .commit-button:hover:not(:disabled) { color: #fff; background: #1d4ed8; }
 .ignore-button { color: var(--rose); }
@@ -1721,6 +1792,9 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   .shell { padding: 82px 16px 24px; }
   .topbar { padding-left: 16px; padding-right: 16px; }
 }
+@media (max-width: 920px) {
+  .settings-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 1024px) {
   .sidebar {
     box-shadow: 25px 0 60px rgba(15, 23, 42, 0.15);
@@ -1744,6 +1818,10 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   .branch-name { font-size: 20px; margin: 0; min-width: 0; flex: 0 1 auto; }
   .branch-summary-text .meta { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .calendar-grid { --calendar-cell: 9px; --calendar-gap: 2px; --calendar-label-width: 24px; flex: 0 0 auto; width: 100%; justify-content: flex-start; }
+  .settings-hero { flex-direction: column; }
+  .settings-row { align-items: flex-start; flex-direction: column; }
+  .settings-actions { justify-content: flex-start; }
+  .qr-box { width: min(244px, 100%); height: auto; aspect-ratio: 1; }
 }
 .sidebar-toggle {
   background: none;
@@ -1788,18 +1866,10 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </div>
         </div>
         <div class="actions">
-          <div id="localSecurityControls" class="local-security-controls">
-            <label class="toggle-control" title="Allow authenticated devices on the local network to access GitWeb">
-              <input id="allowExternalAccess" type="checkbox">
-              <span class="toggle-track" aria-hidden="true"></span>
-              <span>External Access</span>
-            </label>
-            <button id="rotateToken" type="button">Refresh Token</button>
-          </div>
-          <div id="lanAccess" class="lan-access" hidden title="GitWeb LAN address" aria-label="GitWeb LAN address">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="6" rx="1.5"></rect><rect x="3" y="15" width="6" height="6" rx="1.5"></rect><rect x="15" y="15" width="6" height="6" rx="1.5"></rect><path d="M12 9v3"></path><path d="M6 15v-2.5h12V15"></path></svg>
-            <span id="lanAccessAddress"></span>
-          </div>
+          <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
+            <span>访问设置</span>
+          </button>
         </div>
       </div>
     </header>
@@ -1808,7 +1878,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
         <span class="install-text"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
         <button id="btnInstall" type="button">Install Hooks and Webloc</button>
       </div>
-  
+      <div id="dashboardPage">
   <section class="summary-panel">
     <div class="panel branch-summary-panel">
       <div class="branch-summary-text">
@@ -1858,6 +1928,52 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       </div>
     </div>
   </section>
+      </div>
+      <section id="accessSettingsPage" class="settings-page" hidden>
+        <div class="settings-hero">
+          <div>
+            <h2>访问设置</h2>
+            <p>管理局域网访问、刷新访问 token，并生成当前页面的扫码入口。移动设备扫码后会自动带上访问凭证，不需要手动输入长 token。</p>
+          </div>
+          <button id="closeAccessSettings" class="copy-button" type="button">Back</button>
+        </div>
+        <div class="settings-grid">
+          <div class="settings-card">
+            <div class="settings-row">
+              <div class="settings-row-main">
+                <strong>允许外部访问</strong>
+                <span>开启后，局域网内已认证设备可以访问当前 GitWeb 服务。这个开关只能在运行 GMC 的主机上修改。</span>
+              </div>
+              <label class="toggle-control" title="Allow authenticated devices on the local network to access GitWeb">
+                <input id="allowExternalAccess" type="checkbox">
+                <span class="toggle-track" aria-hidden="true"></span>
+                <span>External Access</span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row-main">
+                <strong>刷新 token</strong>
+                <span>刷新后旧 token 会立即失效，已经接入的设备需要重新扫码或使用新链接访问。</span>
+              </div>
+              <button id="rotateToken" class="copy-button" type="button">Refresh Token</button>
+            </div>
+            <div id="settingsHostOnlyWarning" class="settings-warning">当前页面不是从主机本机打开的，访问设置只能查看，不能修改。</div>
+            <div id="settingAccessAddress" class="access-address"></div>
+          </div>
+          <div class="settings-card">
+            <h3>扫码访问当前页面</h3>
+            <p>二维码内容是当前页面 URL，并自动附带访问 token。建议只给可信设备扫码。</p>
+            <div class="qr-shell">
+              <div id="accessQrCode" class="qr-box"><div class="qr-placeholder">开启外部访问后生成二维码</div></div>
+              <textarea id="accessUrlValue" class="access-url" readonly></textarea>
+              <div class="settings-actions">
+                <button id="copyAccessUrl" class="copy-button" type="button">Copy URL</button>
+              </div>
+              <div id="qrStatus" class="meta"></div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   </main>
 </div>
@@ -1892,6 +2008,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
+var AUTH_QUERY_PARAM = ${JSON.stringify(AUTH_QUERY_PARAM)};
 (function() {
   var nativeFetch = window.fetch.bind(window);
   window.fetch = function(input, init) {
@@ -1908,7 +2025,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var $ = function(id) { return document.getElementById(id); };
 
 function updateReadmeLink() {
@@ -2124,6 +2241,9 @@ function initSecurityControls() {
     updateExternalAccess(external.checked);
   });
   rotate.addEventListener('click', showTokenModal);
+  $('openAccessSettings').addEventListener('click', openAccessSettings);
+  $('closeAccessSettings').addEventListener('click', closeAccessSettings);
+  $('copyAccessUrl').addEventListener('click', copyAccessUrl);
   $('cancelRotateToken').addEventListener('click', function() {
     if ($('tokenModal').dataset.mode === 'result') {
       copyTokenFromModal();
@@ -2141,6 +2261,22 @@ function initSecurityControls() {
   loadSecuritySettings();
 }
 
+function openAccessSettings() {
+  state.settingsOpen = true;
+  $('dashboardPage').hidden = true;
+  $('accessSettingsPage').hidden = false;
+  renderSecurityControls();
+  renderAccessQr();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function closeAccessSettings() {
+  state.settingsOpen = false;
+  $('accessSettingsPage').hidden = true;
+  $('dashboardPage').hidden = false;
+  refreshLayoutSoon();
+}
+
 function loadSecuritySettings() {
   return fetch('/api/security', { cache: 'no-store' })
     .then(function(res) {
@@ -2151,6 +2287,7 @@ function loadSecuritySettings() {
       state.security.allowExternalAccess = settings.allowExternalAccess === true;
       state.security.localAccess = settings.localAccess !== false;
       state.security.accessAddress = settings.accessAddress || state.security.accessAddress || '';
+      state.security.lanAddress = settings.lanAddress || state.security.lanAddress || '';
       renderSecurityControls();
     })
     .catch(function() {
@@ -2161,13 +2298,14 @@ function loadSecuritySettings() {
 function renderSecurityControls() {
   var external = $('allowExternalAccess');
   var rotate = $('rotateToken');
-  var localControls = $('localSecurityControls');
   var lanAccess = $('lanAccess');
   var lanAddress = $('lanAccessAddress');
+  var address = $('settingAccessAddress');
+  var hostWarning = $('settingsHostOnlyWarning');
+  var copyButton = $('copyAccessUrl');
   if (!external) return;
   var isLocal = state.security.localAccess !== false;
 
-  if (localControls) localControls.hidden = !isLocal;
   if (lanAccess) {
     lanAccess.hidden = isLocal;
     lanAccess.classList.toggle('visible', !isLocal);
@@ -2175,11 +2313,18 @@ function renderSecurityControls() {
   if (lanAddress) {
     lanAddress.textContent = state.security.accessAddress || window.location.hostname || 'LAN';
   }
+  if (hostWarning) hostWarning.classList.toggle('visible', !isLocal);
+  if (address) {
+    var displayAddress = state.security.lanAddress || state.security.accessAddress || window.location.hostname || 'LAN';
+    address.textContent = 'LAN address: ' + displayAddress;
+    address.title = displayAddress;
+  }
 
   external.checked = state.security.allowExternalAccess === true;
+  if (copyButton) copyButton.disabled = state.security.allowExternalAccess !== true;
+  renderAccessQr();
   if (!rotate) return;
   if (!isLocal) {
-    rotate.classList.remove('visible');
     rotate.setAttribute('aria-hidden', 'true');
     rotate.disabled = true;
     rotate.tabIndex = -1;
@@ -2189,7 +2334,7 @@ function renderSecurityControls() {
   }
 
   external.disabled = false;
-  rotate.classList.toggle('visible', state.security.allowExternalAccess === true);
+  rotate.classList.add('visible');
   rotate.setAttribute('aria-hidden', state.security.allowExternalAccess === true ? 'false' : 'true');
   rotate.disabled = state.security.allowExternalAccess !== true;
   rotate.tabIndex = state.security.allowExternalAccess === true ? 0 : -1;
@@ -2213,7 +2358,9 @@ function updateExternalAccess(enabled) {
       state.security.allowExternalAccess = settings.allowExternalAccess === true;
       state.security.localAccess = settings.localAccess !== false;
       state.security.accessAddress = settings.accessAddress || state.security.accessAddress || '';
+      state.security.lanAddress = settings.lanAddress || state.security.lanAddress || '';
       if (!state.security.allowExternalAccess) hideTokenModal();
+      state.qrUrl = '';
       renderSecurityControls();
     })
     .catch(function(error) {
@@ -2224,6 +2371,79 @@ function updateExternalAccess(enabled) {
     .finally(function() {
       if (external && state.security.localAccess !== false) external.disabled = false;
     });
+}
+
+function currentAccessUrl() {
+  var accessUrl = new URL(window.location.href);
+  accessUrl.hash = '';
+  if (isLoopbackHost(accessUrl.hostname) && state.security.lanAddress) {
+    accessUrl.hostname = state.security.lanAddress;
+  }
+  if (GMC_AUTH_TOKEN) accessUrl.searchParams.set(AUTH_QUERY_PARAM, GMC_AUTH_TOKEN);
+  return accessUrl.toString();
+}
+
+function isLoopbackHost(hostname) {
+  var host = String(hostname || '').replace(/^\\[|\\]$/g, '').toLowerCase();
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+function renderAccessQr() {
+  var box = $('accessQrCode');
+  var field = $('accessUrlValue');
+  var status = $('qrStatus');
+  if (!box || !field) return;
+  if (!state.settingsOpen) return;
+  if (state.security.allowExternalAccess !== true) {
+    state.qrUrl = '';
+    field.value = '';
+    box.innerHTML = '<div class="qr-placeholder">开启外部访问后生成二维码</div>';
+    if (status) status.textContent = '移动设备访问前，需要先允许外部访问。';
+    return;
+  }
+
+  var accessUrl = currentAccessUrl();
+  field.value = accessUrl;
+  if (state.qrUrl === accessUrl || state.qrLoading) return;
+
+  state.qrLoading = true;
+  box.innerHTML = '<div class="qr-placeholder">正在生成二维码...</div>';
+  if (status) status.textContent = '二维码包含当前页面 URL 和一次访问所需 token。';
+  fetch('/api/security/qr-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: accessUrl })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.qrUrl = accessUrl;
+      box.innerHTML = data.svg || '<div class="qr-placeholder">二维码生成失败</div>';
+    })
+    .catch(function(error) {
+      state.qrUrl = '';
+      box.innerHTML = '<div class="qr-placeholder">二维码生成失败<br>' + escapeHtml(error.message) + '</div>';
+      if (status) status.textContent = '请复制下方链接发送到移动设备。';
+    })
+    .finally(function() {
+      state.qrLoading = false;
+    });
+}
+
+function copyAccessUrl() {
+  var field = $('accessUrlValue');
+  if (!field || !field.value) return;
+  copyText(field.value).then(function() {
+    var status = $('qrStatus');
+    if (status) status.textContent = '访问链接已复制。';
+  }).catch(function() {
+    field.focus();
+    field.select();
+  });
 }
 
 function showTokenModal() {
@@ -2298,6 +2518,8 @@ function rotateToken() {
     })
     .then(function(data) {
       GMC_AUTH_TOKEN = data.token || '';
+      state.qrUrl = '';
+      renderAccessQr();
       return copyText(GMC_AUTH_TOKEN).then(function() {
         alert('token updated and copied');
       }).catch(function() {
@@ -2310,7 +2532,7 @@ function rotateToken() {
     .finally(function() {
       if (button) {
         button.disabled = false;
-        button.textContent = 'update token';
+        button.textContent = 'Refresh Token';
       }
       if (confirmButton) confirmButton.disabled = false;
     });
