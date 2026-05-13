@@ -1991,21 +1991,20 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .task-column-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; color: var(--text); }
 .task-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--task-color, var(--accent)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--task-color, var(--accent)) 14%, transparent); }
 .task-count { display: grid; place-items: center; min-width: 26px; height: 24px; padding: 0 7px; border-radius: 999px; background: #f1f5f9; color: #475569; font-weight: 800; font-size: 12px; }
-.task-column-body { display: grid; gap: 10px; min-height: 220px; }
+.task-column-body { display: grid; gap: 10px; min-height: 220px; align-content: start; align-items: start; grid-auto-rows: 132px; }
 .task-empty { display: grid; place-items: center; min-height: 116px; border: 1px dashed #cbd5e1; border-radius: 8px; color: #94a3b8; font-size: 12px; text-align: center; padding: 14px; background: rgba(248,250,252,.68); }
-.task-card { position: relative; display: grid; gap: 10px; padding: 13px; border: 1px solid rgba(226,232,240,.92); border-radius: 8px; background: #fff; box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; transition: transform .16s, box-shadow .16s, border-color .16s; }
+.task-card { position: relative; display: grid; grid-template-rows: 30px auto auto 1fr; gap: 9px; height: 132px; padding: 0 12px 12px; border: 1px solid rgba(226,232,240,.92); border-radius: 8px; background: #fff; box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; overflow: hidden; transition: transform .16s, box-shadow .16s, border-color .16s; }
 .task-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--task-color, var(--accent)) 42%, #cbd5e1); box-shadow: 0 16px 36px rgba(15,23,42,.11); }
 .task-card.dragging { opacity: .52; transform: rotate(1deg) scale(.98); }
-.task-remove { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 999px; color: #64748b; background: rgba(255,255,255,.92); opacity: 0; transform: scale(.92); cursor: pointer; transition: opacity .14s, transform .14s, color .14s, background .14s, border-color .14s; }
+.task-card-band { display: flex; align-items: center; min-height: 30px; margin: 0 -12px; padding: 0 42px 0 12px; background: linear-gradient(90deg, var(--task-color, var(--accent)), color-mix(in srgb, var(--task-color, var(--accent)) 72%, #ffffff)); }
+.task-remove { position: absolute; top: 4px; right: 8px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid rgba(255,255,255,.36); border-radius: 999px; color: #fff; background: rgba(255,255,255,.16); opacity: 0; transform: scale(.92); cursor: pointer; transition: opacity .14s, transform .14s, color .14s, background .14s, border-color .14s; }
 .task-card:hover .task-remove, .task-card:focus-within .task-remove, .task-remove:focus-visible { opacity: 1; transform: scale(1); }
-.task-remove:hover { color: var(--rose); background: #fff1f2; border-color: #fecdd3; }
+.task-remove:hover { color: #fff; background: rgba(220,38,38,.92); border-color: rgba(255,255,255,.58); }
 .task-remove svg { width: 14px; height: 14px; pointer-events: none; }
-.task-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.task-id { color: var(--task-color, var(--accent)); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 850; }
-.task-status-chip { padding: 3px 7px; border-radius: 999px; background: color-mix(in srgb, var(--task-color, var(--accent)) 12%, #ffffff); color: var(--task-color, var(--accent)); font-size: 11px; font-weight: 800; }
-.task-card h3 { margin: 0; color: var(--text); font-size: 14px; line-height: 1.3; letter-spacing: 0; }
-.task-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.52; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
-.task-card.expanded p { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.task-id { color: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 900; text-shadow: 0 1px 2px rgba(15,23,42,.18); }
+.task-title-button { margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; line-height: 1.32; font-weight: 800; letter-spacing: 0; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-title-button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.task-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-card-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #94a3b8; font-size: 11px; }
 .task-card-actions { display: flex; gap: 5px; }
 .task-mini-button { display: inline-grid; place-items: center; width: 28px; height: 26px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #64748b; cursor: pointer; }
@@ -2095,6 +2094,12 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .modal h2 { margin: 0 0 8px; color: var(--text); font-size: 16px; letter-spacing: 0; text-transform: none; }
 .modal p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.task-detail-modal { width: min(680px, 100%); }
+.task-detail-head { display: grid; gap: 7px; margin-bottom: 14px; }
+.task-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; color: #64748b; font-size: 12px; }
+.task-detail-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; background: #f1f5f9; font-weight: 750; }
+.task-detail-chip.status { color: #fff; background: var(--task-color, var(--accent)); }
+.task-detail-body { max-height: min(54vh, 460px); overflow: auto; padding: 13px; border: 1px solid var(--line-soft); border-radius: 8px; background: #f8fafc; color: #334155; font-size: 13px; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; }
 .copy-button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 7px; height: 30px; padding: 4px 10px; cursor: pointer; font-weight: 650; }
 .copy-button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .close-button:hover { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
@@ -2409,6 +2414,23 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   </div>
 </div>
 
+<div id="taskDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle">
+  <div class="modal task-detail-modal">
+    <div class="task-detail-head">
+      <div class="task-detail-meta">
+        <span id="taskDetailId" class="task-detail-chip"></span>
+        <span id="taskDetailStatus" class="task-detail-chip status"></span>
+        <span id="taskDetailUpdated" class="task-detail-chip"></span>
+      </div>
+      <h2 id="taskDetailTitle"></h2>
+    </div>
+    <div id="taskDetailBody" class="task-detail-body"></div>
+    <div class="modal-actions">
+      <button id="closeTaskDetail" class="copy-button" type="button" data-i18n="close">关闭</button>
+    </div>
+  </div>
+</div>
+
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
@@ -2571,7 +2593,8 @@ var I18N = {
     deleteTask: '删除任务',
     deleteTaskConfirmPrefix: '确定要删除任务 ',
     deleteTaskConfirmSuffix: ' 吗？\\n\\n这会删除仓库中的任务文件。',
-    taskDeleteFailed: '任务删除失败：'
+    taskDeleteFailed: '任务删除失败：',
+    taskDetail: '任务详情'
   },
   en: {
     language: 'Language',
@@ -2713,15 +2736,16 @@ var I18N = {
     deleteTask: 'Delete task',
     deleteTaskConfirmPrefix: 'Delete task ',
     deleteTaskConfirmSuffix: '?\\n\\nThis removes the task file from the repository.',
-    taskDeleteFailed: 'Failed to delete task: '
+    taskDeleteFailed: 'Failed to delete task: ',
+    taskDetail: 'Task detail'
   }
 };
 var currentLanguage = normalizeLanguage(localStorage.getItem('gmc_language') || (navigator.language || ''));
 var $ = function(id) { return document.getElementById(id); };
 var TASK_BOARD_STATUSES = [
   { id: 'todo', label: 'taskStatusTodo', color: '#0284c7' },
-  { id: 'doing', label: 'taskStatusDoing', color: '#0f9f6e' },
-  { id: 'review', label: 'taskStatusReview', color: '#b45309' },
+  { id: 'doing', label: 'taskStatusDoing', color: '#16a34a' },
+  { id: 'review', label: 'taskStatusReview', color: '#d97706' },
   { id: 'done', label: 'taskStatusDone', color: '#64748b' }
 ];
 
@@ -3019,6 +3043,10 @@ function findRepoTask(taskId) {
   return (state.repoTasks || []).find(function(task) { return task.id === taskId; });
 }
 
+function taskStatusMeta(status) {
+  return TASK_BOARD_STATUSES.find(function(item) { return item.id === status; }) || TASK_BOARD_STATUSES[0];
+}
+
 function renderTaskBoard() {
   var board = $('taskBoard');
   if (!board) return;
@@ -3054,16 +3082,16 @@ function taskCardHtml(task, column) {
   var statusIndex = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(task.status);
   var canMoveLeft = statusIndex > 0;
   var canMoveRight = statusIndex < TASK_BOARD_STATUSES.length - 1;
+  var summary = taskSummary(task.content);
   return '<article class="task-card" draggable="true" data-task-id="' + escapeHtml(task.id) + '" style="--task-color:' + escapeHtml(column.color) + '">' +
     '<button class="task-remove" type="button" title="' + escapeHtml(t('deleteTask')) + '" aria-label="' + escapeHtml(t('deleteTask') + ' ' + task.id) + '" data-task-delete="' + escapeHtml(task.id) + '">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
     '</button>' +
-    '<div class="task-card-top">' +
+    '<div class="task-card-band">' +
       '<span class="task-id">' + escapeHtml(task.id) + '</span>' +
-      '<span class="task-status-chip">' + escapeHtml(t(column.label)) + '</span>' +
     '</div>' +
-    '<h3>' + escapeHtml(task.title || task.id) + '</h3>' +
-    '<p>' + escapeHtml(task.content || t('taskContentEmpty')) + '</p>' +
+    '<button class="task-title-button" type="button" data-task-detail="' + escapeHtml(task.id) + '">' + escapeHtml(task.title || task.id) + '</button>' +
+    '<p>' + escapeHtml(summary || t('taskContentEmpty')) + '</p>' +
     '<div class="task-card-footer">' +
       '<span>' + escapeHtml(formatTaskUpdated(task.updated || task.created)) + '</span>' +
       '<span class="task-card-actions">' +
@@ -3091,15 +3119,18 @@ function bindRenderedTaskBoard() {
         column.classList.remove('drag-over');
       });
     });
-    card.addEventListener('click', function(event) {
-      if (event.target.closest && event.target.closest('button')) return;
-      card.classList.toggle('expanded');
-    });
     card.querySelectorAll('[data-task-delete]').forEach(function(button) {
       button.addEventListener('click', function(event) {
         event.preventDefault();
         event.stopPropagation();
         deleteTask(button.getAttribute('data-task-delete'));
+      });
+    });
+    card.querySelectorAll('[data-task-detail]').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        showTaskDetail(button.getAttribute('data-task-detail'));
       });
     });
     card.querySelectorAll('[data-task-move]').forEach(function(button) {
@@ -3128,6 +3159,31 @@ function bindRenderedTaskBoard() {
       if (task && task.status !== status) updateTaskStatus(taskId, status);
     });
   });
+}
+
+function taskSummary(content) {
+  return String(content || '').replace(/\s+/g, ' ').trim();
+}
+
+function showTaskDetail(taskId) {
+  var task = findRepoTask(taskId);
+  if (!task) return;
+  var meta = taskStatusMeta(task.status);
+  var modal = $('taskDetailModal');
+  if (!modal) return;
+  $('taskDetailId').textContent = task.id;
+  $('taskDetailStatus').textContent = t(meta.label);
+  $('taskDetailStatus').style.setProperty('--task-color', meta.color);
+  $('taskDetailUpdated').textContent = formatTaskUpdated(task.updated || task.created);
+  $('taskDetailTitle').textContent = task.title || task.id;
+  $('taskDetailBody').textContent = task.content || t('taskContentEmpty');
+  modal.classList.add('visible');
+  $('closeTaskDetail').focus();
+}
+
+function hideTaskDetail() {
+  var modal = $('taskDetailModal');
+  if (modal) modal.classList.remove('visible');
 }
 
 function formatTaskUpdated(value) {
@@ -3363,11 +3419,18 @@ function initSecurityControls() {
   $('copyAccessUrl').addEventListener('click', copyAccessUrl);
   $('cancelRotateToken').addEventListener('click', hideTokenConfirmModal);
   $('confirmRotateToken').addEventListener('click', rotateToken);
+  $('closeTaskDetail').addEventListener('click', hideTaskDetail);
   $('tokenConfirmModal').addEventListener('click', function(event) {
     if (event.target === $('tokenConfirmModal')) hideTokenConfirmModal();
   });
+  $('taskDetailModal').addEventListener('click', function(event) {
+    if (event.target === $('taskDetailModal')) hideTaskDetail();
+  });
   document.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape') hideTokenConfirmModal();
+    if (event.key === 'Escape') {
+      hideTokenConfirmModal();
+      hideTaskDetail();
+    }
   });
   loadSecuritySettings();
 }
