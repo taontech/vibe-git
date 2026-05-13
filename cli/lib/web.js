@@ -1752,15 +1752,6 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .drawer pre { overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #334155; background: #f8fafc; border: 1px solid var(--line-soft); padding: 12px; border-radius: 7px; flex: 1 1 auto; max-height: 240px; }
 .drawer-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .drawer-actions { display: flex; gap: 8px; flex: 0 0 auto; }
-.modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(15,23,42,.32); opacity: 0; pointer-events: none; transition: opacity .16s; z-index: var(--z-modal); }
-.modal-backdrop.visible { opacity: 1; pointer-events: auto; }
-.modal { width: min(460px, 100%); background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 18px; transform: translateY(8px) scale(.98); transition: transform .16s; }
-.modal-backdrop.visible .modal { transform: translateY(0) scale(1); }
-.modal h2 { margin: 0 0 8px; color: var(--text); font-size: 16px; letter-spacing: 0; text-transform: none; }
-.modal p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
-.modal-token { display: none; width: 100%; min-height: 76px; margin-top: 12px; padding: 10px; resize: none; border: 1px solid var(--line); border-radius: 7px; color: #334155; background: #f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45; box-sizing: border-box; }
-.modal.show-token .modal-token { display: block; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .copy-button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 7px; height: 30px; padding: 4px 10px; cursor: pointer; font-weight: 650; }
 .copy-button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .close-button:hover { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
@@ -1992,18 +1983,6 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   <pre id="message"></pre>
   <pre id="stat"></pre>
 </aside>
-
-<div id="tokenModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tokenModalTitle">
-  <div class="modal">
-    <h2 id="tokenModalTitle">Update token</h2>
-    <p id="tokenModalBody">this will revoke the original token. devices that have already obtained the old token will immediately lose access and need to use the new token to access again.</p>
-    <textarea id="tokenModalValue" class="modal-token" readonly></textarea>
-    <div class="modal-actions">
-      <button id="cancelRotateToken" class="copy-button" type="button">cancel</button>
-      <button id="confirmRotateToken" class="commit-button" type="button">update and copy</button>
-    </div>
-  </div>
-</div>
 
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
@@ -2240,24 +2219,10 @@ function initSecurityControls() {
     }
     updateExternalAccess(external.checked);
   });
-  rotate.addEventListener('click', showTokenModal);
+  rotate.addEventListener('click', rotateToken);
   $('openAccessSettings').addEventListener('click', openAccessSettings);
   $('closeAccessSettings').addEventListener('click', closeAccessSettings);
   $('copyAccessUrl').addEventListener('click', copyAccessUrl);
-  $('cancelRotateToken').addEventListener('click', function() {
-    if ($('tokenModal').dataset.mode === 'result') {
-      copyTokenFromModal();
-      return;
-    }
-    hideTokenModal();
-  });
-  $('confirmRotateToken').addEventListener('click', rotateToken);
-  $('tokenModal').addEventListener('click', function(event) {
-    if (event.target === $('tokenModal')) hideTokenModal();
-  });
-  document.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape') hideTokenModal();
-  });
   loadSecuritySettings();
 }
 
@@ -2329,7 +2294,6 @@ function renderSecurityControls() {
     rotate.disabled = true;
     rotate.tabIndex = -1;
     external.disabled = true;
-    hideTokenModal();
     return;
   }
 
@@ -2359,7 +2323,6 @@ function updateExternalAccess(enabled) {
       state.security.localAccess = settings.localAccess !== false;
       state.security.accessAddress = settings.accessAddress || state.security.accessAddress || '';
       state.security.lanAddress = settings.lanAddress || state.security.lanAddress || '';
-      if (!state.security.allowExternalAccess) hideTokenModal();
       state.qrUrl = '';
       renderSecurityControls();
     })
@@ -2446,69 +2409,15 @@ function copyAccessUrl() {
   });
 }
 
-function showTokenModal() {
-  if (!state.security.allowExternalAccess || state.security.localAccess === false) return;
-  setTokenModalConfirmMode();
-  $('confirmRotateToken').focus();
-}
-
-function hideTokenModal() {
-  var modal = $('tokenModal');
-  if (!modal) return;
-  modal.classList.remove('visible');
-}
-
-function setTokenModalConfirmMode() {
-  var backdrop = $('tokenModal');
-  var panel = backdrop.querySelector('.modal');
-  backdrop.dataset.mode = 'confirm';
-  panel.classList.remove('show-token');
-  $('tokenModalTitle').textContent = 'update token';
-  $('tokenModalBody').textContent = 'this will revoke the original token. devices that have already obtained the old token will immediately lose access and need to use the new token to access again.';
-  $('tokenModalValue').value = '';
-  $('cancelRotateToken').textContent = 'cancel';
-  $('confirmRotateToken').style.display = '';
-  $('confirmRotateToken').textContent = 'update and copy';
-  backdrop.classList.add('visible');
-}
-
-function setTokenModalResultMode(token) {
-  var backdrop = $('tokenModal');
-  var panel = backdrop.querySelector('.modal');
-  backdrop.dataset.mode = 'result';
-  panel.classList.add('show-token');
-  $('tokenModalTitle').textContent = 'token updated';
-  $('tokenModalBody').textContent = 'token has been updated, click to copy and send it to the device that needs to access it.';
-  $('tokenModalValue').value = token;
-  $('cancelRotateToken').textContent = 'copy';
-  $('confirmRotateToken').style.display = 'none';
-  backdrop.classList.add('visible');
-  var field = $('tokenModalValue');
-  field.focus();
-  field.select();
-}
-
-function copyTokenFromModal() {
-  var token = $('tokenModalValue').value;
-  copyText(token).then(function() {
-    hideTokenModal();
-    alert('token copied to clipboard');
-  }).catch(function() {
-    var field = $('tokenModalValue');
-    field.focus();
-    field.select();
-  });
-}
-
 function rotateToken() {
-  hideTokenModal();
+  if (!state.security.allowExternalAccess || state.security.localAccess === false) return;
   var button = $('rotateToken');
-  var confirmButton = $('confirmRotateToken');
+  var status = $('qrStatus');
   if (button) {
     button.disabled = true;
     button.textContent = 'Updating...';
   }
-  if (confirmButton) confirmButton.disabled = true;
+  if (status) status.textContent = '正在刷新访问 token...';
   fetch('/api/security/rotate-token', { method: 'POST' })
     .then(function(res) {
       return res.json().then(function(data) {
@@ -2520,21 +2429,17 @@ function rotateToken() {
       GMC_AUTH_TOKEN = data.token || '';
       state.qrUrl = '';
       renderAccessQr();
-      return copyText(GMC_AUTH_TOKEN).then(function() {
-        alert('token updated and copied');
-      }).catch(function() {
-        setTokenModalResultMode(GMC_AUTH_TOKEN);
-      });
+      if (status) status.textContent = '旧 token 已失效。使用新 token 需设备扫描新二维码，或复制下方新链接打开。';
     })
     .catch(function(error) {
-      alert('token update failed: ' + error.message);
+      if (status) status.textContent = 'token 刷新失败：' + error.message;
+      else alert('token update failed: ' + error.message);
     })
     .finally(function() {
       if (button) {
         button.disabled = false;
         button.textContent = 'Refresh Token';
       }
-      if (confirmButton) confirmButton.disabled = false;
     });
 }
 
