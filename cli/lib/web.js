@@ -1752,6 +1752,13 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .drawer pre { overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #334155; background: #f8fafc; border: 1px solid var(--line-soft); padding: 12px; border-radius: 7px; flex: 1 1 auto; max-height: 240px; }
 .drawer-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .drawer-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(15,23,42,.32); opacity: 0; pointer-events: none; transition: opacity .16s; z-index: var(--z-modal); }
+.modal-backdrop.visible { opacity: 1; pointer-events: auto; }
+.modal { width: min(460px, 100%); background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 18px; transform: translateY(8px) scale(.98); transition: transform .16s; }
+.modal-backdrop.visible .modal { transform: translateY(0) scale(1); }
+.modal h2 { margin: 0 0 8px; color: var(--text); font-size: 16px; letter-spacing: 0; text-transform: none; }
+.modal p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .copy-button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 7px; height: 30px; padding: 4px 10px; cursor: pointer; font-weight: 650; }
 .copy-button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .close-button:hover { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
@@ -1983,6 +1990,17 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   <pre id="message"></pre>
   <pre id="stat"></pre>
 </aside>
+
+<div id="tokenConfirmModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tokenConfirmTitle">
+  <div class="modal">
+    <h2 id="tokenConfirmTitle">刷新访问 token</h2>
+    <p>刷新后旧 token 会立即失效，所有外部设备都必须重新扫描新二维码，或复制新链接打开。确认要继续吗？</p>
+    <div class="modal-actions">
+      <button id="cancelRotateToken" class="copy-button" type="button">取消</button>
+      <button id="confirmRotateToken" class="commit-button" type="button">确认刷新</button>
+    </div>
+  </div>
+</div>
 
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
@@ -2219,10 +2237,18 @@ function initSecurityControls() {
     }
     updateExternalAccess(external.checked);
   });
-  rotate.addEventListener('click', rotateToken);
+  rotate.addEventListener('click', showTokenConfirmModal);
   $('openAccessSettings').addEventListener('click', openAccessSettings);
   $('closeAccessSettings').addEventListener('click', closeAccessSettings);
   $('copyAccessUrl').addEventListener('click', copyAccessUrl);
+  $('cancelRotateToken').addEventListener('click', hideTokenConfirmModal);
+  $('confirmRotateToken').addEventListener('click', rotateToken);
+  $('tokenConfirmModal').addEventListener('click', function(event) {
+    if (event.target === $('tokenConfirmModal')) hideTokenConfirmModal();
+  });
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') hideTokenConfirmModal();
+  });
   loadSecuritySettings();
 }
 
@@ -2409,14 +2435,31 @@ function copyAccessUrl() {
   });
 }
 
+function showTokenConfirmModal() {
+  if (!state.security.allowExternalAccess || state.security.localAccess === false) return;
+  var modal = $('tokenConfirmModal');
+  if (!modal) return;
+  modal.classList.add('visible');
+  $('confirmRotateToken').focus();
+}
+
+function hideTokenConfirmModal() {
+  var modal = $('tokenConfirmModal');
+  if (!modal) return;
+  modal.classList.remove('visible');
+}
+
 function rotateToken() {
   if (!state.security.allowExternalAccess || state.security.localAccess === false) return;
+  hideTokenConfirmModal();
   var button = $('rotateToken');
+  var confirmButton = $('confirmRotateToken');
   var status = $('qrStatus');
   if (button) {
     button.disabled = true;
     button.textContent = 'Updating...';
   }
+  if (confirmButton) confirmButton.disabled = true;
   if (status) status.textContent = '正在刷新访问 token...';
   fetch('/api/security/rotate-token', { method: 'POST' })
     .then(function(res) {
@@ -2440,6 +2483,7 @@ function rotateToken() {
         button.disabled = false;
         button.textContent = 'Refresh Token';
       }
+      if (confirmButton) confirmButton.disabled = false;
     });
 }
 
