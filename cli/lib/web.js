@@ -1887,11 +1887,12 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .sidebar.collapsed + .shell .topbar { left: 0; }
 .topbar-inner { width: min(1480px, 100%); min-height: 64px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; }
 .topbar-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.topbar-tools { display: contents; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
 .repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
 .local-security-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .local-security-controls[hidden] { display: none; }
 .actions button, .commit-button, .ignore-button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 7px; min-height: 34px; padding: 7px 12px; cursor: pointer; font-weight: 650; }
@@ -2170,11 +2171,14 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 }
 @media (max-width: 620px) { 
   .shell { padding-top: 132px; }
-  .topbar-inner { grid-template-columns: 1fr; align-items: stretch; min-height: auto; padding: 14px 0; }
+  .topbar-inner { grid-template-columns: 1fr; align-items: stretch; gap: 10px; min-height: auto; padding: 12px 0; }
   .topbar-brand { width: 100%; }
-  .actions { width: 100%; justify-content: flex-end; }
+  .topbar-tools { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 8px; align-items: center; width: 100%; }
+  .actions { width: 100%; justify-content: flex-end; gap: 6px; }
+  .actions button, .view-tab { min-height: 30px; padding: 5px 9px; }
   .language-menu { right: 0; left: auto; max-width: calc(100vw - 32px); }
-  .view-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; justify-self: stretch; }
+  .view-tabs { grid-column: 1; justify-self: start; }
+  .topbar-tools .actions { grid-column: 2; justify-self: end; }
   .view-tab { justify-content: center; }
   .task-hero { flex-direction: column; }
   .task-actions { width: 100%; justify-content: flex-start; }
@@ -2238,29 +2242,31 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             <a id="repo" class="repo" data-i18n="loading">Loading...</a>
           </div>
         </div>
-        <nav class="view-tabs" aria-label="GMC views">
-          <button id="gitViewTab" class="view-tab active" type="button" data-view-tab="git">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M8.6 7.8 15.4 16.2"></path><path d="M6 9v6"></path></svg>
-            <span data-i18n="gitView">Git 管理</span>
-          </button>
-          <button id="taskViewTab" class="view-tab" type="button" data-view-tab="tasks">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 8h10"></path><path d="M7 12h5"></path><path d="m14 16 1.5 1.5L18 15"></path></svg>
-            <span data-i18n="taskView">Task 管理</span>
-          </button>
-        </nav>
-        <div class="actions">
-          <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置" data-i18n-title="accessSettings">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
-            <span data-i18n="accessSettings">访问设置</span>
-          </button>
-          <div class="language-wrap">
-            <button id="openLanguageMenu" class="language-button" type="button" title="Language" data-i18n-title="language">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 0 20"></path><path d="M12 2a15.3 15.3 0 0 0 0 20"></path></svg>
-              <span id="languageButtonLabel">中文</span>
+        <div class="topbar-tools">
+          <nav class="view-tabs" aria-label="GMC views">
+            <button id="gitViewTab" class="view-tab active" type="button" data-view-tab="git">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M8.6 7.8 15.4 16.2"></path><path d="M6 9v6"></path></svg>
+              <span data-i18n="gitView">Git</span>
             </button>
-            <div id="languageMenu" class="language-menu" role="menu">
-              <button type="button" data-lang-option="zh-CN">中文</button>
-              <button type="button" data-lang-option="en">English</button>
+            <button id="taskViewTab" class="view-tab" type="button" data-view-tab="tasks">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 8h10"></path><path d="M7 12h5"></path><path d="m14 16 1.5 1.5L18 15"></path></svg>
+              <span data-i18n="taskView">Task</span>
+            </button>
+          </nav>
+          <div class="actions">
+            <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置" data-i18n-title="accessSettings" data-i18n-aria-label="accessSettings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
+              <span data-i18n="accessSettings">访问设置</span>
+            </button>
+            <div class="language-wrap">
+              <button id="openLanguageMenu" class="language-button" type="button" title="Language" data-i18n-title="language">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 0 20"></path><path d="M12 2a15.3 15.3 0 0 0 0 20"></path></svg>
+                <span id="languageButtonLabel">中文</span>
+              </button>
+              <div id="languageMenu" class="language-menu" role="menu">
+                <button type="button" data-lang-option="zh-CN">中文</button>
+                <button type="button" data-lang-option="en">English</button>
+              </div>
             </div>
           </div>
         </div>
@@ -2599,8 +2605,8 @@ var I18N = {
     restoringSelected: '正在还原已选择文件...',
     restoredPrefix: '已还原 ',
     restoredSuffix: ' 个文件。',
-    gitView: 'Git 管理',
-    taskView: 'Task 管理',
+    gitView: 'Git',
+    taskView: 'Task',
     taskBoardTitle: '仓库任务看板',
     taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。这里先保持轻量，只管理标题、内容和状态。',
     tasksCount: '个任务',
