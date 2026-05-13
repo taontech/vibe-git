@@ -1629,6 +1629,13 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .actions button:hover, .commit-button:hover:not(:disabled), .ignore-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .settings-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .settings-button svg { width: 16px; height: 16px; pointer-events: none; }
+.language-wrap { position: relative; }
+.language-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.language-button svg { width: 16px; height: 16px; pointer-events: none; }
+.language-menu { position: absolute; right: 0; top: calc(100% + 8px); width: 168px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: var(--shadow); z-index: var(--z-modal); display: none; }
+.language-menu.open { display: grid; gap: 4px; }
+.language-menu button { width: 100%; justify-content: flex-start; text-align: left; border-color: transparent; background: transparent; }
+.language-menu button:hover, .language-menu button.active { border-color: var(--line); background: var(--accent-soft); color: var(--accent); }
 .lan-access { display: none; align-items: center; gap: 8px; min-height: 34px; max-width: min(420px, 46vw); padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); font-size: 13px; font-weight: 650; }
 .lan-access.visible { display: inline-flex; }
 .lan-access svg { width: 17px; height: 17px; color: var(--accent); flex: 0 0 auto; }
@@ -1806,6 +1813,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 @media (max-width: 620px) { 
   .shell { padding-top: 132px; }
   .topbar-inner { align-items: flex-start; flex-direction: column; min-height: auto; padding: 14px 0; } 
+  .actions { width: 100%; justify-content: flex-end; }
+  .language-menu { right: 0; left: auto; max-width: calc(100vw - 32px); }
   .commit { grid-template-columns: 1fr; } 
   .hash { display: none; } 
   .meters { grid-template-columns: 1fr; } 
@@ -1843,8 +1852,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 <div class="app-container">
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
-      <h2>Recent Repos</h2>
-      <button id="sidebarClose" class="sidebar-toggle" title="Close Sidebar">
+      <h2 data-i18n="recentRepos">Recent Repos</h2>
+      <button id="sidebarClose" class="sidebar-toggle" title="Close Sidebar" data-i18n-title="closeSidebar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
       </button>
     </div>
@@ -1855,41 +1864,51 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
     <header class="topbar">
       <div class="topbar-inner">
         <div style="display: flex; align-items: center; gap: 12px;">
-          <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar">
+          <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar" data-i18n-title="toggleSidebar">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
           </button>
           <div>
             <h1 id="appTitle">GMC GitWeb</h1>
-            <a id="repo" class="repo">Loading...</a>
+            <a id="repo" class="repo" data-i18n="loading">Loading...</a>
           </div>
         </div>
         <div class="actions">
-          <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置">
+          <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置" data-i18n-title="accessSettings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
-            <span>访问设置</span>
+            <span data-i18n="accessSettings">访问设置</span>
           </button>
+          <div class="language-wrap">
+            <button id="openLanguageMenu" class="language-button" type="button" title="Language" data-i18n-title="language">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 0 20"></path><path d="M12 2a15.3 15.3 0 0 0 0 20"></path></svg>
+              <span id="languageButtonLabel">中文</span>
+            </button>
+            <div id="languageMenu" class="language-menu" role="menu">
+              <button type="button" data-lang-option="zh-CN">中文</button>
+              <button type="button" data-lang-option="en">English</button>
+            </div>
+          </div>
         </div>
       </div>
     </header>
     <div class="shell-inner">
       <div id="installBanner" class="install-banner">
-        <span class="install-text"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
-        <button id="btnInstall" type="button">Install Hooks and Webloc</button>
+        <span class="install-text" data-i18n="installBanner"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
+        <button id="btnInstall" type="button" data-i18n="installHooks">Install Hooks and Webloc</button>
       </div>
       <div id="dashboardPage">
   <section class="summary-panel">
     <div class="panel branch-summary-panel">
       <div class="branch-summary-text">
-        <h2>Current Branch</h2>
+        <h2 data-i18n="currentBranch">Current Branch</h2>
         <div id="branch" class="branch-name">...</div>
         <div id="upstream" class="meta"></div>
       </div>
       <div id="calendar" class="calendar-grid"></div>
     </div>
     <div class="meters">
-      <div class="meter"><strong id="ahead">0</strong><span>ahead</span> <button id="btnPush" class="action-btn" style="display:none">Push</button></div>
-      <div class="meter"><strong id="behind">0</strong><span>behind</span> <button id="btnPull" class="action-btn">Pull</button></div>
-      <div class="meter"><strong id="dirty">0</strong><span>changed files</span></div>
+      <div class="meter"><strong id="ahead">0</strong><span data-i18n="ahead">ahead</span> <button id="btnPush" class="action-btn" style="display:none" data-i18n="push">Push</button></div>
+      <div class="meter"><strong id="behind">0</strong><span data-i18n="behind">behind</span> <button id="btnPull" class="action-btn" data-i18n="pull">Pull</button></div>
+      <div class="meter"><strong id="dirty">0</strong><span data-i18n="changedFiles">changed files</span></div>
     </div>
   </section>
 
@@ -1897,14 +1916,14 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
     <aside class="side">
       <div class="panel">
         <div class="panel-head">
-          <h2>Working Tree</h2>
+          <h2 data-i18n="workingTree">Working Tree</h2>
           <div id="selectedCount" class="meta">0 selected</div>
         </div>
         <div id="files"></div>
       </div>
       <div class="panel">
         <div class="panel-head">
-          <h2>Branches Tree</h2>
+          <h2 data-i18n="branchesTree">Branches Tree</h2>
         </div>
         <div id="branches"></div>
       </div>
@@ -1912,13 +1931,13 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
         <div class="panel-head">
           <h2>README</h2>
         </div>
-        <a id="readmeLink" class="readme-link" href="#">Open README</a>
+        <a id="readmeLink" class="readme-link" href="#" data-i18n="openReadme">Open README</a>
       </div>
     </aside>
     <div class="panel">
       <div class="panel-head">
-        <h2>Commit Graph</h2>
-        <div class="meta">Recent repository history</div>
+        <h2 data-i18n="commitGraph">Commit Graph</h2>
+        <div class="meta" data-i18n="recentHistory">Recent repository history</div>
       </div>
       <div class="timeline-container">
         <svg id="graph"></svg>
@@ -1930,42 +1949,42 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       <section id="accessSettingsPage" class="settings-page" hidden>
         <div class="settings-hero">
           <div>
-            <h2>访问设置</h2>
-            <p>管理局域网访问、刷新访问 token，并生成当前页面的扫码入口。移动设备扫码后会自动带上访问凭证，不需要手动输入长 token。</p>
+            <h2 data-i18n="accessSettings">访问设置</h2>
+            <p data-i18n="accessSettingsIntro">管理局域网访问、刷新访问 token，并生成当前页面的扫码入口。移动设备扫码后会自动带上访问凭证，不需要手动输入长 token。</p>
           </div>
-          <button id="closeAccessSettings" class="copy-button" type="button">Back</button>
+          <button id="closeAccessSettings" class="copy-button" type="button" data-i18n="back">Back</button>
         </div>
         <div class="settings-grid">
           <div class="settings-card">
             <div class="settings-row">
               <div class="settings-row-main">
-                <strong>允许外部访问</strong>
-                <span>开启后，局域网内已认证设备可以访问当前 GitWeb 服务。这个开关只能在运行 GMC 的主机上修改。</span>
+                <strong data-i18n="allowExternalAccess">允许外部访问</strong>
+                <span data-i18n="allowExternalAccessHelp">开启后，局域网内已认证设备可以访问当前 GitWeb 服务。这个开关只能在运行 GMC 的主机上修改。</span>
               </div>
-              <label class="toggle-control" title="Allow authenticated devices on the local network to access GitWeb">
+              <label class="toggle-control" title="Allow authenticated devices on the local network to access GitWeb" data-i18n-title="allowExternalAccessHelp">
                 <input id="allowExternalAccess" type="checkbox">
                 <span class="toggle-track" aria-hidden="true"></span>
-                <span>External Access</span>
+                <span data-i18n="externalAccess">External Access</span>
               </label>
             </div>
             <div class="settings-row">
               <div class="settings-row-main">
-                <strong>刷新 token</strong>
-                <span>刷新后旧 token 会立即失效，已经接入的设备需要重新扫码或使用新链接访问。</span>
+                <strong data-i18n="refreshTokenTitle">刷新 token</strong>
+                <span data-i18n="refreshTokenHelp">刷新后旧 token 会立即失效，已经接入的设备需要重新扫码或使用新链接访问。</span>
               </div>
-              <button id="rotateToken" class="copy-button" type="button">Refresh Token</button>
+              <button id="rotateToken" class="copy-button" type="button" data-i18n="refreshToken">Refresh Token</button>
             </div>
-            <div id="settingsHostOnlyWarning" class="settings-warning">当前页面不是从主机本机打开的，访问设置只能查看，不能修改。</div>
+            <div id="settingsHostOnlyWarning" class="settings-warning" data-i18n="hostOnlyWarning">当前页面不是从主机本机打开的，访问设置只能查看，不能修改。</div>
             <div id="settingAccessAddress" class="access-address"></div>
           </div>
           <div class="settings-card">
-            <h3>扫码访问当前页面</h3>
-            <p>二维码内容是当前页面 URL，并自动附带访问 token。建议只给可信设备扫码。</p>
+            <h3 data-i18n="scanCurrentPage">扫码访问当前页面</h3>
+            <p data-i18n="qrHelp">二维码内容是当前页面 URL，并自动附带访问 token。建议只给可信设备扫码。</p>
             <div class="qr-shell">
-              <div id="accessQrCode" class="qr-box"><div class="qr-placeholder">开启外部访问后生成二维码</div></div>
+              <div id="accessQrCode" class="qr-box"><div class="qr-placeholder" data-i18n="qrEnableExternal">开启外部访问后生成二维码</div></div>
               <textarea id="accessUrlValue" class="access-url" readonly></textarea>
               <div class="settings-actions">
-                <button id="copyAccessUrl" class="copy-button" type="button">Copy URL</button>
+                <button id="copyAccessUrl" class="copy-button" type="button" data-i18n="copyUrl">Copy URL</button>
               </div>
               <div id="qrStatus" class="meta"></div>
             </div>
@@ -1979,12 +1998,12 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 <aside id="drawer" class="drawer">
   <div class="drawer-head">
     <div>
-      <h2 id="drawerTitle" style="margin: 0;">Commit</h2>
+      <h2 id="drawerTitle" style="margin: 0;" data-i18n="commit">Commit</h2>
       <div id="drawerMeta" class="meta"></div>
     </div>
     <div class="drawer-actions">
-      <button id="copyDetail" class="copy-button" type="button">Copy</button>
-      <button id="closeDetail" class="copy-button close-button" type="button">Close</button>
+      <button id="copyDetail" class="copy-button" type="button" data-i18n="copy">Copy</button>
+      <button id="closeDetail" class="copy-button close-button" type="button" data-i18n="close">Close</button>
     </div>
   </div>
   <pre id="message"></pre>
@@ -1993,11 +2012,11 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 
 <div id="tokenConfirmModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tokenConfirmTitle">
   <div class="modal">
-    <h2 id="tokenConfirmTitle">刷新访问 token</h2>
-    <p>刷新后旧 token 会立即失效，所有外部设备都必须重新扫描新二维码，或复制新链接打开。确认要继续吗？</p>
+    <h2 id="tokenConfirmTitle" data-i18n="refreshTokenConfirmTitle">刷新访问 token</h2>
+    <p data-i18n="refreshTokenConfirmBody">刷新后旧 token 会立即失效，所有外部设备都必须重新扫描新二维码，或复制新链接打开。确认要继续吗？</p>
     <div class="modal-actions">
-      <button id="cancelRotateToken" class="copy-button" type="button">取消</button>
-      <button id="confirmRotateToken" class="commit-button" type="button">确认刷新</button>
+      <button id="cancelRotateToken" class="copy-button" type="button" data-i18n="cancel">取消</button>
+      <button id="confirmRotateToken" class="commit-button" type="button" data-i18n="confirmRefresh">确认刷新</button>
     </div>
   </div>
 </div>
@@ -2022,19 +2041,319 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var I18N = {
+  'zh-CN': {
+    language: '语言',
+    languageButton: '中文',
+    recentRepos: '最近仓库',
+    closeSidebar: '关闭侧边栏',
+    toggleSidebar: '切换侧边栏',
+    loading: '加载中...',
+    accessSettings: '访问设置',
+    installBanner: '⚠️ GMC Hooks 尚未安装。安装 Git hooks 后可以自动生成 commit message，git commit 可在任意位置使用。',
+    installHooks: '安装 Hooks 和 Webloc',
+    currentBranch: '当前分支',
+    ahead: 'ahead',
+    behind: 'behind',
+    changedFiles: 'changed files',
+    push: 'Push',
+    pull: 'Pull',
+    workingTree: '工作区',
+    branchesTree: '分支树',
+    openReadme: '打开 README',
+    commitGraph: '提交图',
+    recentHistory: '最近仓库历史',
+    accessSettingsIntro: '管理局域网访问、刷新访问 token，并生成当前页面的扫码入口。移动设备扫码后会自动带上访问凭证，不需要手动输入长 token。',
+    back: '返回',
+    allowExternalAccess: '允许外部访问',
+    allowExternalAccessHelp: '开启后，局域网内已认证设备可以访问当前 GitWeb 服务。这个开关只能在运行 GMC 的主机上修改。',
+    externalAccess: '外部访问',
+    refreshTokenTitle: '刷新 token',
+    refreshTokenHelp: '刷新后旧 token 会立即失效，已经接入的设备需要重新扫码或使用新链接访问。',
+    refreshToken: '刷新 Token',
+    hostOnlyWarning: '当前页面不是从主机本机打开的，访问设置只能查看，不能修改。',
+    scanCurrentPage: '扫码访问当前页面',
+    qrHelp: '二维码内容是当前页面 URL，并自动附带访问 token。建议只给可信设备扫码。',
+    qrEnableExternal: '开启外部访问后生成二维码',
+    copyUrl: '复制链接',
+    commit: '提交',
+    copy: '复制',
+    close: '关闭',
+    refreshTokenConfirmTitle: '刷新访问 token',
+    refreshTokenConfirmBody: '刷新后旧 token 会立即失效，所有外部设备都必须重新扫描新二维码，或复制新链接打开。确认要继续吗？',
+    cancel: '取消',
+    confirmRefresh: '确认刷新',
+    selectRepositoryFirst: '请先选择仓库',
+    noRecentRepos: '还没有最近仓库。',
+    recentlyVisited: '最近访问',
+    justNow: '刚刚',
+    agoMinute: '分钟前',
+    agoHour: '小时前',
+    agoDay: '天前',
+    noRepositorySelected: '未选择仓库',
+    noUpstream: '没有 upstream',
+    lanAddress: '局域网地址：',
+    qrNeedExternal: '移动设备访问前，需要先允许外部访问。',
+    qrGenerating: '正在生成二维码...',
+    qrReady: '二维码包含当前页面 URL 和一次访问所需 token。',
+    qrFailed: '二维码生成失败',
+    copyLinkFallback: '请复制下方链接发送到移动设备。',
+    linkCopied: '访问链接已复制。',
+    refreshInProgress: '正在刷新访问 token...',
+    refreshDone: '旧 token 已失效。使用新 token 需设备扫描新二维码，或复制下方新链接打开。',
+    refreshFailed: 'token 刷新失败：',
+    refreshButtonWorking: '刷新中...',
+    disableExternalConfirm: '确定要关闭外部访问吗？\\n\\n关闭后，只能从运行 GitWeb 服务的主机重新开启。',
+    updateExternalFailed: '更新外部访问设置失败：',
+    openFinderFailed: '在 Finder 中打开失败：',
+    finderLocalOnly: '仅从 127.0.0.1 访问时可以在 Finder 中打开。',
+    cleanWorkingTree: '工作区干净。',
+    all: '全部',
+    restore: '还原',
+    ignore: '忽略',
+    selected: '已选择',
+    committing: '提交中...',
+    ignoring: '忽略中...',
+    restoring: '还原中...',
+    commitSelected: '提交',
+    installing: '安装中...',
+    installed: '已安装',
+    installFailed: '安装失败',
+    installFailedPrefix: '安装失败：',
+    working: '处理中...',
+    successPrefix: '成功：',
+    errorPrefix: '错误：',
+    noBranches: '没有分支。',
+    noCommits: '还没有提交。',
+    noSubject: '无标题',
+    aiGenerating: 'AI 正在生成 commit message',
+    commitDetail: '提交详情',
+    copied: '已复制',
+    selectTextAndCopy: '请选中文本后复制',
+    repoRunning: 'GMC GitWeb 正在运行。请在 git 仓库中执行 "gmc web" 查看状态。',
+    openInFinderPrefix: '在 Finder 中打开：',
+    removeFromRecent: '从最近仓库中移除',
+    removeFromRecentAriaSuffix: '从最近仓库中移除',
+    loadingStatusErrorPrefix: '加载状态失败：',
+    pushing: 'Push 中...',
+    pulling: 'Pull 中...',
+    commitsOn: '次提交于',
+    installHooksConfirm: 'GMC Git Hooks 尚未安装！\\n\\n安装 hooks 后，每次 git commit -m gmc 都会自动触发 AI 辅助生成 commit message。\\n\\n点击“确定”安装 hooks 后提交\\n点击“取消”则本次直接使用 AI 生成 commit message（较慢）',
+    installingHooks: '正在安装 hooks...',
+    hookInstallFailedPrefix: 'Hook 安装失败：',
+    commitWithHooksStatus: '正在提交已选择文件...',
+    commitWithAiStatus: '正在生成 AI commit message 并提交...',
+    committedSelected: '已提交选择的文件。',
+    ignoringSelected: '正在忽略已选择文件...',
+    ignoreRulesAddedSuffix: ' 条 ignore 规则已添加到 .gitignore。',
+    restoreConfirmPrefix: '确定要丢弃 ',
+    restoreConfirmSuffix: ' 个文件中的更改吗？',
+    restoringSelected: '正在还原已选择文件...',
+    restoredPrefix: '已还原 ',
+    restoredSuffix: ' 个文件。'
+  },
+  en: {
+    language: 'Language',
+    languageButton: 'EN',
+    recentRepos: 'Recent Repos',
+    closeSidebar: 'Close Sidebar',
+    toggleSidebar: 'Toggle Sidebar',
+    loading: 'Loading...',
+    accessSettings: 'Access Settings',
+    installBanner: '⚠️ GMC Hooks is not installed. Installing Git hooks can automatically generate commit messages, and git commit is available anywhere.',
+    installHooks: 'Install Hooks and Webloc',
+    currentBranch: 'Current Branch',
+    ahead: 'ahead',
+    behind: 'behind',
+    changedFiles: 'changed files',
+    push: 'Push',
+    pull: 'Pull',
+    workingTree: 'Working Tree',
+    branchesTree: 'Branches Tree',
+    openReadme: 'Open README',
+    commitGraph: 'Commit Graph',
+    recentHistory: 'Recent repository history',
+    accessSettingsIntro: 'Manage LAN access, refresh the access token, and generate a QR entry for the current page. Mobile devices can scan it for first access without typing a long token.',
+    back: 'Back',
+    allowExternalAccess: 'Allow External Access',
+    allowExternalAccessHelp: 'When enabled, authenticated devices on your local network can access this GitWeb service. This can only be changed from the host machine running GMC.',
+    externalAccess: 'External Access',
+    refreshTokenTitle: 'Refresh token',
+    refreshTokenHelp: 'Refreshing immediately invalidates the old token. Connected devices must scan again or open the new link.',
+    refreshToken: 'Refresh Token',
+    hostOnlyWarning: 'This page was not opened from the host machine, so access settings are read-only.',
+    scanCurrentPage: 'Scan to open this page',
+    qrHelp: 'The QR code contains the current page URL and access token. Share it only with trusted devices.',
+    qrEnableExternal: 'Enable external access to generate a QR code',
+    copyUrl: 'Copy URL',
+    commit: 'Commit',
+    copy: 'Copy',
+    close: 'Close',
+    refreshTokenConfirmTitle: 'Refresh access token',
+    refreshTokenConfirmBody: 'Refreshing immediately invalidates the old token. All external devices must scan the new QR code or open the copied new link. Continue?',
+    cancel: 'Cancel',
+    confirmRefresh: 'Refresh',
+    selectRepositoryFirst: 'Select a repository first',
+    noRecentRepos: 'No recent repositories yet.',
+    recentlyVisited: 'Recently visited',
+    justNow: 'Just now',
+    agoMinute: 'm ago',
+    agoHour: 'h ago',
+    agoDay: 'd ago',
+    noRepositorySelected: 'No repository selected',
+    noUpstream: 'No upstream',
+    lanAddress: 'LAN address: ',
+    qrNeedExternal: 'Enable external access before opening this page from a mobile device.',
+    qrGenerating: 'Generating QR code...',
+    qrReady: 'The QR code contains the current page URL and one access token.',
+    qrFailed: 'QR code generation failed',
+    copyLinkFallback: 'Copy the link below and send it to the mobile device.',
+    linkCopied: 'Access link copied.',
+    refreshInProgress: 'Refreshing access token...',
+    refreshDone: 'The old token is invalid. Use the new token by scanning the new QR code or opening the copied new link.',
+    refreshFailed: 'Token refresh failed: ',
+    refreshButtonWorking: 'Updating...',
+    disableExternalConfirm: 'Are you sure you want to disable External Access?\\n\\nOnce disabled, this setting can only be re-enabled from the machine where the GitWeb service is running.',
+    updateExternalFailed: 'Failed to update External Access settings: ',
+    openFinderFailed: 'Open in Finder failed: ',
+    finderLocalOnly: 'Finder opening is available only from 127.0.0.1.',
+    cleanWorkingTree: 'Clean working tree.',
+    all: 'All',
+    restore: 'Restore',
+    ignore: 'Ignore',
+    selected: 'selected',
+    committing: 'Committing...',
+    ignoring: 'Ignoring...',
+    restoring: 'Restoring...',
+    commitSelected: 'Commit',
+    installing: 'Installing...',
+    installed: 'Installed',
+    installFailed: 'Install Failed',
+    installFailedPrefix: 'Install failed: ',
+    working: 'Working...',
+    successPrefix: 'Success: ',
+    errorPrefix: 'Error: ',
+    noBranches: 'No branches.',
+    noCommits: 'No commits yet.',
+    noSubject: 'no subject',
+    aiGenerating: 'AI is generating a commit message',
+    commitDetail: 'Commit detail',
+    copied: 'Copied',
+    selectTextAndCopy: 'Select text and copy',
+    repoRunning: 'GMC GitWeb is running. Use "gmc web" in a git repository to view its status.',
+    openInFinderPrefix: 'Open in Finder: ',
+    removeFromRecent: 'Remove from recent',
+    removeFromRecentAriaSuffix: 'from recent repositories',
+    loadingStatusErrorPrefix: 'Error loading status: ',
+    pushing: 'Pushing...',
+    pulling: 'Pulling...',
+    commitsOn: 'commits on',
+    installHooksConfirm: 'GMC Git Hooks is not installed!\\n\\nAfter installing hooks, each git commit -m gmc will automatically trigger AI-assisted commit message generation.\\n\\nClick "OK" to install hooks and commit\\nClick "Cancel" to use AI to generate a commit message directly this time (slower)',
+    installingHooks: 'Installing hooks...',
+    hookInstallFailedPrefix: 'Hook install failed: ',
+    commitWithHooksStatus: 'Committing selected files...',
+    commitWithAiStatus: 'Generating AI commit message and committing...',
+    committedSelected: 'Committed selected files.',
+    ignoringSelected: 'Ignoring selected files...',
+    ignoreRulesAddedSuffix: ' ignore rule(s) added to .gitignore.',
+    restoreConfirmPrefix: 'Are you sure you want to discard changes in ',
+    restoreConfirmSuffix: ' file(s)?',
+    restoringSelected: 'Restoring selected files...',
+    restoredPrefix: 'Restored ',
+    restoredSuffix: ' file(s).'
+  }
+};
+var currentLanguage = normalizeLanguage(localStorage.getItem('gmc_language') || (navigator.language || ''));
 var $ = function(id) { return document.getElementById(id); };
+
+function normalizeLanguage(value) {
+  return String(value || '').toLowerCase().indexOf('zh') === 0 ? 'zh-CN' : 'en';
+}
+
+function t(key) {
+  var table = I18N[currentLanguage] || I18N.en;
+  return table[key] || I18N.en[key] || key;
+}
+
+function applyLanguage() {
+  document.documentElement.lang = currentLanguage === 'zh-CN' ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(function(node) {
+    node.textContent = t(node.getAttribute('data-i18n'));
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(function(node) {
+    node.title = t(node.getAttribute('data-i18n-title'));
+  });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(function(node) {
+    node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria-label')));
+  });
+  var label = $('languageButtonLabel');
+  if (label) label.textContent = t('languageButton');
+  document.querySelectorAll('[data-lang-option]').forEach(function(button) {
+    button.classList.toggle('active', button.getAttribute('data-lang-option') === currentLanguage);
+  });
+  updateReadmeLink();
+  renderSidebar();
+  renderSecurityControls();
+  if (targetRepo) {
+    if ($('upstream').dataset.empty === 'true') $('upstream').textContent = t('noUpstream');
+    renderFiles(state.files || []);
+    renderBranches();
+    renderCommits(state.commits || []);
+    window.setTimeout(function() { renderGraph(state.commits || []); }, 0);
+  }
+}
+
+function setLanguage(language) {
+  currentLanguage = normalizeLanguage(language);
+  localStorage.setItem('gmc_language', currentLanguage);
+  closeLanguageMenu();
+  applyLanguage();
+}
+
+function toggleLanguageMenu() {
+  var menu = $('languageMenu');
+  if (menu) menu.classList.toggle('open');
+}
+
+function closeLanguageMenu() {
+  var menu = $('languageMenu');
+  if (menu) menu.classList.remove('open');
+}
+
+function bindLanguageControls() {
+  var button = $('openLanguageMenu');
+  if (button) {
+    button.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLanguageMenu();
+    });
+  }
+  document.querySelectorAll('[data-lang-option]').forEach(function(option) {
+    option.addEventListener('click', function(event) {
+      event.preventDefault();
+      setLanguage(option.getAttribute('data-lang-option'));
+    });
+  });
+  document.addEventListener('click', function(event) {
+    if (!event.target.closest || !event.target.closest('.language-wrap')) closeLanguageMenu();
+  });
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') closeLanguageMenu();
+  });
+}
 
 function updateReadmeLink() {
   var link = $('readmeLink');
   if (!link) return;
   if (!targetRepo) {
     link.removeAttribute('href');
-    link.textContent = 'Select a repository first';
+    link.textContent = t('selectRepositoryFirst');
     return;
   }
   link.href = '/readme?repo=' + encodeURIComponent(targetRepo);
-  link.textContent = 'Open README';
+  link.textContent = t('openReadme');
 }
 
 function updateRepoLink(text, repoPath) {
@@ -2043,11 +2362,11 @@ function updateRepoLink(text, repoPath) {
   link.textContent = text;
   if (repoPath && canOpenRepositoryLocally()) {
     link.href = '#';
-    link.title = 'Open in Finder: ' + repoPath;
+    link.title = t('openInFinderPrefix') + repoPath;
   } else {
     link.removeAttribute('href');
     if (repoPath) {
-      link.title = 'Finder opening is available only from 127.0.0.1.';
+      link.title = t('finderLocalOnly');
     } else {
       link.removeAttribute('title');
     }
@@ -2066,7 +2385,7 @@ function openCurrentRepository(event) {
       });
     })
     .catch(function(error) {
-      alert('Open in Finder failed: ' + error.message);
+      alert(t('openFinderFailed') + error.message);
     });
 }
 
@@ -2101,7 +2420,7 @@ function renderSidebar() {
   var history = state.repoHistory || [];
 
   if (!history.length) {
-    list.innerHTML = '<div class="repo-empty">No recent repositories yet.</div>';
+    list.innerHTML = '<div class="repo-empty">' + escapeHtml(t('noRecentRepos')) + '</div>';
     return;
   }
 
@@ -2115,7 +2434,7 @@ function renderSidebar() {
         '<div class="repo-item-path" title="' + escapeHtml(item.path) + '">' + escapeHtml(item.path) + '</div>' +
         '<div class="repo-item-time">' + escapeHtml(formatRepoVisit(item.lastVisited)) + '</div>' +
       '</div>' +
-      '<button class="repo-remove" type="button" title="Remove from recent" aria-label="Remove ' + escapeHtml(name) + ' from recent repositories" data-repo="' + escapeHtml(item.path) + '">' +
+      '<button class="repo-remove" type="button" title="' + escapeHtml(t('removeFromRecent')) + '" aria-label="' + escapeHtml(t('removeFromRecent') + ' ' + name + ' ' + t('removeFromRecentAriaSuffix')) + '" data-repo="' + escapeHtml(item.path) + '">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
       '</button>' +
     '</div>';
@@ -2230,7 +2549,7 @@ function initSecurityControls() {
 
   external.addEventListener('change', function() {
     if (!external.checked) {
-      if (!confirm('Are you sure you want to disable External Access?\\n\\nOnce disabled, this setting can only be re-enabled from the machine where the GitWeb service is running.')) {
+      if (!confirm(t('disableExternalConfirm'))) {
         external.checked = true;
         return;
       }
@@ -2307,7 +2626,7 @@ function renderSecurityControls() {
   if (hostWarning) hostWarning.classList.toggle('visible', !isLocal);
   if (address) {
     var displayAddress = state.security.lanAddress || state.security.accessAddress || window.location.hostname || 'LAN';
-    address.textContent = 'LAN address: ' + displayAddress;
+    address.textContent = t('lanAddress') + displayAddress;
     address.title = displayAddress;
   }
 
@@ -2355,7 +2674,7 @@ function updateExternalAccess(enabled) {
     .catch(function(error) {
       state.security.allowExternalAccess = !enabled;
       renderSecurityControls();
-      alert('Failed to update External Access settings: ' + error.message);
+      alert(t('updateExternalFailed') + error.message);
     })
     .finally(function() {
       if (external && state.security.localAccess !== false) external.disabled = false;
@@ -2386,18 +2705,18 @@ function renderAccessQr() {
   if (state.security.allowExternalAccess !== true) {
     state.qrUrl = '';
     field.value = '';
-    box.innerHTML = '<div class="qr-placeholder">开启外部访问后生成二维码</div>';
-    if (status) status.textContent = '移动设备访问前，需要先允许外部访问。';
+    box.innerHTML = '<div class="qr-placeholder">' + escapeHtml(t('qrEnableExternal')) + '</div>';
+    if (status) status.textContent = t('qrNeedExternal');
     return;
   }
 
   var accessUrl = currentAccessUrl();
   field.value = accessUrl;
+  if (status) status.textContent = t('qrReady');
   if (state.qrUrl === accessUrl || state.qrLoading) return;
 
   state.qrLoading = true;
-  box.innerHTML = '<div class="qr-placeholder">正在生成二维码...</div>';
-  if (status) status.textContent = '二维码包含当前页面 URL 和一次访问所需 token。';
+  box.innerHTML = '<div class="qr-placeholder">' + escapeHtml(t('qrGenerating')) + '</div>';
   fetch('/api/security/qr-code', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2411,12 +2730,12 @@ function renderAccessQr() {
     })
     .then(function(data) {
       state.qrUrl = accessUrl;
-      box.innerHTML = data.svg || '<div class="qr-placeholder">二维码生成失败</div>';
+      box.innerHTML = data.svg || '<div class="qr-placeholder">' + escapeHtml(t('qrFailed')) + '</div>';
     })
     .catch(function(error) {
       state.qrUrl = '';
-      box.innerHTML = '<div class="qr-placeholder">二维码生成失败<br>' + escapeHtml(error.message) + '</div>';
-      if (status) status.textContent = '请复制下方链接发送到移动设备。';
+      box.innerHTML = '<div class="qr-placeholder">' + escapeHtml(t('qrFailed')) + '<br>' + escapeHtml(error.message) + '</div>';
+      if (status) status.textContent = t('copyLinkFallback');
     })
     .finally(function() {
       state.qrLoading = false;
@@ -2428,7 +2747,7 @@ function copyAccessUrl() {
   if (!field || !field.value) return;
   copyText(field.value).then(function() {
     var status = $('qrStatus');
-    if (status) status.textContent = '访问链接已复制。';
+    if (status) status.textContent = t('linkCopied');
   }).catch(function() {
     field.focus();
     field.select();
@@ -2457,10 +2776,10 @@ function rotateToken() {
   var status = $('qrStatus');
   if (button) {
     button.disabled = true;
-    button.textContent = 'Updating...';
+    button.textContent = t('refreshButtonWorking');
   }
   if (confirmButton) confirmButton.disabled = true;
-  if (status) status.textContent = '正在刷新访问 token...';
+  if (status) status.textContent = t('refreshInProgress');
   fetch('/api/security/rotate-token', { method: 'POST' })
     .then(function(res) {
       return res.json().then(function(data) {
@@ -2472,16 +2791,16 @@ function rotateToken() {
       GMC_AUTH_TOKEN = data.token || '';
       state.qrUrl = '';
       renderAccessQr();
-      if (status) status.textContent = '旧 token 已失效。使用新 token 需设备扫描新二维码，或复制下方新链接打开。';
+      if (status) status.textContent = t('refreshDone');
     })
     .catch(function(error) {
-      if (status) status.textContent = 'token 刷新失败：' + error.message;
-      else alert('token update failed: ' + error.message);
+      if (status) status.textContent = t('refreshFailed') + error.message;
+      else alert(t('refreshFailed') + error.message);
     })
     .finally(function() {
       if (button) {
         button.disabled = false;
-        button.textContent = 'Refresh Token';
+        button.textContent = t('refreshToken');
       }
       if (confirmButton) confirmButton.disabled = false;
     });
@@ -2531,15 +2850,15 @@ function repoInitial(name) {
 
 function formatRepoVisit(timestamp) {
   var time = Number(timestamp);
-  if (!time) return 'Recently visited';
+  if (!time) return t('recentlyVisited');
   var diff = Date.now() - time;
   var minute = 60 * 1000;
   var hour = 60 * minute;
   var day = 24 * hour;
-  if (diff < minute) return 'Just now';
-  if (diff < hour) return Math.floor(diff / minute) + 'm ago';
-  if (diff < day) return Math.floor(diff / hour) + 'h ago';
-  if (diff < day * 7) return Math.floor(diff / day) + 'd ago';
+  if (diff < minute) return t('justNow');
+  if (diff < hour) return Math.floor(diff / minute) + t('agoMinute');
+  if (diff < day) return Math.floor(diff / hour) + t('agoHour');
+  if (diff < day * 7) return Math.floor(diff / day) + t('agoDay');
   return new Date(time).toLocaleDateString();
 }
 
@@ -2550,12 +2869,13 @@ function setPageTitle(repoPath) {
 }
 
 setPageTitle(targetRepo);
-updateReadmeLink();
+bindLanguageControls();
+applyLanguage();
 initSecurityControls();
 
 if (!targetRepo) {
-  updateRepoLink('GMC GitWeb is running. Use "gmc web" in a git repository to view its status.', null);
-  $('branch').textContent = 'No repository selected';
+  updateRepoLink(t('repoRunning'), null);
+  $('branch').textContent = t('noRepositorySelected');
   initSidebar();
 } else {
   updateRepoLink(targetRepo, targetRepo);
@@ -2637,7 +2957,7 @@ function load(options) {
       }
     })
     .catch(function(error) {
-      updateRepoLink('Error loading status: ' + error.message, null);
+      updateRepoLink(t('loadingStatusErrorPrefix') + error.message, null);
     })
     .finally(function() {
       state.loading = false;
@@ -2716,18 +3036,19 @@ function processTopology(data) {
 
 function render(data) {
   if (data.error) {
-    updateRepoLink('Error: ' + data.error, null);
+    updateRepoLink(t('errorPrefix') + data.error, null);
     return;
   }
   updateRepoLink(data.repository && data.repository.root ? data.repository.root : targetRepo, targetRepo);
   $('branch').textContent = data.branch.current;
-  $('upstream').textContent = data.branch.upstream || 'No upstream';
+  $('upstream').dataset.empty = data.branch.upstream ? 'false' : 'true';
+  $('upstream').textContent = data.branch.upstream || t('noUpstream');
   $('ahead').textContent = data.branch.ahead;
   $('btnPush').style.display = data.branch.ahead > 0 ? 'inline-block' : 'none';
-  $('btnPush').onclick = function(event) { executeAction('/api/push', 'Pushing...', event.currentTarget); };
+  $('btnPush').onclick = function(event) { executeAction('/api/push', t('pushing'), event.currentTarget); };
   
   $('behind').textContent = data.branch.behind;
-  $('btnPull').onclick = function(event) { executeAction('/api/pull', 'Pulling...', event.currentTarget); };
+  $('btnPull').onclick = function(event) { executeAction('/api/pull', t('pulling'), event.currentTarget); };
   
   $('dirty').textContent = data.status.files.length;
   
@@ -2760,17 +3081,17 @@ function renderInstallBanner() {
 
 function installGmc() {
   var btn = $('btnInstall');
-  if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
+  if (btn) { btn.disabled = true; btn.textContent = t('installing'); }
   fetch('/api/install?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
     .then(function(res) { return res.json().then(function(data) { if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
     .then(function(data) {
       state.install = data.install || { hooks: true, webloc: true };
       renderInstallBanner();
-      if (btn) { btn.textContent = 'Installed'; }
+      if (btn) { btn.textContent = t('installed'); }
     })
     .catch(function(err) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Install Failed'; }
-      alert('Install failed: ' + err.message);
+      if (btn) { btn.disabled = false; btn.textContent = t('installFailed'); }
+      alert(t('installFailedPrefix') + err.message);
     });
 }
 
@@ -2832,7 +3153,7 @@ function renderCalendar(contributions) {
       var ds = calendarDateKey(d);
       var count = contributions[ds] || 0;
       var level = count > 10 ? 4 : count > 5 ? 3 : count > 2 ? 2 : count > 0 ? 1 : 0;
-      weeksHtml += '<div class="calendar-cell" data-level="' + level + '" title="' + count + ' commits on ' + ds + '"></div>';
+      weeksHtml += '<div class="calendar-cell" data-level="' + level + '" title="' + count + ' ' + escapeHtml(t('commitsOn')) + ' ' + ds + '"></div>';
     }
     weeksHtml += '</div>';
   }
@@ -2848,7 +3169,7 @@ function setActionButtonWorking(button) {
     text: button.textContent
   };
   button.disabled = true;
-  button.textContent = 'Working...';
+  button.textContent = t('working');
   return previous;
 }
 
@@ -2867,8 +3188,8 @@ function executeAction(url, loadingMsg, button) {
   setCommitStatus(loadingMsg, false);
   fetch(url + '?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
     .then(function(res) { return res.json().then(function(data) { if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
-    .then(function(data) { setCommitStatus('Success: ' + firstLine(data.output), false); })
-    .catch(function(err) { setCommitStatus('Error: ' + err.message, true); })
+    .then(function(data) { setCommitStatus(t('successPrefix') + firstLine(data.output), false); })
+    .catch(function(err) { setCommitStatus(t('errorPrefix') + err.message, true); })
     .finally(function() {
       state.auto = prevAuto;
       return load({ force: true });
@@ -2879,6 +3200,8 @@ function executeAction(url, loadingMsg, button) {
 }
 
 function renderFiles(files) {
+  files = files || [];
+  state.files = files || [];
   var nextSelected = {};
   files.forEach(function(f) {
     if (state.selected[f.path]) {
@@ -2888,18 +3211,18 @@ function renderFiles(files) {
   state.selected = nextSelected;
 
   if (!files.length) {
-    $('files').innerHTML = '<div class="meta">Clean working tree.</div>';
+    $('files').innerHTML = '<div class="meta">' + escapeHtml(t('cleanWorkingTree')) + '</div>';
     updateCommitControls();
     return;
   }
 
   $('files').innerHTML = [
     '<div class="file-toolbar">',
-      '<label><input id="selectAllFiles" type="checkbox"> All</label>',
+      '<label><input id="selectAllFiles" type="checkbox"> ' + escapeHtml(t('all')) + '</label>',
       '<div class="file-actions">',
-        '<button id="restoreSelected" class="ignore-button" style="color:var(--amber);border-color:var(--line)" type="button">Restore</button>',
-        '<button id="ignoreSelected" class="ignore-button" type="button">Ignore</button>',
-        '<button id="commitSelected" class="commit-button" type="button">Commit</button>',
+        '<button id="restoreSelected" class="ignore-button" style="color:var(--amber);border-color:var(--line)" type="button">' + escapeHtml(t('restore')) + '</button>',
+        '<button id="ignoreSelected" class="ignore-button" type="button">' + escapeHtml(t('ignore')) + '</button>',
+        '<button id="commitSelected" class="commit-button" type="button">' + escapeHtml(t('commitSelected')) + '</button>',
       '</div>',
     '</div>',
     '<div class="files-list">',
@@ -2958,22 +3281,22 @@ function bindFileControls(files) {
 function updateCommitControls() {
   var selected = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
   if ($('selectedCount')) {
-    $('selectedCount').textContent = selected.length + ' selected';
+    $('selectedCount').textContent = selected.length + ' ' + t('selected');
   }
   var button = $('commitSelected');
   if (button) {
     button.disabled = state.committing || selected.length === 0;
-    button.textContent = state.committing ? 'Committing...' : 'Commit';
+    button.textContent = state.committing ? t('committing') : t('commitSelected');
   }
   var ignoreButton = $('ignoreSelected');
   if (ignoreButton) {
     ignoreButton.disabled = state.ignoring || state.committing || state.restoring || selected.length === 0;
-    ignoreButton.textContent = state.ignoring ? 'Ignoring...' : 'Ignore';
+    ignoreButton.textContent = state.ignoring ? t('ignoring') : t('ignore');
   }
   var restoreButton = $('restoreSelected');
   if (restoreButton) {
     restoreButton.disabled = state.ignoring || state.committing || state.restoring || selected.length === 0;
-    restoreButton.textContent = state.restoring ? 'Restoring...' : 'Restore';
+    restoreButton.textContent = state.restoring ? t('restoring') : t('restore');
   }
   var all = $('selectAllFiles');
   var boxes = Array.prototype.slice.call(document.querySelectorAll('.file-check'));
@@ -2995,28 +3318,23 @@ function commitSelectedFiles() {
   if (!files.length || state.committing) return;
 
   if (!state.install.hooks) {
-    var choice = confirm(
-      'GMC Git Hooks is not installed!\\n\\n' +
-      'After installing hooks, each git commit -m gmc will automatically trigger AI-assisted commit message generation.\\n\\n' +
-      'Click "ok" to install hooks and commit\\n' +
-      'Click "cancel" to use AI to generate commit message directly this time (slower)'
-    );
+    var choice = confirm(t('installHooksConfirm'));
     if (choice) {
       // Install hooks first, then commit
       var btn = $('btnInstall');
-      if (btn) { btn.disabled = true; btn.textContent = 'Installing...'; }
-      setCommitStatus('Installing hooks...', false);
+      if (btn) { btn.disabled = true; btn.textContent = t('installing'); }
+      setCommitStatus(t('installingHooks'), false);
       fetch('/api/install?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
         .then(function(res) { return res.json().then(function(data) { if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
         .then(function(data) {
           state.install = data.install || { hooks: true, webloc: true };
           renderInstallBanner();
-          if (btn) { btn.textContent = 'Installed'; }
+          if (btn) { btn.textContent = t('installed'); }
           doCommit(files);
         })
         .catch(function(err) {
-          if (btn) { btn.disabled = false; btn.textContent = 'Install Failed'; }
-          setCommitStatus('Hook install failed: ' + err.message, true);
+          if (btn) { btn.disabled = false; btn.textContent = t('installFailed'); }
+          setCommitStatus(t('hookInstallFailedPrefix') + err.message, true);
         });
       return;
     }
@@ -3028,7 +3346,7 @@ function commitSelectedFiles() {
 
 function doCommit(files) {
   state.committing = true;
-  var statusMsg = state.install.hooks ? 'Committing selected files...' : 'Generating AI commit message and committing...';
+  var statusMsg = state.install.hooks ? t('commitWithHooksStatus') : t('commitWithAiStatus');
   setCommitStatus(statusMsg, false);
   updateCommitControls();
 
@@ -3047,7 +3365,7 @@ function doCommit(files) {
     })
     .then(function(data) {
       state.selected = {};
-      setCommitStatus(firstLine(data.output) || 'Committed selected files.', false);
+      setCommitStatus(firstLine(data.output) || t('committedSelected'), false);
       load({ force: true });
     })
     .catch(function(error) {
@@ -3063,7 +3381,7 @@ function ignoreSelectedFiles() {
   var files = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
   if (!files.length || state.ignoring) return;
   state.ignoring = true;
-  setCommitStatus('Ignoring selected files...', false);
+  setCommitStatus(t('ignoringSelected'), false);
   updateCommitControls();
 
   fetch('/api/ignore-selected?repo=' + encodeURIComponent(targetRepo), {
@@ -3081,7 +3399,7 @@ function ignoreSelectedFiles() {
     })
     .then(function(data) {
       state.selected = {};
-      setCommitStatus((data.added || []).length + ' ignore rule(s) added to .gitignore.', false);
+      setCommitStatus((data.added || []).length + t('ignoreRulesAddedSuffix'), false);
       load({ force: true });
     })
     .catch(function(error) {
@@ -3096,9 +3414,9 @@ function ignoreSelectedFiles() {
 function restoreSelectedFilesAction() {
   var files = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
   if (!files.length || state.restoring) return;
-  if (!confirm('Are you sure you want to discard changes in ' + files.length + ' file(s)?')) return;
+  if (!confirm(t('restoreConfirmPrefix') + files.length + t('restoreConfirmSuffix'))) return;
   state.restoring = true;
-  setCommitStatus('Restoring selected files...', false);
+  setCommitStatus(t('restoringSelected'), false);
   updateCommitControls();
 
   fetch('/api/restore-selected?repo=' + encodeURIComponent(targetRepo), {
@@ -3114,7 +3432,7 @@ function restoreSelectedFilesAction() {
     })
     .then(function(data) {
       state.selected = {};
-      setCommitStatus('Restored ' + (data.restored || []).length + ' file(s).', false);
+      setCommitStatus(t('restoredPrefix') + (data.restored || []).length + t('restoredSuffix'), false);
       load({ force: true });
     })
     .catch(function(error) {
@@ -3128,7 +3446,7 @@ function restoreSelectedFilesAction() {
 
 function renderBranches() {
   var box = $('branches');
-  if (!state.sortedBranches.length) { box.innerHTML = '<div class="meta">No branches.</div>'; return; }
+  if (!state.sortedBranches.length) { box.innerHTML = '<div class="meta">' + escapeHtml(t('noBranches')) + '</div>'; return; }
 
   var childrenMap = {};
   var roots = [];
@@ -3174,7 +3492,7 @@ function renderBranches() {
 
 function renderCommits(commits) {
   var box = $('commits');
-  if (!commits.length) { box.innerHTML = '<div class="meta">No commits yet.</div>'; return; }
+  if (!commits.length) { box.innerHTML = '<div class="meta">' + escapeHtml(t('noCommits')) + '</div>'; return; }
   box.innerHTML = commits.map(function(c) {
     var date = c.date ? new Date(c.date).toLocaleString() : '';
     var bName = state.commitBranch[c.hash] || '';
@@ -3182,12 +3500,12 @@ function renderCommits(commits) {
     var aiStatus = '';
     var task = (state.tasks || []).find(function(t) { return t.targetOid === c.hash; });
     if (task && (task.status === 'pending' || task.status === 'running' || task.status === 'waiting')) {
-      aiStatus = '<span class="ai-status" title="AI is generating a commit message" aria-label="AI is generating a commit message">' +
+      aiStatus = '<span class="ai-status" title="' + escapeHtml(t('aiGenerating')) + '" aria-label="' + escapeHtml(t('aiGenerating')) + '">' +
         '<svg class="ai-status-loader" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M21 12a9 9 0 0 0-9-9"></path></svg>' +
         '<svg class="ai-status-sparkles" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l1.8 5.1 5.1 1.8-5.1 1.8-1.8 5.1-1.8-5.1-5.1-1.8 5.1-1.8L12 2.5z"></path><path d="M5.4 14.2l.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5z"></path></svg>' +
       '</span>';
     }
-    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div><div class="subject">' + escapeHtml(c.subject || '(no subject)') + aiStatus + '</div><div class="meta"><span class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</span> &bull; ' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
+    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div><div class="subject">' + escapeHtml(c.subject || '(' + t('noSubject') + ')') + aiStatus + '</div><div class="meta"><span class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</span> &bull; ' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
   }).join('');
 }
 
@@ -3374,7 +3692,7 @@ window.showCommit = function(oid, trigger, pinned) {
     .then(function(detail) {
       if (token !== state.detailToken) return;
       $('drawerTitle').textContent = oid.slice(0, 12);
-      $('drawerMeta').textContent = 'Commit detail';
+      $('drawerMeta').textContent = t('commitDetail');
       $('message').textContent = detail.message || '';
       $('stat').textContent = detail.stat || '';
       positionCommitDrawer(trigger);
@@ -3434,13 +3752,13 @@ function copyCommitDetail() {
   if (!text) return;
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(function() {
-      $('drawerMeta').textContent = 'Copied';
+      $('drawerMeta').textContent = t('copied');
     }).catch(function() {
-      $('drawerMeta').textContent = 'Select text and copy';
+      $('drawerMeta').textContent = t('selectTextAndCopy');
     });
     return;
   }
-  $('drawerMeta').textContent = 'Select text and copy';
+  $('drawerMeta').textContent = t('selectTextAndCopy');
 }
 
 function firstLine(value) {
@@ -3534,12 +3852,36 @@ var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var urlParams = new URLSearchParams(window.location.search);
 var targetRepo = urlParams.get('repo') || '';
 var bodyEl = document.getElementById('readmeBody');
-updateRepoLink(targetRepo || 'No repository selected', targetRepo);
+var README_I18N = {
+  'zh-CN': {
+    back: '返回 GitWeb',
+    loading: '正在加载 README...',
+    noRepositorySelected: '未选择仓库',
+    failedPrefix: 'README 加载失败：',
+    openInFinderPrefix: '在 Finder 中打开：',
+    finderLocalOnly: '仅从 127.0.0.1 访问时可以在 Finder 中打开。',
+    openFinderFailed: '在 Finder 中打开失败：'
+  },
+  en: {
+    back: 'Back to GitWeb',
+    loading: 'Loading README...',
+    noRepositorySelected: 'No repository selected',
+    failedPrefix: 'Failed to load README: ',
+    openInFinderPrefix: 'Open in Finder: ',
+    finderLocalOnly: 'Finder opening is available only from 127.0.0.1.',
+    openFinderFailed: 'Open in Finder failed: '
+  }
+};
+var currentLanguage = String(localStorage.getItem('gmc_language') || navigator.language || '').toLowerCase().indexOf('zh') === 0 ? 'zh-CN' : 'en';
+document.documentElement.lang = currentLanguage;
+document.getElementById('backLink').textContent = rt('back');
+bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('loading')) + '</div>';
+updateRepoLink(targetRepo || rt('noRepositorySelected'), targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
 document.getElementById('repo').addEventListener('click', openCurrentRepository);
 
 if (!targetRepo) {
-  bodyEl.innerHTML = '<div class="meta">No repository selected.</div>';
+  bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('noRepositorySelected')) + '</div>';
 } else {
   fetch('/api/readme?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
     .then(function(res) {
@@ -3548,8 +3890,13 @@ if (!targetRepo) {
     })
     .then(renderReadme)
     .catch(function(err) {
-      bodyEl.innerHTML = '<div class="meta">Failed to load README: ' + escapeHtml(err.message) + '</div>';
+      bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('failedPrefix') + err.message) + '</div>';
     });
+}
+
+function rt(key) {
+  var table = README_I18N[currentLanguage] || README_I18N.en;
+  return table[key] || README_I18N.en[key] || key;
 }
 
 function renderReadme(data) {
@@ -3585,11 +3932,11 @@ function updateRepoLink(text, repoPath) {
   link.textContent = text;
   if (repoPath && canOpenRepositoryLocally()) {
     link.href = '#';
-    link.title = 'Open in Finder: ' + repoPath;
+    link.title = rt('openInFinderPrefix') + repoPath;
   } else {
     link.removeAttribute('href');
     if (repoPath) {
-      link.title = 'Finder opening is available only from 127.0.0.1.';
+      link.title = rt('finderLocalOnly');
     } else {
       link.removeAttribute('title');
     }
@@ -3608,7 +3955,7 @@ function openCurrentRepository(event) {
       });
     })
     .catch(function(error) {
-      alert('Open in Finder failed: ' + error.message);
+      alert(rt('openFinderFailed') + error.message);
     });
 }
 
