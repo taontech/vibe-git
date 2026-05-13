@@ -220,6 +220,10 @@ function handleRequest(req, res) {
         handleUpdateTask(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/tasks/delete') {
+        handleDeleteTask(req, res, parsed.query.repo);
+        return;
+      }
       send(res, 405, 'text/plain; charset=utf-8', 'Method not allowed');
       return;
     }
@@ -390,6 +394,15 @@ function handleUpdateTask(req, res, targetRepo) {
   if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
   readJsonBody(req).then(function (body) {
     sendJson(res, updateRepositoryTask(targetRepo, body));
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleDeleteTask(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    sendJson(res, deleteRepositoryTask(targetRepo, body));
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -1021,6 +1034,24 @@ function updateRepositoryTask(root, input) {
   writeRepositoryTask(repoRoot, task);
   return {
     task: task,
+    tasks: readRepositoryTasks(repoRoot).tasks
+  };
+}
+
+function deleteRepositoryTask(root, input) {
+  var repoRoot = git.repoRoot(root);
+  input = input || {};
+  var id = normalizeTaskId(input.id);
+  if (!id) throwHttpError('Task id is required');
+  var dir = repositoryTasksDir(repoRoot);
+  var filePath = path.join(dir, id + '.md');
+  if (!isPathInside(dir, filePath) || !fs.existsSync(filePath)) {
+    throwHttpError('Task not found: ' + id);
+  }
+  fs.unlinkSync(filePath);
+  return {
+    status: 'ok',
+    deleted: id,
     tasks: readRepositoryTasks(repoRoot).tasks
   };
 }
@@ -1854,7 +1885,8 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .shell-inner { width: min(1480px, 100%); margin: 0 auto; }
 .topbar { position: fixed; left: var(--sidebar-w); right: 0; top: 0; z-index: var(--z-navbar); padding: 0 32px; background: rgba(255,255,255,.92); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-bottom: 1px solid rgba(219,226,234,.82); box-shadow: 0 1px 2px rgba(15, 23, 42, .04); transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
 .sidebar.collapsed + .shell .topbar { left: 0; }
-.topbar-inner { width: min(1480px, 100%); min-height: 64px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.topbar-inner { width: min(1480px, 100%); min-height: 64px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; }
+.topbar-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
 .repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); text-decoration: none; }
@@ -1866,7 +1898,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .actions button:hover, .commit-button:hover:not(:disabled), .ignore-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .settings-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .settings-button svg { width: 16px; height: 16px; pointer-events: none; }
-.view-tabs { display: inline-flex; align-items: center; gap: 4px; margin: -2px 0 14px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.82); box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.view-tabs { display: inline-flex; align-items: center; justify-self: center; gap: 4px; margin: 0; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.82); box-shadow: 0 1px 2px rgba(15,23,42,.04); }
 .view-tab { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 7px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 750; transition: background .16s, color .16s, border-color .16s, box-shadow .16s, transform .16s; }
 .view-tab svg { width: 16px; height: 16px; }
 .view-tab:hover { color: var(--accent); background: var(--accent-soft); }
@@ -1964,6 +1996,10 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .task-card { position: relative; display: grid; gap: 10px; padding: 13px; border: 1px solid rgba(226,232,240,.92); border-radius: 8px; background: #fff; box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; transition: transform .16s, box-shadow .16s, border-color .16s; }
 .task-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--task-color, var(--accent)) 42%, #cbd5e1); box-shadow: 0 16px 36px rgba(15,23,42,.11); }
 .task-card.dragging { opacity: .52; transform: rotate(1deg) scale(.98); }
+.task-remove { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 999px; color: #64748b; background: rgba(255,255,255,.92); opacity: 0; transform: scale(.92); cursor: pointer; transition: opacity .14s, transform .14s, color .14s, background .14s, border-color .14s; }
+.task-card:hover .task-remove, .task-card:focus-within .task-remove, .task-remove:focus-visible { opacity: 1; transform: scale(1); }
+.task-remove:hover { color: var(--rose); background: #fff1f2; border-color: #fecdd3; }
+.task-remove svg { width: 14px; height: 14px; pointer-events: none; }
 .task-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .task-id { color: var(--task-color, var(--accent)); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 850; }
 .task-status-chip { padding: 3px 7px; border-radius: 999px; background: color-mix(in srgb, var(--task-color, var(--accent)) 12%, #ffffff); color: var(--task-color, var(--accent)); font-size: 11px; font-weight: 800; }
@@ -2106,10 +2142,11 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 }
 @media (max-width: 620px) { 
   .shell { padding-top: 132px; }
-  .topbar-inner { align-items: flex-start; flex-direction: column; min-height: auto; padding: 14px 0; } 
+  .topbar-inner { grid-template-columns: 1fr; align-items: stretch; min-height: auto; padding: 14px 0; }
+  .topbar-brand { width: 100%; }
   .actions { width: 100%; justify-content: flex-end; }
   .language-menu { right: 0; left: auto; max-width: calc(100vw - 32px); }
-  .view-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .view-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; justify-self: stretch; }
   .view-tab { justify-content: center; }
   .task-hero { flex-direction: column; }
   .task-actions { width: 100%; justify-content: flex-start; }
@@ -2163,7 +2200,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   <main class="shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="topbar-brand">
           <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar" data-i18n-title="toggleSidebar">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
           </button>
@@ -2172,6 +2209,16 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             <a id="repo" class="repo" data-i18n="loading">Loading...</a>
           </div>
         </div>
+        <nav class="view-tabs" aria-label="GMC views">
+          <button id="gitViewTab" class="view-tab active" type="button" data-view-tab="git">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M8.6 7.8 15.4 16.2"></path><path d="M6 9v6"></path></svg>
+            <span data-i18n="gitView">Git 管理</span>
+          </button>
+          <button id="taskViewTab" class="view-tab" type="button" data-view-tab="tasks">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 8h10"></path><path d="M7 12h5"></path><path d="m14 16 1.5 1.5L18 15"></path></svg>
+            <span data-i18n="taskView">Task 管理</span>
+          </button>
+        </nav>
         <div class="actions">
           <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置" data-i18n-title="accessSettings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
@@ -2191,16 +2238,6 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       </div>
     </header>
     <div class="shell-inner">
-      <nav class="view-tabs" aria-label="GMC views">
-        <button id="gitViewTab" class="view-tab active" type="button" data-view-tab="git">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M8.6 7.8 15.4 16.2"></path><path d="M6 9v6"></path></svg>
-          <span data-i18n="gitView">Git 管理</span>
-        </button>
-        <button id="taskViewTab" class="view-tab" type="button" data-view-tab="tasks">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 8h10"></path><path d="M7 12h5"></path><path d="m14 16 1.5 1.5L18 15"></path></svg>
-          <span data-i18n="taskView">Task 管理</span>
-        </button>
-      </nav>
       <div id="gitPage" class="view-page">
         <div id="installBanner" class="install-banner">
           <span class="install-text" data-i18n="installBanner"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
@@ -2530,7 +2567,11 @@ var I18N = {
     moveTaskLeft: '前移',
     moveTaskRight: '后移',
     taskUpdatedJustNow: '刚刚更新',
-    taskContentEmpty: '没有内容。点击新建任务时可以写下背景或验收标准。'
+    taskContentEmpty: '没有内容。点击新建任务时可以写下背景或验收标准。',
+    deleteTask: '删除任务',
+    deleteTaskConfirmPrefix: '确定要删除任务 ',
+    deleteTaskConfirmSuffix: ' 吗？\\n\\n这会删除仓库中的任务文件。',
+    taskDeleteFailed: '任务删除失败：'
   },
   en: {
     language: 'Language',
@@ -2668,7 +2709,11 @@ var I18N = {
     moveTaskLeft: 'Move left',
     moveTaskRight: 'Move right',
     taskUpdatedJustNow: 'Updated just now',
-    taskContentEmpty: 'No content yet. Add context or acceptance criteria when creating a task.'
+    taskContentEmpty: 'No content yet. Add context or acceptance criteria when creating a task.',
+    deleteTask: 'Delete task',
+    deleteTaskConfirmPrefix: 'Delete task ',
+    deleteTaskConfirmSuffix: '?\\n\\nThis removes the task file from the repository.',
+    taskDeleteFailed: 'Failed to delete task: '
   }
 };
 var currentLanguage = normalizeLanguage(localStorage.getItem('gmc_language') || (navigator.language || ''));
@@ -2937,6 +2982,31 @@ function updateTaskStatus(taskId, status) {
     });
 }
 
+function deleteTask(taskId) {
+  if (!targetRepo || !taskId) return;
+  if (!confirm(t('deleteTaskConfirmPrefix') + taskId + t('deleteTaskConfirmSuffix'))) return;
+  setTaskError('');
+  return fetch('/api/tasks/delete?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: taskId })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      renderTaskBoard();
+    })
+    .catch(function(error) {
+      setTaskError(t('taskDeleteFailed') + error.message);
+      loadRepositoryTasks({ force: true });
+    });
+}
+
 function moveTask(taskId, direction) {
   var task = findRepoTask(taskId);
   if (!task) return;
@@ -2985,6 +3055,9 @@ function taskCardHtml(task, column) {
   var canMoveLeft = statusIndex > 0;
   var canMoveRight = statusIndex < TASK_BOARD_STATUSES.length - 1;
   return '<article class="task-card" draggable="true" data-task-id="' + escapeHtml(task.id) + '" style="--task-color:' + escapeHtml(column.color) + '">' +
+    '<button class="task-remove" type="button" title="' + escapeHtml(t('deleteTask')) + '" aria-label="' + escapeHtml(t('deleteTask') + ' ' + task.id) + '" data-task-delete="' + escapeHtml(task.id) + '">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+    '</button>' +
     '<div class="task-card-top">' +
       '<span class="task-id">' + escapeHtml(task.id) + '</span>' +
       '<span class="task-status-chip">' + escapeHtml(t(column.label)) + '</span>' +
@@ -3021,6 +3094,13 @@ function bindRenderedTaskBoard() {
     card.addEventListener('click', function(event) {
       if (event.target.closest && event.target.closest('button')) return;
       card.classList.toggle('expanded');
+    });
+    card.querySelectorAll('[data-task-delete]').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteTask(button.getAttribute('data-task-delete'));
+      });
     });
     card.querySelectorAll('[data-task-move]').forEach(function(button) {
       button.addEventListener('click', function(event) {
