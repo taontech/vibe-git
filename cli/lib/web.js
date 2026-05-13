@@ -2028,14 +2028,16 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .meter .action-btn:hover { border-color: var(--accent); color: var(--accent); }
 .meter .action-btn:disabled { opacity: .62; cursor: progress; color: var(--muted); background: #f8fafc; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-.timeline-container { --graph-width: 30px; display: grid; grid-template-columns: var(--graph-width) minmax(0, 1fr); column-gap: 6px; align-items: flex-start; position: relative; height: min(66vh, 680px); min-height: 430px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; background: linear-gradient(90deg, #fbfdff 0, #fbfdff calc(var(--graph-width) + 10px), #ffffff calc(var(--graph-width) + 10px)); padding: 10px 10px 10px 4px; }
+.timeline-container { --graph-width: 30px; display: grid; grid-template-columns: var(--graph-width) minmax(0, 1fr); column-gap: 6px; align-items: flex-start; position: relative; height: min(66vh, 680px); min-height: 430px; min-width: 0; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--line-soft); border-radius: 8px; background: linear-gradient(90deg, #fbfdff 0, #fbfdff calc(var(--graph-width) + 10px), #ffffff calc(var(--graph-width) + 10px)); padding: 10px 10px 10px 4px; }
 #graph { width: var(--graph-width); min-width: var(--graph-width); pointer-events: auto; overflow: visible; }
-.timeline { display: grid; gap: 9px; min-width: 0; padding-right: 2px; }
-.commit { display: grid; grid-template-columns: minmax(0, 1fr); padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: pointer; touch-action: manipulation; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; }
+.timeline { display: grid; gap: 9px; min-width: 0; overflow: hidden; padding-right: 2px; }
+.commit { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: pointer; touch-action: manipulation; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; }
+.commit > div { min-width: 0; }
 .commit:hover { background: var(--accent-soft); border-color: #bfdbfe; box-shadow: 0 8px 22px rgba(37, 99, 235, .10); transform: translateY(-1px); }
 .hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
 .subject { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; }
+.commit .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-status { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 16px; margin-left: 7px; vertical-align: -3px; color: var(--accent); position: relative; }
 .ai-status svg { display: block; }
 .ai-status-loader { width: 15px; height: 15px; animation: spin 1.05s linear infinite; opacity: .9; }
@@ -2099,7 +2101,28 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .task-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; color: #64748b; font-size: 12px; }
 .task-detail-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; background: #f1f5f9; font-weight: 750; }
 .task-detail-chip.status { color: #fff; background: var(--task-color, var(--accent)); }
-.task-detail-body { max-height: min(54vh, 460px); overflow: auto; padding: 13px; border: 1px solid var(--line-soft); border-radius: 8px; background: #f8fafc; color: #334155; font-size: 13px; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-detail-body { max-height: min(54vh, 460px); overflow: auto; padding: 13px; border: 1px solid var(--line-soft); border-radius: 8px; background: #f8fafc; color: #334155; font-size: 13px; line-height: 1.62; overflow-wrap: anywhere; }
+.task-detail-body > :first-child { margin-top: 0; }
+.task-detail-body > :last-child { margin-bottom: 0; }
+.task-detail-body h1, .task-detail-body h2, .task-detail-body h3, .task-detail-body h4 { margin: 1em 0 .45em; color: var(--text); line-height: 1.25; }
+.task-detail-body h1 { font-size: 20px; }
+.task-detail-body h2 { font-size: 17px; }
+.task-detail-body h3 { font-size: 15px; }
+.task-detail-body p { margin: .55em 0; }
+.task-detail-body ul, .task-detail-body ol { margin: .55em 0; padding-left: 22px; }
+.task-detail-body li { margin: .25em 0; }
+.task-detail-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef2f7; padding: 2px 5px; border-radius: 4px; }
+.task-detail-body pre { margin: .7em 0; padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: #0f172a; color: #e2e8f0; overflow: auto; }
+.task-detail-body pre code { background: none; padding: 0; color: inherit; }
+.task-detail-body blockquote { margin: .65em 0; padding: 5px 12px; border-left: 3px solid var(--accent); background: #eff6ff; border-radius: 0 6px 6px 0; color: #475569; }
+.task-detail-body table { width: 100%; border-collapse: collapse; margin: .7em 0; }
+.task-detail-body th, .task-detail-body td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+.task-detail-body th { background: #fff; }
+.task-detail-body a { color: var(--accent); text-decoration: none; }
+.task-detail-body a:hover { text-decoration: underline; }
+.task-detail-edit { display: grid; gap: 12px; }
+.task-detail-edit[hidden] { display: none; }
+.task-detail-edit .task-field textarea { min-height: min(42vh, 360px); }
 .copy-button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 7px; height: 30px; padding: 4px 10px; cursor: pointer; font-weight: 650; }
 .copy-button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .close-button:hover { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
@@ -2189,6 +2212,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 #sidebarToggle { margin-left: -12px; margin-right: 8px; }
 #sidebarClose { margin-right: -8px; display: none; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 <div class="app-container">
@@ -2425,7 +2449,20 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       <h2 id="taskDetailTitle"></h2>
     </div>
     <div id="taskDetailBody" class="task-detail-body"></div>
+    <form id="taskDetailEdit" class="task-detail-edit" hidden>
+      <div class="task-field">
+        <label for="taskDetailTitleInput" data-i18n="taskTitle">标题</label>
+        <input id="taskDetailTitleInput" type="text" maxlength="160" autocomplete="off">
+      </div>
+      <div class="task-field">
+        <label for="taskDetailContentInput" data-i18n="taskContent">内容</label>
+        <textarea id="taskDetailContentInput"></textarea>
+      </div>
+    </form>
     <div class="modal-actions">
+      <button id="editTaskDetail" class="copy-button" type="button" data-i18n="editTask">编辑</button>
+      <button id="cancelTaskEdit" class="copy-button" type="button" data-i18n="cancel" hidden>取消</button>
+      <button id="saveTaskDetail" class="commit-button" type="button" data-i18n="saveTask" hidden>保存</button>
       <button id="closeTaskDetail" class="copy-button" type="button" data-i18n="close">关闭</button>
     </div>
   </div>
@@ -2451,7 +2488,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -2594,7 +2631,11 @@ var I18N = {
     deleteTaskConfirmPrefix: '确定要删除任务 ',
     deleteTaskConfirmSuffix: ' 吗？\\n\\n这会删除仓库中的任务文件。',
     taskDeleteFailed: '任务删除失败：',
-    taskDetail: '任务详情'
+    taskDetail: '任务详情',
+    editTask: '编辑',
+    saveTask: '保存',
+    savingTask: '保存中...',
+    taskSaveFailed: '任务保存失败：'
   },
   en: {
     language: 'Language',
@@ -2737,7 +2778,11 @@ var I18N = {
     deleteTaskConfirmPrefix: 'Delete task ',
     deleteTaskConfirmSuffix: '?\\n\\nThis removes the task file from the repository.',
     taskDeleteFailed: 'Failed to delete task: ',
-    taskDetail: 'Task detail'
+    taskDetail: 'Task detail',
+    editTask: 'Edit',
+    saveTask: 'Save',
+    savingTask: 'Saving...',
+    taskSaveFailed: 'Failed to save task: '
   }
 };
 var currentLanguage = normalizeLanguage(localStorage.getItem('gmc_language') || (navigator.language || ''));
@@ -3168,22 +3213,151 @@ function taskSummary(content) {
 function showTaskDetail(taskId) {
   var task = findRepoTask(taskId);
   if (!task) return;
-  var meta = taskStatusMeta(task.status);
   var modal = $('taskDetailModal');
   if (!modal) return;
+  state.activeTaskId = task.id;
+  setTaskDetailEditing(false);
+  renderTaskDetail(task);
+  modal.classList.add('visible');
+  $('closeTaskDetail').focus();
+}
+
+function renderTaskDetail(task) {
+  if (!task) return;
+  var meta = taskStatusMeta(task.status);
   $('taskDetailId').textContent = task.id;
   $('taskDetailStatus').textContent = t(meta.label);
   $('taskDetailStatus').style.setProperty('--task-color', meta.color);
   $('taskDetailUpdated').textContent = formatTaskUpdated(task.updated || task.created);
   $('taskDetailTitle').textContent = task.title || task.id;
-  $('taskDetailBody').textContent = task.content || t('taskContentEmpty');
-  modal.classList.add('visible');
-  $('closeTaskDetail').focus();
+  renderTaskMarkdown($('taskDetailBody'), task.content || t('taskContentEmpty'));
 }
 
 function hideTaskDetail() {
   var modal = $('taskDetailModal');
   if (modal) modal.classList.remove('visible');
+  state.activeTaskId = '';
+  setTaskDetailEditing(false);
+}
+
+function setTaskDetailEditing(editing) {
+  state.taskDetailEditing = editing === true;
+  var task = findRepoTask(state.activeTaskId);
+  var body = $('taskDetailBody');
+  var form = $('taskDetailEdit');
+  var editButton = $('editTaskDetail');
+  var cancelButton = $('cancelTaskEdit');
+  var saveButton = $('saveTaskDetail');
+  if (body) body.hidden = state.taskDetailEditing;
+  if (form) form.hidden = !state.taskDetailEditing;
+  if (editButton) editButton.hidden = state.taskDetailEditing;
+  if (cancelButton) cancelButton.hidden = !state.taskDetailEditing;
+  if (saveButton) saveButton.hidden = !state.taskDetailEditing;
+  if (state.taskDetailEditing && task) {
+    $('taskDetailTitleInput').value = task.title || '';
+    $('taskDetailContentInput').value = task.content || '';
+    window.setTimeout(function() { $('taskDetailTitleInput').focus(); }, 0);
+  }
+}
+
+function saveTaskDetail() {
+  var task = findRepoTask(state.activeTaskId);
+  if (!task) return;
+  var titleInput = $('taskDetailTitleInput');
+  var contentInput = $('taskDetailContentInput');
+  var saveButton = $('saveTaskDetail');
+  var title = titleInput ? titleInput.value.trim() : '';
+  var content = contentInput ? contentInput.value.trim() : '';
+  if (!title) {
+    if (titleInput) titleInput.focus();
+    return;
+  }
+  if (saveButton) {
+    saveButton.disabled = true;
+    saveButton.textContent = t('savingTask');
+  }
+  fetch('/api/tasks/update?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: task.id, title: title, content: content })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      var updated = data.task || findRepoTask(task.id);
+      renderTaskBoard();
+      renderTaskDetail(updated);
+      setTaskDetailEditing(false);
+      setTaskError('');
+    })
+    .catch(function(error) {
+      setTaskError(t('taskSaveFailed') + error.message);
+    })
+    .finally(function() {
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = t('saveTask');
+      }
+    });
+}
+
+function renderTaskMarkdown(target, markdown) {
+  if (!target) return;
+  if (!window.marked || !window.marked.parse) {
+    target.textContent = markdown || '';
+    return;
+  }
+  target.innerHTML = sanitizeTaskHtml(window.marked.parse(markdown || '', { gfm: true, breaks: false }));
+  target.querySelectorAll('a[href]').forEach(function(link) {
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noreferrer');
+  });
+}
+
+function sanitizeTaskHtml(html) {
+  var template = document.createElement('template');
+  template.innerHTML = html || '';
+  var allowedTags = {
+    A: true, BLOCKQUOTE: true, BR: true, CODE: true, DEL: true, EM: true, H1: true, H2: true,
+    H3: true, H4: true, HR: true, LI: true, OL: true, P: true, PRE: true, STRONG: true,
+    TABLE: true, TBODY: true, TD: true, TH: true, THEAD: true, TR: true, UL: true
+  };
+  var allowedAttrs = {
+    A: { href: true, title: true },
+    TH: { align: true },
+    TD: { align: true }
+  };
+  Array.prototype.slice.call(template.content.querySelectorAll('*')).forEach(function(node) {
+    if (!allowedTags[node.tagName]) {
+      node.replaceWith(document.createTextNode(node.textContent || ''));
+      return;
+    }
+    Array.prototype.slice.call(node.attributes).forEach(function(attr) {
+      var attrs = allowedAttrs[node.tagName] || {};
+      var name = attr.name.toLowerCase();
+      if (!attrs[attr.name] || name.indexOf('on') === 0) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+      if (node.tagName === 'A' && attr.name === 'href' && !isSafeTaskHref(attr.value)) {
+        node.removeAttribute(attr.name);
+      }
+    });
+  });
+  return template.innerHTML;
+}
+
+function isSafeTaskHref(value) {
+  var href = String(value || '').trim().toLowerCase();
+  return href.indexOf('http://') === 0 ||
+    href.indexOf('https://') === 0 ||
+    href.indexOf('mailto:') === 0 ||
+    href.charAt(0) === '#';
 }
 
 function formatTaskUpdated(value) {
@@ -3419,6 +3593,9 @@ function initSecurityControls() {
   $('copyAccessUrl').addEventListener('click', copyAccessUrl);
   $('cancelRotateToken').addEventListener('click', hideTokenConfirmModal);
   $('confirmRotateToken').addEventListener('click', rotateToken);
+  $('editTaskDetail').addEventListener('click', function() { setTaskDetailEditing(true); });
+  $('cancelTaskEdit').addEventListener('click', function() { setTaskDetailEditing(false); });
+  $('saveTaskDetail').addEventListener('click', saveTaskDetail);
   $('closeTaskDetail').addEventListener('click', hideTaskDetail);
   $('tokenConfirmModal').addEventListener('click', function(event) {
     if (event.target === $('tokenConfirmModal')) hideTokenConfirmModal();
@@ -4374,7 +4551,7 @@ function renderCommits(commits) {
         '<svg class="ai-status-sparkles" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l1.8 5.1 5.1 1.8-5.1 1.8-1.8 5.1-1.8-5.1-5.1-1.8 5.1-1.8L12 2.5z"></path><path d="M5.4 14.2l.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5z"></path></svg>' +
       '</span>';
     }
-    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div><div class="subject">' + escapeHtml(c.subject || '(' + t('noSubject') + ')') + aiStatus + '</div><div class="meta"><span class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</span> &bull; ' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
+    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '"><div><div class="subject">' + escapeHtml(c.subject || '(' + t('noSubject') + ')') + aiStatus + '</div><div class="meta"><span class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</span> &bull; ' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
   }).join('');
 }
 
@@ -4477,7 +4654,7 @@ function renderGraph(commits) {
 
   nodes.forEach(function(node) {
     var cx = getX(node.x), cy = node.y;
-    svgHTML += '<circle cx="' + cx + '" cy="' + cy + '" r="' + nodeRadius + '" fill="' + node.color + '" stroke="#ffffff" stroke-width="2" class="node" data-oid="' + escapeHtml(node.hash) + '" onmouseenter="showCommit(\\'' + node.hash + '\\', this)" onmouseleave="hideCommit()" />';
+    svgHTML += '<circle cx="' + cx + '" cy="' + cy + '" r="' + nodeRadius + '" fill="' + node.color + '" stroke="#ffffff" stroke-width="2" class="node" role="button" tabindex="0" data-oid="' + escapeHtml(node.hash) + '" />';
   });
 
   if (graphBox) graphBox.style.setProperty('--graph-width', graphWidth + 'px');
@@ -4497,7 +4674,6 @@ function bindCommitDetailEvents() {
   timeline.addEventListener('click', function(event) {
     var target = commitDetailTarget(event);
     if (!target) return;
-    if (Date.now() - state.lastTouchCommitAt < 500) return;
     event.preventDefault();
     showCommit(target.getAttribute('data-oid'), target, true);
   });
@@ -4509,36 +4685,6 @@ function bindCommitDetailEvents() {
     event.preventDefault();
     showCommit(target.getAttribute('data-oid'), target, true);
   });
-
-  timeline.addEventListener('touchstart', function(event) {
-    var target = commitDetailTarget(event);
-    if (!target || !event.touches || !event.touches.length) return;
-    var touch = event.touches[0];
-    state.touchCommit = {
-      target: target,
-      oid: target.getAttribute('data-oid'),
-      x: touch.clientX,
-      y: touch.clientY,
-      moved: false
-    };
-  }, { passive: true });
-
-  timeline.addEventListener('touchmove', function(event) {
-    if (!state.touchCommit || !event.touches || !event.touches.length) return;
-    var touch = event.touches[0];
-    if (Math.abs(touch.clientX - state.touchCommit.x) > 10 || Math.abs(touch.clientY - state.touchCommit.y) > 10) {
-      state.touchCommit.moved = true;
-    }
-  }, { passive: true });
-
-  timeline.addEventListener('touchend', function() {
-    if (!state.touchCommit) return;
-    var touchCommit = state.touchCommit;
-    state.touchCommit = null;
-    if (touchCommit.moved) return;
-    state.lastTouchCommitAt = Date.now();
-    showCommit(touchCommit.oid, touchCommit.target, true);
-  }, { passive: true });
 }
 
 function commitDetailTarget(event) {
@@ -4551,7 +4697,6 @@ function commitDetailTarget(event) {
 
 window.showCommit = function(oid, trigger, pinned) {
   if (!targetRepo) return;
-  if (!pinned && Date.now() - state.lastTouchCommitAt < 800) return;
   state.detailPinned = !!pinned;
   clearTimeout(state.hideTimer);
   var token = ++state.detailToken;
