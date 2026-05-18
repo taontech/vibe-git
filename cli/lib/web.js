@@ -196,6 +196,10 @@ function handleRequest(req, res) {
         handleOpenRepository(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/open-terminal') {
+        handleOpenTerminal(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/repositories/remove') {
         handleRemoveRepository(req, res);
         return;
@@ -376,6 +380,18 @@ function handleOpenRepository(req, res, targetRepo) {
   }
   try {
     sendJson(res, openRepositoryInFinder(targetRepo));
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleOpenTerminal(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Opening Terminal is only available from 127.0.0.1.');
+  }
+  try {
+    sendJson(res, openTerminalAtRepository(targetRepo));
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
@@ -603,6 +619,15 @@ function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
+function appleScriptString(value) {
+  return JSON.stringify(String(value));
+}
+
+function hasMacApplication(appName) {
+  var result = childProcess.spawnSync('osascript', ['-e', 'id of application ' + appleScriptString(appName)], { encoding: 'utf8' });
+  return !result.error && result.status === 0;
+}
+
 function openRepositoryInFinder(root) {
   var repoRoot = git.repoRoot(root);
   if (process.platform !== 'darwin') {
@@ -619,6 +644,67 @@ function openRepositoryInFinder(root) {
   }
   return {
     status: 'ok',
+    path: repoRoot
+  };
+}
+
+function openTerminalAtRepository(root) {
+  var repoRoot = git.repoRoot(root);
+  if (process.platform !== 'darwin') {
+    throwHttpError('Opening Terminal is only supported on macOS.');
+  }
+  if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+    throwHttpError('Repository path does not exist: ' + repoRoot);
+  }
+
+  var command = 'cd ' + shellQuote(repoRoot);
+  if (hasMacApplication('iTerm')) {
+    try {
+      return openITermAtPath(repoRoot, command);
+    } catch (error) {
+      return openTerminalAppAtPath(repoRoot, command);
+    }
+  }
+  return openTerminalAppAtPath(repoRoot, command);
+}
+
+function runTerminalAppleScript(script, fallbackMessage) {
+  var result = childProcess.spawnSync('osascript', ['-e', script], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    var message = (result.stderr || result.stdout || result.error && result.error.message || 'osascript failed').trim();
+    throwHttpError(message || fallbackMessage);
+  }
+}
+
+function openITermAtPath(repoRoot, command) {
+  var script = [
+    'tell application "iTerm"',
+    '  activate',
+    '  create window with default profile',
+    '  tell current session of current window',
+    '    write text ' + appleScriptString(command),
+    '  end tell',
+    'end tell'
+  ].join('\n');
+  runTerminalAppleScript(script, 'Failed to open iTerm.');
+  return {
+    status: 'ok',
+    terminal: 'iTerm',
+    path: repoRoot
+  };
+}
+
+function openTerminalAppAtPath(repoRoot, command) {
+  var script = [
+    'tell application "Terminal"',
+    '  do script ' + appleScriptString(command),
+    '  activate',
+    'end tell'
+  ].join('\n');
+  runTerminalAppleScript(script, 'Failed to open Terminal.');
+  return {
+    status: 'ok',
+    terminal: 'Terminal',
     path: repoRoot
   };
 }
@@ -1890,8 +1976,13 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .topbar-tools { display: contents; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
-.repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); text-decoration: none; }
+.repo-line { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: min(920px, 64vw); margin-top: 2px; }
+.repo { display: block; min-width: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.repo-terminal-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
+.repo-terminal-button[hidden] { display: none; }
+.repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
+.repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
 .local-security-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .local-security-controls[hidden] { display: none; }
@@ -2152,7 +2243,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 @media (max-width: 1280px) { 
   .grid, .summary-panel { grid-template-columns: 1fr; } 
   .task-board { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
-  .repo { max-width: 70vw; } 
+  .repo-line { max-width: 70vw; } 
   .shell { padding: 82px 16px 24px; }
   .topbar { padding-left: 16px; padding-right: 16px; }
 }
@@ -2239,7 +2330,12 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </button>
           <div>
             <h1 id="appTitle">GMC GitWeb</h1>
-            <a id="repo" class="repo" data-i18n="loading">Loading...</a>
+            <div class="repo-line">
+              <a id="repo" class="repo" data-i18n="loading">Loading...</a>
+              <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
+              </button>
+            </div>
           </div>
         </div>
         <div class="topbar-tools">
@@ -2561,6 +2657,10 @@ var I18N = {
     updateExternalFailed: '更新外部访问设置失败：',
     openFinderFailed: '在 Finder 中打开失败：',
     finderLocalOnly: '仅从 127.0.0.1 访问时可以在 Finder 中打开。',
+    openTerminal: '在终端中打开',
+    openTerminalPrefix: '在终端中打开：',
+    terminalLocalOnly: '仅从 127.0.0.1 访问时可以打开终端。',
+    openTerminalFailed: '打开终端失败：',
     cleanWorkingTree: '工作区干净。',
     all: '全部',
     restore: '还原',
@@ -2708,6 +2808,10 @@ var I18N = {
     updateExternalFailed: 'Failed to update External Access settings: ',
     openFinderFailed: 'Open in Finder failed: ',
     finderLocalOnly: 'Finder opening is available only from 127.0.0.1.',
+    openTerminal: 'Open in Terminal',
+    openTerminalPrefix: 'Open in Terminal: ',
+    terminalLocalOnly: 'Terminal opening is available only from 127.0.0.1.',
+    openTerminalFailed: 'Open in Terminal failed: ',
     cleanWorkingTree: 'Clean working tree.',
     all: 'All',
     restore: 'Restore',
@@ -2829,6 +2933,7 @@ function applyLanguage() {
     button.classList.toggle('active', button.getAttribute('data-lang-option') === currentLanguage);
   });
   updateReadmeLink();
+  updateRepoLink(state.repoPathText || targetRepo || t('repoRunning'), targetRepo);
   renderSidebar();
   renderSecurityControls();
   renderTaskBoard();
@@ -3396,6 +3501,7 @@ function updateReadmeLink() {
 function updateRepoLink(text, repoPath) {
   var link = $('repo');
   if (!link) return;
+  state.repoPathText = text;
   link.textContent = text;
   if (repoPath && canOpenRepositoryLocally()) {
     link.href = '#';
@@ -3408,6 +3514,16 @@ function updateRepoLink(text, repoPath) {
       link.removeAttribute('title');
     }
   }
+  updateTerminalButton(repoPath);
+}
+
+function updateTerminalButton(repoPath) {
+  var button = $('openTerminal');
+  if (!button) return;
+  var canOpen = !!(repoPath && canOpenRepositoryLocally());
+  button.hidden = !canOpen;
+  button.title = canOpen ? (t('openTerminalPrefix') + repoPath) : t('terminalLocalOnly');
+  button.setAttribute('aria-label', t('openTerminal'));
 }
 
 function openCurrentRepository(event) {
@@ -3423,6 +3539,22 @@ function openCurrentRepository(event) {
     })
     .catch(function(error) {
       alert(t('openFinderFailed') + error.message);
+    });
+}
+
+function openCurrentTerminal(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-terminal?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      alert(t('openTerminalFailed') + error.message);
     });
 }
 
@@ -3936,6 +4068,7 @@ if (!targetRepo) {
 }
 
 $('repo').addEventListener('click', openCurrentRepository);
+$('openTerminal').addEventListener('click', openCurrentTerminal);
 $('sidebarToggle').addEventListener('click', toggleSidebar);
 $('sidebarClose').addEventListener('click', toggleSidebar);
 
@@ -4811,8 +4944,13 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .shell { width: min(980px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 40px; }
 .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-height: 1.12; }
-.repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; text-decoration: none; }
+.repo-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 4px; }
+.repo { display: block; min-width: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow-wrap: anywhere; text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.repo-terminal-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
+.repo-terminal-button[hidden] { display: none; }
+.repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
+.repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
 .button { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; white-space: nowrap; }
 .button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
@@ -4847,7 +4985,12 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
   <header class="topbar">
     <div>
       <h1 id="title">README</h1>
-      <a id="repo" class="repo"></a>
+      <div class="repo-line">
+        <a id="repo" class="repo"></a>
+        <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
+        </button>
+      </div>
     </div>
     <a id="backLink" class="button" href="/">Back to GitWeb</a>
   </header>
@@ -4880,7 +5023,11 @@ var README_I18N = {
     failedPrefix: 'README 加载失败：',
     openInFinderPrefix: '在 Finder 中打开：',
     finderLocalOnly: '仅从 127.0.0.1 访问时可以在 Finder 中打开。',
-    openFinderFailed: '在 Finder 中打开失败：'
+    openFinderFailed: '在 Finder 中打开失败：',
+    openTerminal: '在终端中打开',
+    openTerminalPrefix: '在终端中打开：',
+    terminalLocalOnly: '仅从 127.0.0.1 访问时可以打开终端。',
+    openTerminalFailed: '打开终端失败：'
   },
   en: {
     back: 'Back to GitWeb',
@@ -4889,7 +5036,11 @@ var README_I18N = {
     failedPrefix: 'Failed to load README: ',
     openInFinderPrefix: 'Open in Finder: ',
     finderLocalOnly: 'Finder opening is available only from 127.0.0.1.',
-    openFinderFailed: 'Open in Finder failed: '
+    openFinderFailed: 'Open in Finder failed: ',
+    openTerminal: 'Open in Terminal',
+    openTerminalPrefix: 'Open in Terminal: ',
+    terminalLocalOnly: 'Terminal opening is available only from 127.0.0.1.',
+    openTerminalFailed: 'Open in Terminal failed: '
   }
 };
 var currentLanguage = String(localStorage.getItem('gmc_language') || navigator.language || '').toLowerCase().indexOf('zh') === 0 ? 'zh-CN' : 'en';
@@ -4899,6 +5050,7 @@ bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('loading')) + '</div>';
 updateRepoLink(targetRepo || rt('noRepositorySelected'), targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
 document.getElementById('repo').addEventListener('click', openCurrentRepository);
+document.getElementById('openTerminal').addEventListener('click', openCurrentTerminal);
 
 if (!targetRepo) {
   bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('noRepositorySelected')) + '</div>';
@@ -4961,6 +5113,16 @@ function updateRepoLink(text, repoPath) {
       link.removeAttribute('title');
     }
   }
+  updateTerminalButton(repoPath);
+}
+
+function updateTerminalButton(repoPath) {
+  var button = document.getElementById('openTerminal');
+  if (!button) return;
+  var canOpen = !!(repoPath && canOpenRepositoryLocally());
+  button.hidden = !canOpen;
+  button.title = canOpen ? (rt('openTerminalPrefix') + repoPath) : rt('terminalLocalOnly');
+  button.setAttribute('aria-label', rt('openTerminal'));
 }
 
 function openCurrentRepository(event) {
@@ -4976,6 +5138,22 @@ function openCurrentRepository(event) {
     })
     .catch(function(error) {
       alert(rt('openFinderFailed') + error.message);
+    });
+}
+
+function openCurrentTerminal(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-terminal?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      alert(rt('openTerminalFailed') + error.message);
     });
 }
 
