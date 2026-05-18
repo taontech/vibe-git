@@ -24,6 +24,7 @@ var AUTH_QUERY_PARAM = 'gmc_auth';
 var AUTH_COOKIE = 'gmc_gitweb_auth';
 var RECENT_REPOS_LIMIT = 20;
 var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
+var TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
 
 function start(root, options) {
@@ -195,6 +196,10 @@ function handleRequest(req, res) {
         handleOpenRepository(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/open-terminal') {
+        handleOpenTerminal(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/repositories/remove') {
         handleRemoveRepository(req, res);
         return;
@@ -209,6 +214,18 @@ function handleRequest(req, res) {
       }
       if (parsed.pathname === '/api/security/qr-code') {
         handleQrCode(req, res);
+        return;
+      }
+      if (parsed.pathname === '/api/tasks/create') {
+        handleCreateTask(req, res, parsed.query.repo);
+        return;
+      }
+      if (parsed.pathname === '/api/tasks/update') {
+        handleUpdateTask(req, res, parsed.query.repo);
+        return;
+      }
+      if (parsed.pathname === '/api/tasks/delete') {
+        handleDeleteTask(req, res, parsed.query.repo);
         return;
       }
       send(res, 405, 'text/plain; charset=utf-8', 'Method not allowed');
@@ -269,6 +286,11 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/readme') {
       sendJson(res, readmeContent(targetRepo));
+      return;
+    }
+
+    if (parsed.pathname === '/api/tasks') {
+      sendJson(res, readRepositoryTasks(targetRepo));
       return;
     }
 
@@ -361,6 +383,45 @@ function handleOpenRepository(req, res, targetRepo) {
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
+}
+
+function handleOpenTerminal(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Opening Terminal is only available from 127.0.0.1.');
+  }
+  try {
+    sendJson(res, openTerminalAtRepository(targetRepo));
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleCreateTask(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    sendJson(res, createRepositoryTask(targetRepo, body));
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleUpdateTask(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    sendJson(res, updateRepositoryTask(targetRepo, body));
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleDeleteTask(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    sendJson(res, deleteRepositoryTask(targetRepo, body));
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
 }
 
 function isLoopbackRequest(req) {
@@ -558,6 +619,15 @@ function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
+function appleScriptString(value) {
+  return JSON.stringify(String(value));
+}
+
+function hasMacApplication(appName) {
+  var result = childProcess.spawnSync('osascript', ['-e', 'id of application ' + appleScriptString(appName)], { encoding: 'utf8' });
+  return !result.error && result.status === 0;
+}
+
 function openRepositoryInFinder(root) {
   var repoRoot = git.repoRoot(root);
   if (process.platform !== 'darwin') {
@@ -574,6 +644,67 @@ function openRepositoryInFinder(root) {
   }
   return {
     status: 'ok',
+    path: repoRoot
+  };
+}
+
+function openTerminalAtRepository(root) {
+  var repoRoot = git.repoRoot(root);
+  if (process.platform !== 'darwin') {
+    throwHttpError('Opening Terminal is only supported on macOS.');
+  }
+  if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+    throwHttpError('Repository path does not exist: ' + repoRoot);
+  }
+
+  var command = 'cd ' + shellQuote(repoRoot);
+  if (hasMacApplication('iTerm')) {
+    try {
+      return openITermAtPath(repoRoot, command);
+    } catch (error) {
+      return openTerminalAppAtPath(repoRoot, command);
+    }
+  }
+  return openTerminalAppAtPath(repoRoot, command);
+}
+
+function runTerminalAppleScript(script, fallbackMessage) {
+  var result = childProcess.spawnSync('osascript', ['-e', script], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    var message = (result.stderr || result.stdout || result.error && result.error.message || 'osascript failed').trim();
+    throwHttpError(message || fallbackMessage);
+  }
+}
+
+function openITermAtPath(repoRoot, command) {
+  var script = [
+    'tell application "iTerm"',
+    '  activate',
+    '  create window with default profile',
+    '  tell current session of current window',
+    '    write text ' + appleScriptString(command),
+    '  end tell',
+    'end tell'
+  ].join('\n');
+  runTerminalAppleScript(script, 'Failed to open iTerm.');
+  return {
+    status: 'ok',
+    terminal: 'iTerm',
+    path: repoRoot
+  };
+}
+
+function openTerminalAppAtPath(repoRoot, command) {
+  var script = [
+    'tell application "Terminal"',
+    '  do script ' + appleScriptString(command),
+    '  activate',
+    'end tell'
+  ].join('\n');
+  runTerminalAppleScript(script, 'Failed to open Terminal.');
+  return {
+    status: 'ok',
+    terminal: 'Terminal',
     path: repoRoot
   };
 }
@@ -902,6 +1033,229 @@ function repoName(repoPath) {
 
 function normalizeRepoName(name) {
   return String(name || '').trim().toLowerCase();
+}
+
+function readRepositoryTasks(root) {
+  var repoRoot = git.repoRoot(root);
+  var dir = repositoryTasksDir(repoRoot);
+  if (!fs.existsSync(dir)) {
+    return {
+      tasks: [],
+      directory: path.relative(repoRoot, dir)
+    };
+  }
+
+  var tasks = fs.readdirSync(dir)
+    .filter(function (name) { return /\.md$/i.test(name); })
+    .map(function (name) {
+      return readRepositoryTaskFile(repoRoot, path.join(dir, name));
+    })
+    .filter(Boolean)
+    .sort(function (a, b) {
+      var statusOrder = TASK_STATUSES.indexOf(a.status) - TASK_STATUSES.indexOf(b.status);
+      if (statusOrder !== 0) return statusOrder;
+      return String(b.updated || b.created || '').localeCompare(String(a.updated || a.created || '')) ||
+        String(a.id).localeCompare(String(b.id));
+    });
+
+  return {
+    tasks: tasks,
+    directory: path.relative(repoRoot, dir)
+  };
+}
+
+function createRepositoryTask(root, input) {
+  var repoRoot = git.repoRoot(root);
+  input = input || {};
+  var title = String(input.title || '').trim();
+  var content = String(input.content || '').trim();
+  var status = normalizeTaskStatus(input.status || 'todo');
+  if (!title) throwHttpError('Task title is required');
+  if (title.length > 160) throwHttpError('Task title is too long');
+  if (content.length > 12000) throwHttpError('Task content is too long');
+
+  var now = new Date().toISOString();
+  var task = {
+    id: nextRepositoryTaskId(repoRoot),
+    title: title,
+    status: status,
+    created: now,
+    updated: now,
+    content: content
+  };
+  writeRepositoryTask(repoRoot, task);
+  return {
+    task: task,
+    tasks: readRepositoryTasks(repoRoot).tasks
+  };
+}
+
+function updateRepositoryTask(root, input) {
+  var repoRoot = git.repoRoot(root);
+  input = input || {};
+  var id = normalizeTaskId(input.id);
+  if (!id) throwHttpError('Task id is required');
+  var filePath = path.join(repositoryTasksDir(repoRoot), id + '.md');
+  if (!isPathInside(repositoryTasksDir(repoRoot), filePath) || !fs.existsSync(filePath)) {
+    throwHttpError('Task not found: ' + id);
+  }
+
+  var task = readRepositoryTaskFile(repoRoot, filePath);
+  if (!task) throwHttpError('Task not found: ' + id);
+  if (Object.prototype.hasOwnProperty.call(input, 'title')) {
+    var title = String(input.title || '').trim();
+    if (!title) throwHttpError('Task title is required');
+    if (title.length > 160) throwHttpError('Task title is too long');
+    task.title = title;
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'content')) {
+    var content = String(input.content || '').trim();
+    if (content.length > 12000) throwHttpError('Task content is too long');
+    task.content = content;
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'status')) {
+    task.status = normalizeTaskStatus(input.status);
+  }
+  task.updated = new Date().toISOString();
+  writeRepositoryTask(repoRoot, task);
+  return {
+    task: task,
+    tasks: readRepositoryTasks(repoRoot).tasks
+  };
+}
+
+function deleteRepositoryTask(root, input) {
+  var repoRoot = git.repoRoot(root);
+  input = input || {};
+  var id = normalizeTaskId(input.id);
+  if (!id) throwHttpError('Task id is required');
+  var dir = repositoryTasksDir(repoRoot);
+  var filePath = path.join(dir, id + '.md');
+  if (!isPathInside(dir, filePath) || !fs.existsSync(filePath)) {
+    throwHttpError('Task not found: ' + id);
+  }
+  fs.unlinkSync(filePath);
+  return {
+    status: 'ok',
+    deleted: id,
+    tasks: readRepositoryTasks(repoRoot).tasks
+  };
+}
+
+function readRepositoryTaskFile(repoRoot, filePath) {
+  if (!isPathInside(repositoryTasksDir(repoRoot), filePath)) return null;
+  var raw;
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    return null;
+  }
+
+  var parsed = parseTaskMarkdown(raw);
+  var id = normalizeTaskId(parsed.meta.id) || normalizeTaskId(path.basename(filePath, '.md'));
+  if (!id) return null;
+  return {
+    id: id,
+    title: String(parsed.meta.title || firstMarkdownHeading(parsed.content) || id).trim().slice(0, 160),
+    status: normalizeTaskStatus(parsed.meta.status || 'todo'),
+    created: String(parsed.meta.created || ''),
+    updated: String(parsed.meta.updated || parsed.meta.created || ''),
+    content: parsed.content.trim(),
+    path: path.relative(repoRoot, filePath)
+  };
+}
+
+function writeRepositoryTask(repoRoot, task) {
+  var dir = repositoryTasksDir(repoRoot);
+  fs.mkdirSync(dir, { recursive: true });
+  var filePath = path.join(dir, normalizeTaskId(task.id) + '.md');
+  if (!isPathInside(dir, filePath)) throwHttpError('Invalid task id');
+  fs.writeFileSync(filePath, taskMarkdown(task));
+}
+
+function taskMarkdown(task) {
+  return [
+    '---',
+    'id: ' + task.id,
+    'title: ' + JSON.stringify(task.title || task.id),
+    'status: ' + normalizeTaskStatus(task.status || 'todo'),
+    'created: ' + JSON.stringify(task.created || new Date().toISOString()),
+    'updated: ' + JSON.stringify(task.updated || task.created || new Date().toISOString()),
+    '---',
+    '',
+    String(task.content || '').trim(),
+    ''
+  ].join('\n');
+}
+
+function parseTaskMarkdown(raw) {
+  var text = String(raw || '');
+  var match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  if (!match) {
+    return { meta: {}, content: text };
+  }
+  var meta = {};
+  match[1].split(/\r?\n/).forEach(function (line) {
+    var item = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (!item) return;
+    meta[item[1]] = parseTaskScalar(item[2]);
+  });
+  return {
+    meta: meta,
+    content: text.slice(match[0].length)
+  };
+}
+
+function parseTaskScalar(value) {
+  value = String(value || '').trim();
+  if (!value) return '';
+  if ((value.charAt(0) === '"' && value.charAt(value.length - 1) === '"') ||
+      (value.charAt(0) === '[' && value.charAt(value.length - 1) === ']')) {
+    try {
+      return JSON.parse(value);
+    } catch (e) { /* fall back */ }
+  }
+  return value;
+}
+
+function firstMarkdownHeading(content) {
+  var lines = String(content || '').split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var match = /^#\s+(.+)$/.exec(lines[i].trim());
+    if (match) return match[1];
+  }
+  return '';
+}
+
+function nextRepositoryTaskId(repoRoot) {
+  var dir = repositoryTasksDir(repoRoot);
+  var max = 0;
+  if (fs.existsSync(dir)) {
+    fs.readdirSync(dir).forEach(function (name) {
+      var match = /^GMC-(\d+)\.md$/i.exec(name);
+      if (match) max = Math.max(max, Number(match[1]) || 0);
+    });
+  }
+  return 'GMC-' + String(max + 1).padStart(4, '0');
+}
+
+function repositoryTasksDir(repoRoot) {
+  return path.join(repoRoot, '.gmc', 'tasks');
+}
+
+function normalizeTaskId(value) {
+  var id = String(value || '').trim().toUpperCase();
+  return /^GMC-\d{4,}$/.test(id) ? id : '';
+}
+
+function normalizeTaskStatus(value) {
+  value = String(value || '').trim().toLowerCase();
+  return TASK_STATUSES.indexOf(value) >= 0 ? value : 'todo';
+}
+
+function isPathInside(parent, child) {
+  var relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === '' || (!!relative && relative.indexOf('..') !== 0 && !path.isAbsolute(relative));
 }
 
 function collectStatus(root) {
@@ -1617,18 +1971,31 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .shell-inner { width: min(1480px, 100%); margin: 0 auto; }
 .topbar { position: fixed; left: var(--sidebar-w); right: 0; top: 0; z-index: var(--z-navbar); padding: 0 32px; background: rgba(255,255,255,.92); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-bottom: 1px solid rgba(219,226,234,.82); box-shadow: 0 1px 2px rgba(15, 23, 42, .04); transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
 .sidebar.collapsed + .shell .topbar { left: 0; }
-.topbar-inner { width: min(1480px, 100%); min-height: 64px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.topbar-inner { width: min(1480px, 100%); min-height: 64px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; }
+.topbar-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.topbar-tools { display: contents; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
-.repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(920px, 64vw); text-decoration: none; }
+.repo-line { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: min(920px, 64vw); margin-top: 2px; }
+.repo { display: block; min-width: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.repo-terminal-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
+.repo-terminal-button[hidden] { display: none; }
+.repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
+.repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
 .local-security-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .local-security-controls[hidden] { display: none; }
 .actions button, .commit-button, .ignore-button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 7px; min-height: 34px; padding: 7px 12px; cursor: pointer; font-weight: 650; }
 .actions button:hover, .commit-button:hover:not(:disabled), .ignore-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .settings-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .settings-button svg { width: 16px; height: 16px; pointer-events: none; }
+.view-tabs { display: inline-flex; align-items: center; justify-self: center; gap: 4px; margin: 0; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.82); box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.view-tab { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 7px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 750; transition: background .16s, color .16s, border-color .16s, box-shadow .16s, transform .16s; }
+.view-tab svg { width: 16px; height: 16px; }
+.view-tab:hover { color: var(--accent); background: var(--accent-soft); }
+.view-tab.active { color: #fff; background: linear-gradient(135deg, var(--accent), #0f9f6e); border-color: transparent; box-shadow: 0 10px 24px rgba(6,141,109,.22); }
+.view-page[hidden], .task-page[hidden] { display: none; }
 .language-wrap { position: relative; }
 .language-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .language-button svg { width: 16px; height: 16px; pointer-events: none; }
@@ -1685,6 +2052,59 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .install-banner button { background: #fff; color: #dc2626; border: none; border-radius: 6px; padding: 6px 16px; font-weight: 700; cursor: pointer; white-space: nowrap; font-size: 13px; }
 .install-banner button:hover { background: #fef2f2; }
 .install-banner button:disabled { opacity: .6; cursor: not-allowed; }
+.task-page { display: grid; gap: 16px; }
+.task-hero { position: relative; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; overflow: hidden; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 44%, #eff6ff 100%); box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.task-hero::after { content: ""; position: absolute; width: 220px; height: 220px; right: -88px; top: -112px; border-radius: 50%; background: radial-gradient(circle, rgba(6,141,109,.16), rgba(6,141,109,0) 64%); pointer-events: none; }
+.task-hero-main { position: relative; z-index: 1; min-width: 0; }
+.task-hero h2 { margin: 0; color: var(--text); font-size: 24px; line-height: 1.1; text-transform: none; letter-spacing: 0; }
+.task-hero p { margin: 7px 0 0; max-width: 720px; color: var(--muted); line-height: 1.58; }
+.task-actions { position: relative; z-index: 1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.task-primary { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 13px; border: 1px solid transparent; border-radius: 7px; color: #fff; background: linear-gradient(135deg, var(--accent), #0f9f6e); cursor: pointer; font-weight: 780; box-shadow: 0 12px 26px rgba(6,141,109,.22); transition: transform .16s, box-shadow .16s; }
+.task-primary:hover { transform: translateY(-1px); box-shadow: 0 16px 34px rgba(6,141,109,.25); }
+.task-primary svg { width: 16px; height: 16px; }
+.task-meta-line { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: #475569; font-size: 12px; }
+.task-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 5px 8px; border: 1px solid rgba(6,141,109,.18); border-radius: 999px; background: rgba(255,255,255,.68); overflow: hidden; }
+.task-pill strong { color: var(--accent); }
+.task-error { display: none; padding: 10px 12px; border: 1px solid #fecdd3; border-radius: 7px; background: #fff1f2; color: #be123c; font-size: 13px; }
+.task-error.visible { display: block; }
+.task-composer { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 18px 45px rgba(15,23,42,.10); transform-origin: top right; animation: taskComposerIn .18s ease-out; }
+.task-composer[hidden] { display: none; }
+.task-form-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 12px; align-items: start; }
+.task-field { display: grid; gap: 6px; min-width: 0; }
+.task-field label { color: #475569; font-size: 12px; font-weight: 750; }
+.task-field input, .task-field textarea, .task-field select { width: 100%; border: 1px solid var(--line); border-radius: 7px; background: #f8fafc; color: var(--text); font: inherit; padding: 9px 10px; outline: none; transition: border-color .16s, background .16s, box-shadow .16s; }
+.task-field textarea { min-height: 98px; resize: vertical; line-height: 1.5; }
+.task-field input:focus, .task-field textarea:focus, .task-field select:focus { border-color: var(--accent); background: #fff; box-shadow: 0 0 0 3px rgba(6,141,109,.12); }
+.task-form-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.task-board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 14px; align-items: start; min-height: 360px; }
+.task-column { position: relative; min-width: 0; min-height: 280px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.72); box-shadow: 0 1px 2px rgba(15,23,42,.04); transition: border-color .16s, background .16s, box-shadow .16s, transform .16s; }
+.task-column.drag-over { border-color: var(--accent); background: #f0fdf4; box-shadow: 0 16px 34px rgba(6,141,109,.14); transform: translateY(-2px); }
+.task-column-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.task-column-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; color: var(--text); }
+.task-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--task-color, var(--accent)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--task-color, var(--accent)) 14%, transparent); }
+.task-count { display: grid; place-items: center; min-width: 26px; height: 24px; padding: 0 7px; border-radius: 999px; background: #f1f5f9; color: #475569; font-weight: 800; font-size: 12px; }
+.task-column-body { display: grid; gap: 10px; min-height: 220px; align-content: start; align-items: start; grid-auto-rows: 132px; }
+.task-empty { display: grid; place-items: center; min-height: 116px; border: 1px dashed #cbd5e1; border-radius: 8px; color: #94a3b8; font-size: 12px; text-align: center; padding: 14px; background: rgba(248,250,252,.68); }
+.task-card { position: relative; display: grid; grid-template-rows: 30px auto auto 1fr; gap: 9px; height: 132px; padding: 0 12px 12px; border: 1px solid rgba(226,232,240,.92); border-radius: 8px; background: #fff; box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; overflow: hidden; transition: transform .16s, box-shadow .16s, border-color .16s; }
+.task-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--task-color, var(--accent)) 42%, #cbd5e1); box-shadow: 0 16px 36px rgba(15,23,42,.11); }
+.task-card.dragging { opacity: .52; transform: rotate(1deg) scale(.98); }
+.task-card-band { display: flex; align-items: center; min-height: 30px; margin: 0 -12px; padding: 0 42px 0 12px; background: linear-gradient(90deg, var(--task-color, var(--accent)), color-mix(in srgb, var(--task-color, var(--accent)) 72%, #ffffff)); }
+.task-remove { position: absolute; top: 4px; right: 8px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid rgba(255,255,255,.36); border-radius: 999px; color: #fff; background: rgba(255,255,255,.16); opacity: 0; transform: scale(.92); cursor: pointer; transition: opacity .14s, transform .14s, color .14s, background .14s, border-color .14s; }
+.task-card:hover .task-remove, .task-card:focus-within .task-remove, .task-remove:focus-visible { opacity: 1; transform: scale(1); }
+.task-remove:hover { color: #fff; background: rgba(220,38,38,.92); border-color: rgba(255,255,255,.58); }
+.task-remove svg { width: 14px; height: 14px; pointer-events: none; }
+.task-id { color: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 900; text-shadow: 0 1px 2px rgba(15,23,42,.18); }
+.task-title-button { margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; line-height: 1.32; font-weight: 800; letter-spacing: 0; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-title-button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.task-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-card-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #94a3b8; font-size: 11px; }
+.task-card-actions { display: flex; gap: 5px; }
+.task-mini-button { display: inline-grid; place-items: center; width: 28px; height: 26px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #64748b; cursor: pointer; }
+.task-mini-button:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.task-mini-button:disabled { opacity: .32; cursor: default; }
+.task-mini-button:disabled:hover { color: #64748b; border-color: var(--line); background: #fff; }
+.task-board-loading { grid-column: 1 / -1; display: grid; place-items: center; min-height: 260px; color: var(--muted); border: 1px dashed #cbd5e1; border-radius: 8px; background: rgba(255,255,255,.68); }
+@keyframes taskComposerIn { from { opacity: 0; transform: translateY(-8px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 440px); gap: 16px; align-items: start; min-width: 0; }
 .grid > *, .summary-panel > *, .side, .panel { min-width: 0; }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
@@ -1700,14 +2120,16 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .meter .action-btn:hover { border-color: var(--accent); color: var(--accent); }
 .meter .action-btn:disabled { opacity: .62; cursor: progress; color: var(--muted); background: #f8fafc; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-.timeline-container { --graph-width: 30px; display: grid; grid-template-columns: var(--graph-width) minmax(0, 1fr); column-gap: 6px; align-items: flex-start; position: relative; height: min(66vh, 680px); min-height: 430px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; background: linear-gradient(90deg, #fbfdff 0, #fbfdff calc(var(--graph-width) + 10px), #ffffff calc(var(--graph-width) + 10px)); padding: 10px 10px 10px 4px; }
+.timeline-container { --graph-width: 30px; display: grid; grid-template-columns: var(--graph-width) minmax(0, 1fr); column-gap: 6px; align-items: flex-start; position: relative; height: min(66vh, 680px); min-height: 430px; min-width: 0; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--line-soft); border-radius: 8px; background: linear-gradient(90deg, #fbfdff 0, #fbfdff calc(var(--graph-width) + 10px), #ffffff calc(var(--graph-width) + 10px)); padding: 10px 10px 10px 4px; }
 #graph { width: var(--graph-width); min-width: var(--graph-width); pointer-events: auto; overflow: visible; }
-.timeline { display: grid; gap: 9px; min-width: 0; padding-right: 2px; }
-.commit { display: grid; grid-template-columns: minmax(0, 1fr); padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: pointer; touch-action: manipulation; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; }
+.timeline { display: grid; gap: 9px; min-width: 0; overflow: hidden; padding-right: 2px; }
+.commit { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; cursor: pointer; touch-action: manipulation; transition: background .16s, border-color .16s, box-shadow .16s, transform .16s; }
+.commit > div { min-width: 0; }
 .commit:hover { background: var(--accent-soft); border-color: #bfdbfe; box-shadow: 0 8px 22px rgba(37, 99, 235, .10); transform: translateY(-1px); }
 .hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
 .subject { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; }
+.commit .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-status { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 16px; margin-left: 7px; vertical-align: -3px; color: var(--accent); position: relative; }
 .ai-status svg { display: block; }
 .ai-status-loader { width: 15px; height: 15px; animation: spin 1.05s linear infinite; opacity: .9; }
@@ -1766,6 +2188,33 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .modal h2 { margin: 0 0 8px; color: var(--text); font-size: 16px; letter-spacing: 0; text-transform: none; }
 .modal p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.task-detail-modal { width: min(680px, 100%); }
+.task-detail-head { display: grid; gap: 7px; margin-bottom: 14px; }
+.task-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; color: #64748b; font-size: 12px; }
+.task-detail-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; background: #f1f5f9; font-weight: 750; }
+.task-detail-chip.status { color: #fff; background: var(--task-color, var(--accent)); }
+.task-detail-body { max-height: min(54vh, 460px); overflow: auto; padding: 13px; border: 1px solid var(--line-soft); border-radius: 8px; background: #f8fafc; color: #334155; font-size: 13px; line-height: 1.62; overflow-wrap: anywhere; }
+.task-detail-body > :first-child { margin-top: 0; }
+.task-detail-body > :last-child { margin-bottom: 0; }
+.task-detail-body h1, .task-detail-body h2, .task-detail-body h3, .task-detail-body h4 { margin: 1em 0 .45em; color: var(--text); line-height: 1.25; }
+.task-detail-body h1 { font-size: 20px; }
+.task-detail-body h2 { font-size: 17px; }
+.task-detail-body h3 { font-size: 15px; }
+.task-detail-body p { margin: .55em 0; }
+.task-detail-body ul, .task-detail-body ol { margin: .55em 0; padding-left: 22px; }
+.task-detail-body li { margin: .25em 0; }
+.task-detail-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef2f7; padding: 2px 5px; border-radius: 4px; }
+.task-detail-body pre { margin: .7em 0; padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: #0f172a; color: #e2e8f0; overflow: auto; }
+.task-detail-body pre code { background: none; padding: 0; color: inherit; }
+.task-detail-body blockquote { margin: .65em 0; padding: 5px 12px; border-left: 3px solid var(--accent); background: #eff6ff; border-radius: 0 6px 6px 0; color: #475569; }
+.task-detail-body table { width: 100%; border-collapse: collapse; margin: .7em 0; }
+.task-detail-body th, .task-detail-body td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+.task-detail-body th { background: #fff; }
+.task-detail-body a { color: var(--accent); text-decoration: none; }
+.task-detail-body a:hover { text-decoration: underline; }
+.task-detail-edit { display: grid; gap: 12px; }
+.task-detail-edit[hidden] { display: none; }
+.task-detail-edit .task-field textarea { min-height: min(42vh, 360px); }
 .copy-button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 7px; height: 30px; padding: 4px 10px; cursor: pointer; font-weight: 650; }
 .copy-button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .close-button:hover { border-color: var(--rose); color: var(--rose); background: #fef2f2; }
@@ -1793,7 +2242,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 }
 @media (max-width: 1280px) { 
   .grid, .summary-panel { grid-template-columns: 1fr; } 
-  .repo { max-width: 70vw; } 
+  .task-board { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
+  .repo-line { max-width: 70vw; } 
   .shell { padding: 82px 16px 24px; }
   .topbar { padding-left: 16px; padding-right: 16px; }
 }
@@ -1812,9 +2262,19 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 }
 @media (max-width: 620px) { 
   .shell { padding-top: 132px; }
-  .topbar-inner { align-items: flex-start; flex-direction: column; min-height: auto; padding: 14px 0; } 
-  .actions { width: 100%; justify-content: flex-end; }
+  .topbar-inner { grid-template-columns: 1fr; align-items: stretch; gap: 10px; min-height: auto; padding: 12px 0; }
+  .topbar-brand { width: 100%; }
+  .topbar-tools { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 8px; align-items: center; width: 100%; }
+  .actions { width: 100%; justify-content: flex-end; gap: 6px; }
+  .actions button, .view-tab { min-height: 30px; padding: 5px 9px; }
   .language-menu { right: 0; left: auto; max-width: calc(100vw - 32px); }
+  .view-tabs { grid-column: 1; justify-self: start; }
+  .topbar-tools .actions { grid-column: 2; justify-self: end; }
+  .view-tab { justify-content: center; }
+  .task-hero { flex-direction: column; }
+  .task-actions { width: 100%; justify-content: flex-start; }
+  .task-form-grid { grid-template-columns: 1fr; }
+  .task-board { grid-template-columns: 1fr; }
   .commit { grid-template-columns: 1fr; } 
   .hash { display: none; } 
   .meters { grid-template-columns: 1fr; } 
@@ -1847,6 +2307,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 #sidebarToggle { margin-left: -12px; margin-right: 8px; }
 #sidebarClose { margin-right: -8px; display: none; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 <div class="app-container">
@@ -1863,39 +2324,57 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   <main class="shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="topbar-brand">
           <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar" data-i18n-title="toggleSidebar">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
           </button>
           <div>
             <h1 id="appTitle">GMC GitWeb</h1>
-            <a id="repo" class="repo" data-i18n="loading">Loading...</a>
+            <div class="repo-line">
+              <a id="repo" class="repo" data-i18n="loading">Loading...</a>
+              <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
+              </button>
+            </div>
           </div>
         </div>
-        <div class="actions">
-          <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置" data-i18n-title="accessSettings">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
-            <span data-i18n="accessSettings">访问设置</span>
-          </button>
-          <div class="language-wrap">
-            <button id="openLanguageMenu" class="language-button" type="button" title="Language" data-i18n-title="language">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 0 20"></path><path d="M12 2a15.3 15.3 0 0 0 0 20"></path></svg>
-              <span id="languageButtonLabel">中文</span>
+        <div class="topbar-tools">
+          <nav class="view-tabs" aria-label="GMC views">
+            <button id="gitViewTab" class="view-tab active" type="button" data-view-tab="git">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M8.6 7.8 15.4 16.2"></path><path d="M6 9v6"></path></svg>
+              <span data-i18n="gitView">Git</span>
             </button>
-            <div id="languageMenu" class="language-menu" role="menu">
-              <button type="button" data-lang-option="zh-CN">中文</button>
-              <button type="button" data-lang-option="en">English</button>
+            <button id="taskViewTab" class="view-tab" type="button" data-view-tab="tasks">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 8h10"></path><path d="M7 12h5"></path><path d="m14 16 1.5 1.5L18 15"></path></svg>
+              <span data-i18n="taskView">Task</span>
+            </button>
+          </nav>
+          <div class="actions">
+            <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置" data-i18n-title="accessSettings" data-i18n-aria-label="accessSettings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
+              <span data-i18n="accessSettings">访问设置</span>
+            </button>
+            <div class="language-wrap">
+              <button id="openLanguageMenu" class="language-button" type="button" title="Language" data-i18n-title="language">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 0 20"></path><path d="M12 2a15.3 15.3 0 0 0 0 20"></path></svg>
+                <span id="languageButtonLabel">中文</span>
+              </button>
+              <div id="languageMenu" class="language-menu" role="menu">
+                <button type="button" data-lang-option="zh-CN">中文</button>
+                <button type="button" data-lang-option="en">English</button>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </header>
     <div class="shell-inner">
-      <div id="installBanner" class="install-banner">
-        <span class="install-text" data-i18n="installBanner"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
-        <button id="btnInstall" type="button" data-i18n="installHooks">Install Hooks and Webloc</button>
-      </div>
-      <div id="dashboardPage">
+      <div id="gitPage" class="view-page">
+        <div id="installBanner" class="install-banner">
+          <span class="install-text" data-i18n="installBanner"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
+          <button id="btnInstall" type="button" data-i18n="installHooks">Install Hooks and Webloc</button>
+        </div>
+        <div id="dashboardPage">
   <section class="summary-panel">
     <div class="panel branch-summary-panel">
       <div class="branch-summary-text">
@@ -1945,7 +2424,47 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       </div>
     </div>
   </section>
+        </div>
       </div>
+      <section id="taskPage" class="task-page" hidden>
+        <div class="task-hero">
+          <div class="task-hero-main">
+            <h2 data-i18n="taskBoardTitle">仓库任务看板</h2>
+            <p data-i18n="taskBoardIntro">任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。这里先保持轻量，只管理标题、内容和状态。</p>
+            <div class="task-meta-line">
+              <span class="task-pill"><strong id="taskTotalCount">0</strong><span data-i18n="tasksCount">个任务</span></span>
+              <span class="task-pill"><span data-i18n="taskStorage">存储</span><strong id="taskStoragePath">.gmc/tasks</strong></span>
+            </div>
+          </div>
+          <div class="task-actions">
+            <button id="refreshTasks" class="copy-button" type="button" data-i18n="refreshTasks">刷新</button>
+            <button id="openTaskComposer" class="task-primary" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              <span data-i18n="newTask">新建任务</span>
+            </button>
+          </div>
+        </div>
+        <div id="taskError" class="task-error"></div>
+        <form id="taskComposer" class="task-composer" hidden>
+          <div class="task-form-grid">
+            <div class="task-field">
+              <label for="taskTitleInput" data-i18n="taskTitle">标题</label>
+              <input id="taskTitleInput" type="text" maxlength="160" autocomplete="off" data-i18n-placeholder="taskTitlePlaceholder" placeholder="例如：完善移动端任务看板">
+            </div>
+            <div class="task-field">
+              <label for="taskContentInput" data-i18n="taskContent">内容</label>
+              <textarea id="taskContentInput" data-i18n-placeholder="taskContentPlaceholder" placeholder="写下背景、想法或验收标准。支持 Markdown。"></textarea>
+            </div>
+          </div>
+          <div class="task-form-actions">
+            <button id="cancelTaskComposer" class="copy-button" type="button" data-i18n="cancel">取消</button>
+            <button id="createTaskButton" class="commit-button" type="submit" data-i18n="createTask">创建任务</button>
+          </div>
+        </form>
+        <div id="taskBoard" class="task-board">
+          <div class="task-board-loading" data-i18n="loadingTasks">正在加载任务...</div>
+        </div>
+      </section>
       <section id="accessSettingsPage" class="settings-page" hidden>
         <div class="settings-hero">
           <div>
@@ -2021,6 +2540,36 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   </div>
 </div>
 
+<div id="taskDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle">
+  <div class="modal task-detail-modal">
+    <div class="task-detail-head">
+      <div class="task-detail-meta">
+        <span id="taskDetailId" class="task-detail-chip"></span>
+        <span id="taskDetailStatus" class="task-detail-chip status"></span>
+        <span id="taskDetailUpdated" class="task-detail-chip"></span>
+      </div>
+      <h2 id="taskDetailTitle"></h2>
+    </div>
+    <div id="taskDetailBody" class="task-detail-body"></div>
+    <form id="taskDetailEdit" class="task-detail-edit" hidden>
+      <div class="task-field">
+        <label for="taskDetailTitleInput" data-i18n="taskTitle">标题</label>
+        <input id="taskDetailTitleInput" type="text" maxlength="160" autocomplete="off">
+      </div>
+      <div class="task-field">
+        <label for="taskDetailContentInput" data-i18n="taskContent">内容</label>
+        <textarea id="taskDetailContentInput"></textarea>
+      </div>
+    </form>
+    <div class="modal-actions">
+      <button id="editTaskDetail" class="copy-button" type="button" data-i18n="editTask">编辑</button>
+      <button id="cancelTaskEdit" class="copy-button" type="button" data-i18n="cancel" hidden>取消</button>
+      <button id="saveTaskDetail" class="commit-button" type="button" data-i18n="saveTask" hidden>保存</button>
+      <button id="closeTaskDetail" class="copy-button" type="button" data-i18n="close">关闭</button>
+    </div>
+  </div>
+</div>
+
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
@@ -2041,7 +2590,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, touchCommit: null, lastTouchCommitAt: 0, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -2108,6 +2657,10 @@ var I18N = {
     updateExternalFailed: '更新外部访问设置失败：',
     openFinderFailed: '在 Finder 中打开失败：',
     finderLocalOnly: '仅从 127.0.0.1 访问时可以在 Finder 中打开。',
+    openTerminal: '在终端中打开',
+    openTerminalPrefix: '在终端中打开：',
+    terminalLocalOnly: '仅从 127.0.0.1 访问时可以打开终端。',
+    openTerminalFailed: '打开终端失败：',
     cleanWorkingTree: '工作区干净。',
     all: '全部',
     restore: '还原',
@@ -2151,7 +2704,44 @@ var I18N = {
     restoreConfirmSuffix: ' 个文件中的更改吗？',
     restoringSelected: '正在还原已选择文件...',
     restoredPrefix: '已还原 ',
-    restoredSuffix: ' 个文件。'
+    restoredSuffix: ' 个文件。',
+    gitView: 'Git',
+    taskView: 'Task',
+    taskBoardTitle: '仓库任务看板',
+    taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。这里先保持轻量，只管理标题、内容和状态。',
+    tasksCount: '个任务',
+    taskStorage: '存储',
+    refreshTasks: '刷新',
+    newTask: '新建任务',
+    taskTitle: '标题',
+    taskContent: '内容',
+    taskTitlePlaceholder: '例如：完善移动端任务看板',
+    taskContentPlaceholder: '写下背景、想法或验收标准。支持 Markdown。',
+    createTask: '创建任务',
+    creatingTask: '创建中...',
+    loadingTasks: '正在加载任务...',
+    taskLoadFailed: '任务加载失败：',
+    taskCreateFailed: '任务创建失败：',
+    taskUpdateFailed: '任务更新失败：',
+    noTasksInColumn: '这一列还没有任务',
+    noRepoForTasks: '请先选择一个 Git 仓库来使用任务看板。',
+    taskStatusTodo: '待办',
+    taskStatusDoing: '进行中',
+    taskStatusReview: '待确认',
+    taskStatusDone: '已完成',
+    moveTaskLeft: '前移',
+    moveTaskRight: '后移',
+    taskUpdatedJustNow: '刚刚更新',
+    taskContentEmpty: '没有内容。点击新建任务时可以写下背景或验收标准。',
+    deleteTask: '删除任务',
+    deleteTaskConfirmPrefix: '确定要删除任务 ',
+    deleteTaskConfirmSuffix: ' 吗？\\n\\n这会删除仓库中的任务文件。',
+    taskDeleteFailed: '任务删除失败：',
+    taskDetail: '任务详情',
+    editTask: '编辑',
+    saveTask: '保存',
+    savingTask: '保存中...',
+    taskSaveFailed: '任务保存失败：'
   },
   en: {
     language: 'Language',
@@ -2218,6 +2808,10 @@ var I18N = {
     updateExternalFailed: 'Failed to update External Access settings: ',
     openFinderFailed: 'Open in Finder failed: ',
     finderLocalOnly: 'Finder opening is available only from 127.0.0.1.',
+    openTerminal: 'Open in Terminal',
+    openTerminalPrefix: 'Open in Terminal: ',
+    terminalLocalOnly: 'Terminal opening is available only from 127.0.0.1.',
+    openTerminalFailed: 'Open in Terminal failed: ',
     cleanWorkingTree: 'Clean working tree.',
     all: 'All',
     restore: 'Restore',
@@ -2261,11 +2855,54 @@ var I18N = {
     restoreConfirmSuffix: ' file(s)?',
     restoringSelected: 'Restoring selected files...',
     restoredPrefix: 'Restored ',
-    restoredSuffix: ' file(s).'
+    restoredSuffix: ' file(s).',
+    gitView: 'Git',
+    taskView: 'Tasks',
+    taskBoardTitle: 'Repository Task Board',
+    taskBoardIntro: 'Tasks are stored in .gmc/tasks inside this repository and travel with the code. This first version stays lightweight: title, content, and status.',
+    tasksCount: 'tasks',
+    taskStorage: 'Storage',
+    refreshTasks: 'Refresh',
+    newTask: 'New Task',
+    taskTitle: 'Title',
+    taskContent: 'Content',
+    taskTitlePlaceholder: 'Example: polish the mobile task board',
+    taskContentPlaceholder: 'Write context, notes, or acceptance criteria. Markdown is supported.',
+    createTask: 'Create Task',
+    creatingTask: 'Creating...',
+    loadingTasks: 'Loading tasks...',
+    taskLoadFailed: 'Failed to load tasks: ',
+    taskCreateFailed: 'Failed to create task: ',
+    taskUpdateFailed: 'Failed to update task: ',
+    noTasksInColumn: 'No tasks in this lane yet',
+    noRepoForTasks: 'Select a Git repository before using the task board.',
+    taskStatusTodo: 'Todo',
+    taskStatusDoing: 'Doing',
+    taskStatusReview: 'Review',
+    taskStatusDone: 'Done',
+    moveTaskLeft: 'Move left',
+    moveTaskRight: 'Move right',
+    taskUpdatedJustNow: 'Updated just now',
+    taskContentEmpty: 'No content yet. Add context or acceptance criteria when creating a task.',
+    deleteTask: 'Delete task',
+    deleteTaskConfirmPrefix: 'Delete task ',
+    deleteTaskConfirmSuffix: '?\\n\\nThis removes the task file from the repository.',
+    taskDeleteFailed: 'Failed to delete task: ',
+    taskDetail: 'Task detail',
+    editTask: 'Edit',
+    saveTask: 'Save',
+    savingTask: 'Saving...',
+    taskSaveFailed: 'Failed to save task: '
   }
 };
 var currentLanguage = normalizeLanguage(localStorage.getItem('gmc_language') || (navigator.language || ''));
 var $ = function(id) { return document.getElementById(id); };
+var TASK_BOARD_STATUSES = [
+  { id: 'todo', label: 'taskStatusTodo', color: '#0284c7' },
+  { id: 'doing', label: 'taskStatusDoing', color: '#16a34a' },
+  { id: 'review', label: 'taskStatusReview', color: '#d97706' },
+  { id: 'done', label: 'taskStatusDone', color: '#64748b' }
+];
 
 function normalizeLanguage(value) {
   return String(value || '').toLowerCase().indexOf('zh') === 0 ? 'zh-CN' : 'en';
@@ -2287,14 +2924,19 @@ function applyLanguage() {
   document.querySelectorAll('[data-i18n-aria-label]').forEach(function(node) {
     node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria-label')));
   });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(function(node) {
+    node.setAttribute('placeholder', t(node.getAttribute('data-i18n-placeholder')));
+  });
   var label = $('languageButtonLabel');
   if (label) label.textContent = t('languageButton');
   document.querySelectorAll('[data-lang-option]').forEach(function(button) {
     button.classList.toggle('active', button.getAttribute('data-lang-option') === currentLanguage);
   });
   updateReadmeLink();
+  updateRepoLink(state.repoPathText || targetRepo || t('repoRunning'), targetRepo);
   renderSidebar();
   renderSecurityControls();
+  renderTaskBoard();
   if (targetRepo) {
     if ($('upstream').dataset.empty === 'true') $('upstream').textContent = t('noUpstream');
     renderFiles(state.files || []);
@@ -2344,6 +2986,506 @@ function bindLanguageControls() {
   });
 }
 
+function bindViewTabs() {
+  document.querySelectorAll('[data-view-tab]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      setActiveView(button.getAttribute('data-view-tab'));
+    });
+  });
+}
+
+function setActiveView(view) {
+  view = view === 'tasks' ? 'tasks' : 'git';
+  state.settingsOpen = false;
+  state.activeView = view;
+  var gitPage = $('gitPage');
+  var taskPage = $('taskPage');
+  var accessPage = $('accessSettingsPage');
+  var tabs = document.querySelector('.view-tabs');
+  if (accessPage) accessPage.hidden = true;
+  if (tabs) tabs.hidden = false;
+  if (gitPage) gitPage.hidden = view !== 'git';
+  if (taskPage) taskPage.hidden = view !== 'tasks';
+  document.querySelectorAll('[data-view-tab]').forEach(function(button) {
+    button.classList.toggle('active', button.getAttribute('data-view-tab') === view);
+  });
+  if (view === 'tasks') {
+    loadRepositoryTasks();
+  } else {
+    refreshLayoutSoon();
+  }
+}
+
+function bindTaskControls() {
+  var refresh = $('refreshTasks');
+  var openComposer = $('openTaskComposer');
+  var cancelComposer = $('cancelTaskComposer');
+  var form = $('taskComposer');
+  if (refresh) refresh.addEventListener('click', function() { loadRepositoryTasks({ force: true }); });
+  if (openComposer) openComposer.addEventListener('click', function() { showTaskComposer(true); });
+  if (cancelComposer) cancelComposer.addEventListener('click', function() { showTaskComposer(false); });
+  if (form) {
+    form.addEventListener('submit', function(event) {
+      event.preventDefault();
+      createTaskFromForm();
+    });
+  }
+}
+
+function showTaskComposer(open) {
+  var form = $('taskComposer');
+  if (!form) return;
+  form.hidden = !open;
+  if (open) {
+    setTaskError('');
+    window.setTimeout(function() {
+      var title = $('taskTitleInput');
+      if (title) title.focus();
+    }, 0);
+  }
+}
+
+function loadRepositoryTasks(options) {
+  options = options || {};
+  if (!targetRepo) {
+    state.repoTasks = [];
+    state.tasksLoaded = true;
+    renderTaskBoard();
+    return Promise.resolve([]);
+  }
+  if (state.taskLoading) return Promise.resolve(state.repoTasks);
+  if (state.tasksLoaded && !options.force) {
+    renderTaskBoard();
+    return Promise.resolve(state.repoTasks);
+  }
+
+  state.taskLoading = true;
+  renderTaskBoard();
+  return fetch('/api/tasks?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      state.tasksLoaded = true;
+      var storage = $('taskStoragePath');
+      if (storage) storage.textContent = data.directory || '.gmc/tasks';
+      setTaskError('');
+      renderTaskBoard();
+      return state.repoTasks;
+    })
+    .catch(function(error) {
+      setTaskError(t('taskLoadFailed') + error.message);
+      renderTaskBoard();
+      return state.repoTasks;
+    })
+    .finally(function() {
+      state.taskLoading = false;
+      renderTaskBoard();
+    });
+}
+
+function createTaskFromForm() {
+  if (!targetRepo) {
+    setTaskError(t('noRepoForTasks'));
+    return;
+  }
+  var title = $('taskTitleInput');
+  var content = $('taskContentInput');
+  var button = $('createTaskButton');
+  var titleValue = title ? title.value.trim() : '';
+  var contentValue = content ? content.value.trim() : '';
+  if (!titleValue) {
+    if (title) title.focus();
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = t('creatingTask');
+  }
+  fetch('/api/tasks/create?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: titleValue, content: contentValue, status: 'todo' })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      state.tasksLoaded = true;
+      if (title) title.value = '';
+      if (content) content.value = '';
+      showTaskComposer(false);
+      setTaskError('');
+      renderTaskBoard();
+    })
+    .catch(function(error) {
+      setTaskError(t('taskCreateFailed') + error.message);
+    })
+    .finally(function() {
+      if (button) {
+        button.disabled = false;
+        button.textContent = t('createTask');
+      }
+    });
+}
+
+function updateTaskStatus(taskId, status) {
+  if (!targetRepo || !taskId || !status) return;
+  setTaskError('');
+  return fetch('/api/tasks/update?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: taskId, status: status })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      renderTaskBoard();
+    })
+    .catch(function(error) {
+      setTaskError(t('taskUpdateFailed') + error.message);
+      loadRepositoryTasks({ force: true });
+    });
+}
+
+function deleteTask(taskId) {
+  if (!targetRepo || !taskId) return;
+  if (!confirm(t('deleteTaskConfirmPrefix') + taskId + t('deleteTaskConfirmSuffix'))) return;
+  setTaskError('');
+  return fetch('/api/tasks/delete?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: taskId })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      renderTaskBoard();
+    })
+    .catch(function(error) {
+      setTaskError(t('taskDeleteFailed') + error.message);
+      loadRepositoryTasks({ force: true });
+    });
+}
+
+function moveTask(taskId, direction) {
+  var task = findRepoTask(taskId);
+  if (!task) return;
+  var index = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(task.status);
+  var next = TASK_BOARD_STATUSES[index + direction];
+  if (next) updateTaskStatus(taskId, next.id);
+}
+
+function findRepoTask(taskId) {
+  return (state.repoTasks || []).find(function(task) { return task.id === taskId; });
+}
+
+function taskStatusMeta(status) {
+  return TASK_BOARD_STATUSES.find(function(item) { return item.id === status; }) || TASK_BOARD_STATUSES[0];
+}
+
+function renderTaskBoard() {
+  var board = $('taskBoard');
+  if (!board) return;
+  var total = $('taskTotalCount');
+  if (total) total.textContent = String((state.repoTasks || []).length);
+
+  if (!targetRepo) {
+    board.innerHTML = '<div class="task-board-loading">' + escapeHtml(t('noRepoForTasks')) + '</div>';
+    return;
+  }
+  if (state.taskLoading && !state.tasksLoaded) {
+    board.innerHTML = '<div class="task-board-loading">' + escapeHtml(t('loadingTasks')) + '</div>';
+    return;
+  }
+
+  board.innerHTML = TASK_BOARD_STATUSES.map(function(column) {
+    var tasks = (state.repoTasks || []).filter(function(task) { return task.status === column.id; });
+    var cards = tasks.length ? tasks.map(function(task) {
+      return taskCardHtml(task, column);
+    }).join('') : '<div class="task-empty">' + escapeHtml(t('noTasksInColumn')) + '</div>';
+    return '<section class="task-column" data-task-status="' + escapeHtml(column.id) + '" style="--task-color:' + escapeHtml(column.color) + '">' +
+      '<div class="task-column-head">' +
+        '<div class="task-column-title"><span class="task-dot"></span><span>' + escapeHtml(t(column.label)) + '</span></div>' +
+        '<div class="task-count">' + tasks.length + '</div>' +
+      '</div>' +
+      '<div class="task-column-body">' + cards + '</div>' +
+    '</section>';
+  }).join('');
+  bindRenderedTaskBoard();
+}
+
+function taskCardHtml(task, column) {
+  var statusIndex = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(task.status);
+  var canMoveLeft = statusIndex > 0;
+  var canMoveRight = statusIndex < TASK_BOARD_STATUSES.length - 1;
+  var summary = taskSummary(task.content);
+  return '<article class="task-card" draggable="true" data-task-id="' + escapeHtml(task.id) + '" style="--task-color:' + escapeHtml(column.color) + '">' +
+    '<button class="task-remove" type="button" title="' + escapeHtml(t('deleteTask')) + '" aria-label="' + escapeHtml(t('deleteTask') + ' ' + task.id) + '" data-task-delete="' + escapeHtml(task.id) + '">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+    '</button>' +
+    '<div class="task-card-band">' +
+      '<span class="task-id">' + escapeHtml(task.id) + '</span>' +
+    '</div>' +
+    '<button class="task-title-button" type="button" data-task-detail="' + escapeHtml(task.id) + '">' + escapeHtml(task.title || task.id) + '</button>' +
+    '<p>' + escapeHtml(summary || t('taskContentEmpty')) + '</p>' +
+    '<div class="task-card-footer">' +
+      '<span>' + escapeHtml(formatTaskUpdated(task.updated || task.created)) + '</span>' +
+      '<span class="task-card-actions">' +
+        '<button class="task-mini-button" type="button" data-task-move="-1" title="' + escapeHtml(t('moveTaskLeft')) + '"' + (canMoveLeft ? '' : ' disabled') + '>‹</button>' +
+        '<button class="task-mini-button" type="button" data-task-move="1" title="' + escapeHtml(t('moveTaskRight')) + '"' + (canMoveRight ? '' : ' disabled') + '>›</button>' +
+      '</span>' +
+    '</div>' +
+  '</article>';
+}
+
+function bindRenderedTaskBoard() {
+  document.querySelectorAll('.task-card').forEach(function(card) {
+    card.addEventListener('dragstart', function(event) {
+      state.draggedTaskId = card.getAttribute('data-task-id');
+      card.classList.add('dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', state.draggedTaskId);
+      }
+    });
+    card.addEventListener('dragend', function() {
+      state.draggedTaskId = '';
+      card.classList.remove('dragging');
+      document.querySelectorAll('.task-column.drag-over').forEach(function(column) {
+        column.classList.remove('drag-over');
+      });
+    });
+    card.querySelectorAll('[data-task-delete]').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteTask(button.getAttribute('data-task-delete'));
+      });
+    });
+    card.querySelectorAll('[data-task-detail]').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        showTaskDetail(button.getAttribute('data-task-detail'));
+      });
+    });
+    card.querySelectorAll('[data-task-move]').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveTask(card.getAttribute('data-task-id'), Number(button.getAttribute('data-task-move')) || 0);
+      });
+    });
+  });
+  document.querySelectorAll('.task-column').forEach(function(column) {
+    column.addEventListener('dragover', function(event) {
+      event.preventDefault();
+      column.classList.add('drag-over');
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    });
+    column.addEventListener('dragleave', function(event) {
+      if (!column.contains(event.relatedTarget)) column.classList.remove('drag-over');
+    });
+    column.addEventListener('drop', function(event) {
+      event.preventDefault();
+      column.classList.remove('drag-over');
+      var taskId = state.draggedTaskId || event.dataTransfer && event.dataTransfer.getData('text/plain');
+      var status = column.getAttribute('data-task-status');
+      var task = findRepoTask(taskId);
+      if (task && task.status !== status) updateTaskStatus(taskId, status);
+    });
+  });
+}
+
+function taskSummary(content) {
+  return String(content || '').replace(/\s+/g, ' ').trim();
+}
+
+function showTaskDetail(taskId) {
+  var task = findRepoTask(taskId);
+  if (!task) return;
+  var modal = $('taskDetailModal');
+  if (!modal) return;
+  state.activeTaskId = task.id;
+  setTaskDetailEditing(false);
+  renderTaskDetail(task);
+  modal.classList.add('visible');
+  $('closeTaskDetail').focus();
+}
+
+function renderTaskDetail(task) {
+  if (!task) return;
+  var meta = taskStatusMeta(task.status);
+  $('taskDetailId').textContent = task.id;
+  $('taskDetailStatus').textContent = t(meta.label);
+  $('taskDetailStatus').style.setProperty('--task-color', meta.color);
+  $('taskDetailUpdated').textContent = formatTaskUpdated(task.updated || task.created);
+  $('taskDetailTitle').textContent = task.title || task.id;
+  renderTaskMarkdown($('taskDetailBody'), task.content || t('taskContentEmpty'));
+}
+
+function hideTaskDetail() {
+  var modal = $('taskDetailModal');
+  if (modal) modal.classList.remove('visible');
+  state.activeTaskId = '';
+  setTaskDetailEditing(false);
+}
+
+function setTaskDetailEditing(editing) {
+  state.taskDetailEditing = editing === true;
+  var task = findRepoTask(state.activeTaskId);
+  var body = $('taskDetailBody');
+  var form = $('taskDetailEdit');
+  var editButton = $('editTaskDetail');
+  var cancelButton = $('cancelTaskEdit');
+  var saveButton = $('saveTaskDetail');
+  if (body) body.hidden = state.taskDetailEditing;
+  if (form) form.hidden = !state.taskDetailEditing;
+  if (editButton) editButton.hidden = state.taskDetailEditing;
+  if (cancelButton) cancelButton.hidden = !state.taskDetailEditing;
+  if (saveButton) saveButton.hidden = !state.taskDetailEditing;
+  if (state.taskDetailEditing && task) {
+    $('taskDetailTitleInput').value = task.title || '';
+    $('taskDetailContentInput').value = task.content || '';
+    window.setTimeout(function() { $('taskDetailTitleInput').focus(); }, 0);
+  }
+}
+
+function saveTaskDetail() {
+  var task = findRepoTask(state.activeTaskId);
+  if (!task) return;
+  var titleInput = $('taskDetailTitleInput');
+  var contentInput = $('taskDetailContentInput');
+  var saveButton = $('saveTaskDetail');
+  var title = titleInput ? titleInput.value.trim() : '';
+  var content = contentInput ? contentInput.value.trim() : '';
+  if (!title) {
+    if (titleInput) titleInput.focus();
+    return;
+  }
+  if (saveButton) {
+    saveButton.disabled = true;
+    saveButton.textContent = t('savingTask');
+  }
+  fetch('/api/tasks/update?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: task.id, title: title, content: content })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      var updated = data.task || findRepoTask(task.id);
+      renderTaskBoard();
+      renderTaskDetail(updated);
+      setTaskDetailEditing(false);
+      setTaskError('');
+    })
+    .catch(function(error) {
+      setTaskError(t('taskSaveFailed') + error.message);
+    })
+    .finally(function() {
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = t('saveTask');
+      }
+    });
+}
+
+function renderTaskMarkdown(target, markdown) {
+  if (!target) return;
+  if (!window.marked || !window.marked.parse) {
+    target.textContent = markdown || '';
+    return;
+  }
+  target.innerHTML = sanitizeTaskHtml(window.marked.parse(markdown || '', { gfm: true, breaks: false }));
+  target.querySelectorAll('a[href]').forEach(function(link) {
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noreferrer');
+  });
+}
+
+function sanitizeTaskHtml(html) {
+  var template = document.createElement('template');
+  template.innerHTML = html || '';
+  var allowedTags = {
+    A: true, BLOCKQUOTE: true, BR: true, CODE: true, DEL: true, EM: true, H1: true, H2: true,
+    H3: true, H4: true, HR: true, LI: true, OL: true, P: true, PRE: true, STRONG: true,
+    TABLE: true, TBODY: true, TD: true, TH: true, THEAD: true, TR: true, UL: true
+  };
+  var allowedAttrs = {
+    A: { href: true, title: true },
+    TH: { align: true },
+    TD: { align: true }
+  };
+  Array.prototype.slice.call(template.content.querySelectorAll('*')).forEach(function(node) {
+    if (!allowedTags[node.tagName]) {
+      node.replaceWith(document.createTextNode(node.textContent || ''));
+      return;
+    }
+    Array.prototype.slice.call(node.attributes).forEach(function(attr) {
+      var attrs = allowedAttrs[node.tagName] || {};
+      var name = attr.name.toLowerCase();
+      if (!attrs[attr.name] || name.indexOf('on') === 0) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+      if (node.tagName === 'A' && attr.name === 'href' && !isSafeTaskHref(attr.value)) {
+        node.removeAttribute(attr.name);
+      }
+    });
+  });
+  return template.innerHTML;
+}
+
+function isSafeTaskHref(value) {
+  var href = String(value || '').trim().toLowerCase();
+  return href.indexOf('http://') === 0 ||
+    href.indexOf('https://') === 0 ||
+    href.indexOf('mailto:') === 0 ||
+    href.charAt(0) === '#';
+}
+
+function formatTaskUpdated(value) {
+  var time = value ? new Date(value) : null;
+  if (!time || Number.isNaN(time.getTime())) return t('taskUpdatedJustNow');
+  var diff = Date.now() - time.getTime();
+  if (diff >= 0 && diff < 60 * 1000) return t('taskUpdatedJustNow');
+  return time.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function setTaskError(message) {
+  var target = $('taskError');
+  if (!target) return;
+  target.textContent = message || '';
+  target.classList.toggle('visible', !!message);
+}
+
 function updateReadmeLink() {
   var link = $('readmeLink');
   if (!link) return;
@@ -2359,6 +3501,7 @@ function updateReadmeLink() {
 function updateRepoLink(text, repoPath) {
   var link = $('repo');
   if (!link) return;
+  state.repoPathText = text;
   link.textContent = text;
   if (repoPath && canOpenRepositoryLocally()) {
     link.href = '#';
@@ -2371,6 +3514,16 @@ function updateRepoLink(text, repoPath) {
       link.removeAttribute('title');
     }
   }
+  updateTerminalButton(repoPath);
+}
+
+function updateTerminalButton(repoPath) {
+  var button = $('openTerminal');
+  if (!button) return;
+  var canOpen = !!(repoPath && canOpenRepositoryLocally());
+  button.hidden = !canOpen;
+  button.title = canOpen ? (t('openTerminalPrefix') + repoPath) : t('terminalLocalOnly');
+  button.setAttribute('aria-label', t('openTerminal'));
 }
 
 function openCurrentRepository(event) {
@@ -2386,6 +3539,22 @@ function openCurrentRepository(event) {
     })
     .catch(function(error) {
       alert(t('openFinderFailed') + error.message);
+    });
+}
+
+function openCurrentTerminal(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-terminal?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      alert(t('openTerminalFailed') + error.message);
     });
 }
 
@@ -2562,18 +3731,32 @@ function initSecurityControls() {
   $('copyAccessUrl').addEventListener('click', copyAccessUrl);
   $('cancelRotateToken').addEventListener('click', hideTokenConfirmModal);
   $('confirmRotateToken').addEventListener('click', rotateToken);
+  $('editTaskDetail').addEventListener('click', function() { setTaskDetailEditing(true); });
+  $('cancelTaskEdit').addEventListener('click', function() { setTaskDetailEditing(false); });
+  $('saveTaskDetail').addEventListener('click', saveTaskDetail);
+  $('closeTaskDetail').addEventListener('click', hideTaskDetail);
   $('tokenConfirmModal').addEventListener('click', function(event) {
     if (event.target === $('tokenConfirmModal')) hideTokenConfirmModal();
   });
+  $('taskDetailModal').addEventListener('click', function(event) {
+    if (event.target === $('taskDetailModal')) hideTaskDetail();
+  });
   document.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape') hideTokenConfirmModal();
+    if (event.key === 'Escape') {
+      hideTokenConfirmModal();
+      hideTaskDetail();
+    }
   });
   loadSecuritySettings();
 }
 
 function openAccessSettings() {
   state.settingsOpen = true;
-  $('dashboardPage').hidden = true;
+  state.previousViewBeforeSettings = state.activeView || 'git';
+  var tabs = document.querySelector('.view-tabs');
+  if (tabs) tabs.hidden = true;
+  if ($('gitPage')) $('gitPage').hidden = true;
+  if ($('taskPage')) $('taskPage').hidden = true;
   $('accessSettingsPage').hidden = false;
   renderSecurityControls();
   renderAccessQr();
@@ -2583,8 +3766,7 @@ function openAccessSettings() {
 function closeAccessSettings() {
   state.settingsOpen = false;
   $('accessSettingsPage').hidden = true;
-  $('dashboardPage').hidden = false;
-  refreshLayoutSoon();
+  setActiveView(state.previousViewBeforeSettings || 'git');
 }
 
 function loadSecuritySettings() {
@@ -2870,6 +4052,8 @@ function setPageTitle(repoPath) {
 
 setPageTitle(targetRepo);
 bindLanguageControls();
+bindViewTabs();
+bindTaskControls();
 applyLanguage();
 initSecurityControls();
 
@@ -2884,6 +4068,7 @@ if (!targetRepo) {
 }
 
 $('repo').addEventListener('click', openCurrentRepository);
+$('openTerminal').addEventListener('click', openCurrentTerminal);
 $('sidebarToggle').addEventListener('click', toggleSidebar);
 $('sidebarClose').addEventListener('click', toggleSidebar);
 
@@ -3505,7 +4690,7 @@ function renderCommits(commits) {
         '<svg class="ai-status-sparkles" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l1.8 5.1 5.1 1.8-5.1 1.8-1.8 5.1-1.8-5.1-5.1-1.8 5.1-1.8L12 2.5z"></path><path d="M5.4 14.2l.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5z"></path></svg>' +
       '</span>';
     }
-    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '" onmouseenter="showCommit(\\'' + c.hash + '\\', this)" onmouseleave="hideCommit()"><div><div class="subject">' + escapeHtml(c.subject || '(' + t('noSubject') + ')') + aiStatus + '</div><div class="meta"><span class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</span> &bull; ' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
+    return '<article class="commit" role="button" tabindex="0" data-oid="' + escapeHtml(c.hash) + '"><div><div class="subject">' + escapeHtml(c.subject || '(' + t('noSubject') + ')') + aiStatus + '</div><div class="meta"><span class="hash" style="color:' + cColor + '">' + escapeHtml(c.shortHash) + '</span> &bull; ' + escapeHtml(c.author) + ' &bull; ' + escapeHtml(date) + (bName ? ' &bull; ' + escapeHtml(bName) : '') + '</div></div></article>';
   }).join('');
 }
 
@@ -3608,7 +4793,7 @@ function renderGraph(commits) {
 
   nodes.forEach(function(node) {
     var cx = getX(node.x), cy = node.y;
-    svgHTML += '<circle cx="' + cx + '" cy="' + cy + '" r="' + nodeRadius + '" fill="' + node.color + '" stroke="#ffffff" stroke-width="2" class="node" data-oid="' + escapeHtml(node.hash) + '" onmouseenter="showCommit(\\'' + node.hash + '\\', this)" onmouseleave="hideCommit()" />';
+    svgHTML += '<circle cx="' + cx + '" cy="' + cy + '" r="' + nodeRadius + '" fill="' + node.color + '" stroke="#ffffff" stroke-width="2" class="node" role="button" tabindex="0" data-oid="' + escapeHtml(node.hash) + '" />';
   });
 
   if (graphBox) graphBox.style.setProperty('--graph-width', graphWidth + 'px');
@@ -3628,7 +4813,6 @@ function bindCommitDetailEvents() {
   timeline.addEventListener('click', function(event) {
     var target = commitDetailTarget(event);
     if (!target) return;
-    if (Date.now() - state.lastTouchCommitAt < 500) return;
     event.preventDefault();
     showCommit(target.getAttribute('data-oid'), target, true);
   });
@@ -3640,36 +4824,6 @@ function bindCommitDetailEvents() {
     event.preventDefault();
     showCommit(target.getAttribute('data-oid'), target, true);
   });
-
-  timeline.addEventListener('touchstart', function(event) {
-    var target = commitDetailTarget(event);
-    if (!target || !event.touches || !event.touches.length) return;
-    var touch = event.touches[0];
-    state.touchCommit = {
-      target: target,
-      oid: target.getAttribute('data-oid'),
-      x: touch.clientX,
-      y: touch.clientY,
-      moved: false
-    };
-  }, { passive: true });
-
-  timeline.addEventListener('touchmove', function(event) {
-    if (!state.touchCommit || !event.touches || !event.touches.length) return;
-    var touch = event.touches[0];
-    if (Math.abs(touch.clientX - state.touchCommit.x) > 10 || Math.abs(touch.clientY - state.touchCommit.y) > 10) {
-      state.touchCommit.moved = true;
-    }
-  }, { passive: true });
-
-  timeline.addEventListener('touchend', function() {
-    if (!state.touchCommit) return;
-    var touchCommit = state.touchCommit;
-    state.touchCommit = null;
-    if (touchCommit.moved) return;
-    state.lastTouchCommitAt = Date.now();
-    showCommit(touchCommit.oid, touchCommit.target, true);
-  }, { passive: true });
 }
 
 function commitDetailTarget(event) {
@@ -3682,7 +4836,6 @@ function commitDetailTarget(event) {
 
 window.showCommit = function(oid, trigger, pinned) {
   if (!targetRepo) return;
-  if (!pinned && Date.now() - state.lastTouchCommitAt < 800) return;
   state.detailPinned = !!pinned;
   clearTimeout(state.hideTimer);
   var token = ++state.detailToken;
@@ -3791,8 +4944,13 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .shell { width: min(980px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 40px; }
 .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-height: 1.12; }
-.repo { display: block; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; text-decoration: none; }
+.repo-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 4px; }
+.repo { display: block; min-width: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow-wrap: anywhere; text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.repo-terminal-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
+.repo-terminal-button[hidden] { display: none; }
+.repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
+.repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
 .button { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; white-space: nowrap; }
 .button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
@@ -3827,7 +4985,12 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
   <header class="topbar">
     <div>
       <h1 id="title">README</h1>
-      <a id="repo" class="repo"></a>
+      <div class="repo-line">
+        <a id="repo" class="repo"></a>
+        <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
+        </button>
+      </div>
     </div>
     <a id="backLink" class="button" href="/">Back to GitWeb</a>
   </header>
@@ -3860,7 +5023,11 @@ var README_I18N = {
     failedPrefix: 'README 加载失败：',
     openInFinderPrefix: '在 Finder 中打开：',
     finderLocalOnly: '仅从 127.0.0.1 访问时可以在 Finder 中打开。',
-    openFinderFailed: '在 Finder 中打开失败：'
+    openFinderFailed: '在 Finder 中打开失败：',
+    openTerminal: '在终端中打开',
+    openTerminalPrefix: '在终端中打开：',
+    terminalLocalOnly: '仅从 127.0.0.1 访问时可以打开终端。',
+    openTerminalFailed: '打开终端失败：'
   },
   en: {
     back: 'Back to GitWeb',
@@ -3869,7 +5036,11 @@ var README_I18N = {
     failedPrefix: 'Failed to load README: ',
     openInFinderPrefix: 'Open in Finder: ',
     finderLocalOnly: 'Finder opening is available only from 127.0.0.1.',
-    openFinderFailed: 'Open in Finder failed: '
+    openFinderFailed: 'Open in Finder failed: ',
+    openTerminal: 'Open in Terminal',
+    openTerminalPrefix: 'Open in Terminal: ',
+    terminalLocalOnly: 'Terminal opening is available only from 127.0.0.1.',
+    openTerminalFailed: 'Open in Terminal failed: '
   }
 };
 var currentLanguage = String(localStorage.getItem('gmc_language') || navigator.language || '').toLowerCase().indexOf('zh') === 0 ? 'zh-CN' : 'en';
@@ -3879,6 +5050,7 @@ bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('loading')) + '</div>';
 updateRepoLink(targetRepo || rt('noRepositorySelected'), targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
 document.getElementById('repo').addEventListener('click', openCurrentRepository);
+document.getElementById('openTerminal').addEventListener('click', openCurrentTerminal);
 
 if (!targetRepo) {
   bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('noRepositorySelected')) + '</div>';
@@ -3941,6 +5113,16 @@ function updateRepoLink(text, repoPath) {
       link.removeAttribute('title');
     }
   }
+  updateTerminalButton(repoPath);
+}
+
+function updateTerminalButton(repoPath) {
+  var button = document.getElementById('openTerminal');
+  if (!button) return;
+  var canOpen = !!(repoPath && canOpenRepositoryLocally());
+  button.hidden = !canOpen;
+  button.title = canOpen ? (rt('openTerminalPrefix') + repoPath) : rt('terminalLocalOnly');
+  button.setAttribute('aria-label', rt('openTerminal'));
 }
 
 function openCurrentRepository(event) {
@@ -3956,6 +5138,22 @@ function openCurrentRepository(event) {
     })
     .catch(function(error) {
       alert(rt('openFinderFailed') + error.message);
+    });
+}
+
+function openCurrentTerminal(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-terminal?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      alert(rt('openTerminalFailed') + error.message);
     });
 }
 

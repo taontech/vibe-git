@@ -1,6 +1,6 @@
 # GMC
 
-> A local Git workbench for AI-assisted development. Start with `gmc web`: a visual dashboard for branches, changes, commit history, and AI-generated commit messages.
+> A local Git workbench for AI-assisted development. Start with `gmc web`: a visual dashboard for Git state, repository tasks, changes, commit history, and AI-generated commit messages.
 
 [简体中文](./README.zh-CN.md) | English
 
@@ -15,7 +15,8 @@
 | Current branch, upstream, ahead/behind counts | Know whether you should push, pull, or keep working before you commit. |
 | Working tree with selectable files | Commit the intended files without staging unrelated changes by accident. |
 | Branch tree and recent commit graph | Understand where the current work sits in repository history. |
-| Commit details on hover | Inspect a full commit message and file summary without leaving the page. |
+| Clickable commit details | Inspect a full commit message and file summary without leaving the page. |
+| Repository task board | Keep lightweight tasks in `.gmc/tasks`, so tasks travel with the code. |
 | Background GMC task status | Track AI commit-message rewrites from the same place you review the repo. |
 
 ```mermaid
@@ -26,6 +27,7 @@ flowchart LR
   D --> E["Commit with gmc hooks"]
   E --> F["AI-generated commit message"]
   B --> G["Inspect commits and branch graph"]
+  B --> H["Manage repo tasks"]
 ```
 
 ## Quick Start
@@ -87,7 +89,13 @@ Select changed files directly in the browser, then commit only those files. Untr
 
 ### Commit Graph
 
-The commit graph combines recent history with branch coloring, branch ownership, author/date metadata, and hoverable commit details. It gives a compact visual check before pushing work or reviewing a generated commit message.
+The commit graph combines recent history with branch coloring, author/date metadata, and clickable commit details. It gives a compact visual check before pushing work or reviewing a generated commit message.
+
+### Repository Task Board
+
+GMC Web includes a lightweight task board with Todo, Doing, Review, and Done lanes. Tasks are stored as Markdown files under `.gmc/tasks`, so they can be committed, reviewed, pushed, and pulled with the repository.
+
+Each task keeps a simple title and Markdown content. The board shows compact cards for scanning, while the task detail dialog renders the full Markdown and lets you edit it.
 
 ### AI Commit Messages
 
@@ -117,7 +125,6 @@ git commit -m gmc
 - Node.js 18 or newer
 - `codex` CLI for AI commit-message generation
 - Optional: `claude` CLI for future agent workflows
-- Optional: `GITHUB_TOKEN` or `GH_TOKEN` for GitHub API access when issue features are enabled
 
 If Codex inherits an incompatible model from your user config, set:
 
@@ -139,34 +146,15 @@ export GMC_CODEX_TIMEOUT_MS=600000
 | `gmc web [--port 4277] [--no-open]` | Ready | Start or open the local GitWeb dashboard. |
 | `gmc install --all [--port 4277]` | Ready | Install hooks and create the local Web link. |
 | `gmc install-hooks` | Ready | Install only the non-blocking commit-message hooks. |
-| `gmc status` | Ready | Show repository binding and recent background tasks. |
+| `gmc status` | Ready | Show current repository status and recent background work. |
 | `gmc message` | Ready | Generate a commit message from staged changes. |
 | `gmc commit [--no-edit]` | Ready | Generate a message and commit staged changes. |
 | `gmc retry [commit]` | Ready | Queue another background message attempt. |
-| `gmc <issue>` / `gmc bind <issue>` | Later | Issue-centered sessions are being redesigned and are not the main workflow yet. |
 
 ## Safety Model
 
 - GMC Web serves `127.0.0.1` only.
 - Credentials are read from environment variables and are not written to the repository.
-- Issue bindings, when used, are stored in local Git config and `.git/gmc/current.json`.
+- Repository tasks are ordinary Markdown files under `.gmc/tasks`.
 - Background commit-message rewrites only target the recorded commit while it is still `HEAD`.
 - Automatic rewrites are skipped during merge/rebase-style operations and for signed commits.
-
-## Later: Issue-Centered Workflows
-
-The original GMC direction was:
-
-```text
-GitHub Issue -> AI coding session -> branch binding -> commit message trailer
-```
-
-That flow still exists as an MVP command surface, but it is not complete enough to lead the product. The next issue-focused work should make issue discovery, branch binding, agent launch, and commit trailers visible and controllable from GMC Web instead of treating them as separate CLI-only steps.
-
-Planned areas:
-
-- Browse and select GitHub issues in the Web UI.
-- Create or switch issue branches from the dashboard.
-- Launch Codex or Claude with issue context.
-- Show the bound issue next to branch and commit state.
-- Keep `Issue: GH-123` trailers reliable without making the daily workflow depend on unfinished issue tooling.
