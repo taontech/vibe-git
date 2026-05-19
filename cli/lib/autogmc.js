@@ -7,6 +7,7 @@ var agent = require('./agent');
 var config = require('./config');
 var git = require('./git');
 var prompts = require('./prompts');
+var taskStatus = require('./task-status');
 
 var TASK_DIR = 'gmc/tasks';
 var LOG_DIR = 'gmc/logs';
@@ -22,6 +23,17 @@ function commitMsgHook(messageFile) {
   var message = cleanupCommitMessage(fs.readFileSync(messageFile, 'utf8'));
   if (message !== 'gmc') {
     return;
+  }
+
+  try {
+    var updates = taskStatus.updateForStagedCommit(root);
+    if (updates.updates.length) {
+      process.stderr.write('GMC >>> Updated task statuses: ' + updates.updates.map(function (item) {
+        return item.id + ' -> ' + item.status;
+      }).join(', ') + '\n');
+    }
+  } catch (error) {
+    process.stderr.write('GMC >>> Task status update skipped: ' + error.message + '\n');
   }
 
   writeGitJson(root, PENDING_FILE, {

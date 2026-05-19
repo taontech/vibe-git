@@ -12,6 +12,7 @@ var config = require('../lib/config');
 var prompts = require('../lib/prompts');
 var agent = require('../lib/agent');
 var autogmc = require('../lib/autogmc');
+var taskStatus = require('../lib/task-status');
 var web = require('../lib/web');
 var packageInfo = require('../package.json');
 
@@ -256,6 +257,7 @@ function generateMessageCommand(flags) {
 
 function commitCommand(flags) {
   var root = git.repoRoot(process.cwd());
+  var taskUpdates = taskStatus.updateForStagedCommit(root);
   var generated = generateCommitMessage(root, flags);
   var message = generated.message;
   var binding = generated.binding;
@@ -269,6 +271,11 @@ function commitCommand(flags) {
 
   git.runGit(['commit', '-F', messageFile], { cwd: root });
   console.log('Committed with message from ' + messageFile + '.');
+  if (taskUpdates.updates.length) {
+    console.log('Updated task statuses: ' + taskUpdates.updates.map(function (item) {
+      return item.id + ' -> ' + item.status;
+    }).join(', ') + '.');
+  }
 }
 
 function retryCommand(ref) {
@@ -699,7 +706,7 @@ function printHelp() {
     '  GMC_CODEX_TIMEOUT_MS overrides the Codex generation timeout.',
     '  GMC_GITWEB_PORT overrides the default local GitWeb port.',
     '  gmc install --all installs hooks and writes a repository-specific git.webloc.',
-    '  gmc install-hooks sets up Git hooks to automatically create background tasks for new commits and commit messages.',
+    '  gmc install-hooks sets up Git hooks for AI commit messages and task status updates.',
     '  gmc web serves the Git Web UI. If a server is already running, it will just open the current repository in the browser.',
     '  gmc web --start starts the Git Web UI in the background as a daemon.',
     '  gmc web --restart restarts the background Git Web UI daemon.',

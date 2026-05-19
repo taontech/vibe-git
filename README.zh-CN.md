@@ -97,6 +97,8 @@ GMC Web 提供轻量任务看板，包含待办、进行中、待确认和已完
 
 每个任务只保留简单标题和 Markdown 内容。看板卡片适合快速浏览，任务详情弹框会渲染完整 Markdown，并支持直接编辑。
 
+通过 `gmc commit`、GMC Web 或 `git commit -m gmc` 提交时，GMC 会让当前配置的 AI agent 对比 staged diff 和任务列表。相关任务会自动前进到 `doing`、`review` 或 `done`，被改动的任务 Markdown 文件会一起进入本次提交。
+
 ### AI Commit Message
 
 从 staged diff 生成 commit message：
@@ -124,7 +126,7 @@ git commit -m gmc
 - Git 仓库
 - Node.js 18 或更新版本
 - `codex` CLI，用于 AI commit message 生成
-- 可选：`claude` CLI，用于后续 agent 工作流
+- 可选：配置 `gmc agent claude` 时需要 `claude` CLI
 
 如果 Codex 继承了不兼容的用户配置模型，可以设置：
 
@@ -145,10 +147,10 @@ export GMC_CODEX_TIMEOUT_MS=600000
 | `gmc --version` | 可用 | 输出已安装 CLI 版本。 |
 | `gmc web [--port 4277] [--no-open]` | 可用 | 启动或打开本地 GitWeb Dashboard。 |
 | `gmc install --all [--port 4277]` | 可用 | 安装 hooks 并创建本地 Web 链接。 |
-| `gmc install-hooks` | 可用 | 只安装非阻塞 commit message hooks。 |
+| `gmc install-hooks` | 可用 | 安装 commit message 和任务状态 hooks。 |
 | `gmc status` | 可用 | 查看当前仓库状态和最近后台任务。 |
 | `gmc message` | 可用 | 基于 staged changes 生成 commit message。 |
-| `gmc commit [--no-edit]` | 可用 | 生成 message 并提交 staged changes。 |
+| `gmc commit [--no-edit]` | 可用 | 生成 message、更新相关任务状态并提交 staged changes。 |
 | `gmc retry [commit]` | 可用 | 重新排队一次后台 message 生成。 |
 
 ## 安全模型

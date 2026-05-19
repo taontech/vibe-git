@@ -97,6 +97,8 @@ GMC Web includes a lightweight task board with Todo, Doing, Review, and Done lan
 
 Each task keeps a simple title and Markdown content. The board shows compact cards for scanning, while the task detail dialog renders the full Markdown and lets you edit it.
 
+When you commit through `gmc commit`, GMC Web, or `git commit -m gmc`, GMC asks the configured AI agent to compare the staged diff with the current task list. Related tasks are moved forward to `doing`, `review`, or `done`, and the changed task Markdown files are staged into the same commit.
+
 ### AI Commit Messages
 
 GMC can generate commit messages from staged diffs:
@@ -124,7 +126,7 @@ git commit -m gmc
 - Git repository
 - Node.js 18 or newer
 - `codex` CLI for AI commit-message generation
-- Optional: `claude` CLI for future agent workflows
+- Optional: `claude` CLI when `gmc agent claude` is configured
 
 If Codex inherits an incompatible model from your user config, set:
 
@@ -145,10 +147,10 @@ export GMC_CODEX_TIMEOUT_MS=600000
 | `gmc --version` | Ready | Print the installed CLI version. |
 | `gmc web [--port 4277] [--no-open]` | Ready | Start or open the local GitWeb dashboard. |
 | `gmc install --all [--port 4277]` | Ready | Install hooks and create the local Web link. |
-| `gmc install-hooks` | Ready | Install only the non-blocking commit-message hooks. |
+| `gmc install-hooks` | Ready | Install commit-message and task-status hooks. |
 | `gmc status` | Ready | Show current repository status and recent background work. |
 | `gmc message` | Ready | Generate a commit message from staged changes. |
-| `gmc commit [--no-edit]` | Ready | Generate a message and commit staged changes. |
+| `gmc commit [--no-edit]` | Ready | Generate a message, update related task statuses, and commit staged changes. |
 | `gmc retry [commit]` | Ready | Queue another background message attempt. |
 
 ## Safety Model

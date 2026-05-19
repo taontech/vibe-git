@@ -86,9 +86,40 @@ function commitMessagePrompt(binding, diff, status, recentSubjects, options) {
   ]).join('\n');
 }
 
+function taskStatusPrompt(tasks, diff, status) {
+  return [
+    'Decide whether this Git commit should update repository task statuses.',
+    '',
+    'You will receive the current task list and the staged commit diff.',
+    'Return JSON only. Do not use markdown.',
+    '',
+    'Rules:',
+    '- Only update tasks clearly related to the diff.',
+    '- Use status "doing" when the diff starts or partially implements a task but does not clearly finish it.',
+    '- Use status "review" when the diff appears implemented but still needs review or verification.',
+    '- Use status "done" when the diff clearly completes the task.',
+    '- Do not move a task backward, for example from done to doing.',
+    '- Do not change unrelated tasks.',
+    '- If no task should change, return {"updates":[]}.',
+    '',
+    'Allowed statuses: todo, doing, review, done.',
+    'Schema: {"updates":[{"id":"GMC-0001","status":"doing","reason":"short reason"}]}',
+    '',
+    'Current tasks:',
+    JSON.stringify(tasks || [], null, 2),
+    '',
+    'Git status:',
+    status || '(clean)',
+    '',
+    'Staged diff:',
+    diff || '(empty)'
+  ].join('\n');
+}
+
 module.exports = {
   issuePrompt: issuePrompt,
   commitMessagePrompt: commitMessagePrompt,
+  taskStatusPrompt: taskStatusPrompt,
   createdByLine: createdByLine,
   appendCreatedBy: appendCreatedBy
 };

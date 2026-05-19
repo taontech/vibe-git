@@ -12,6 +12,7 @@ var agent = require('./agent');
 var config = require('./config');
 var git = require('./git');
 var prompts = require('./prompts');
+var taskStatus = require('./task-status');
 
 var DEFAULT_PORT = 4277;
 var GITWEB_VERSION = 2;
@@ -1861,14 +1862,25 @@ function commitSelectedFiles(root, selectedFiles) {
     throwHttpError('Selected files have no staged changes.');
   }
 
+  var taskUpdates = taskStatus.updateForStagedCommit(repoRoot);
+  taskUpdates.paths.forEach(function (taskPath) {
+    if (gitPaths.indexOf(taskPath) < 0) {
+      gitPaths.push(taskPath);
+    }
+  });
+
   var installed = checkInstallStatus(repoRoot);
   var result;
+  var commitEnv = Object.assign({}, process.env, {
+    GMC_SKIP_TASK_STATUS: '1'
+  });
 
   if (installed.hooks) {
     // Hooks installed: git commit -m gmc triggers the commit-msg hook which generates AI message
     result = childProcess.spawnSync('git', ['commit', '-m', 'gmc', '--'].concat(gitPaths), {
       cwd: repoRoot,
-      encoding: 'utf8'
+      encoding: 'utf8',
+      env: commitEnv
     });
   } else {
     // No hooks: generate AI commit message directly
@@ -1897,7 +1909,8 @@ function commitSelectedFiles(root, selectedFiles) {
     var messageFile = git.writeGitFile(repoRoot, 'GMC_WEB_COMMIT_EDITMSG', aiMessage);
     result = childProcess.spawnSync('git', ['commit', '-F', messageFile, '--'].concat(gitPaths), {
       cwd: repoRoot,
-      encoding: 'utf8'
+      encoding: 'utf8',
+      env: commitEnv
     });
   }
 
@@ -1915,6 +1928,7 @@ function commitSelectedFiles(root, selectedFiles) {
     status: 'ok',
     oid: runGitOptional(repoRoot, ['rev-parse', 'HEAD']),
     output: ((result.stdout || '') + (result.stderr || '')).trim(),
+    taskUpdates: taskUpdates.updates,
     tasks: safeTasks(repoRoot)
   };
 }
@@ -2068,8 +2082,7 @@ function gmcHelpText() {
     '  GMC Web prints an authenticated URL. Remote browsers must use that URL',
     '    before GitWeb APIs can read or modify repositories.',
     '  gmc install --all installs hooks and writes a repository-specific git.webloc.',
-    '  gmc install-hooks sets up Git hooks to automatically create background tasks',
-    '    for new commits and commit messages.',
+    '  gmc install-hooks sets up Git hooks for AI commit messages and task status updates.',
     '  gmc web serves the Git Web UI. If a server is already running, it will just',
     '    open the current repository in the browser.',
     '',

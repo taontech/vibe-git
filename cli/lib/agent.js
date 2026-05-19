@@ -62,8 +62,21 @@ function launchAgent(options) {
   throw new Error('Unsupported agent: ' + agent + '. Use codex or claude.');
 }
 
-function generateCommitMessage(prompt, cwd) {
-  var outputFile = path.join(os.tmpdir(), 'gmc-commit-message-' + Date.now() + '-' + process.pid + '.txt');
+function generateText(prompt, cwd, selectedAgent, options) {
+  selectedAgent = selectedAgent || 'codex';
+  options = options || {};
+  if (selectedAgent === 'codex') {
+    return generateCodexText(prompt, cwd, options);
+  }
+  if (selectedAgent === 'claude') {
+    return generateClaudeText(prompt, cwd);
+  }
+  throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex or claude.');
+}
+
+function generateCodexText(prompt, cwd, options) {
+  var outputFile = path.join(os.tmpdir(), (options.outputPrefix || 'gmc-agent-output') + '-' + Date.now() + '-' + process.pid + '.txt');
+  var description = options.description || 'generation';
   var help = codexExecHelp();
   var timeoutMs = codexTimeoutMs();
   var args = [
@@ -96,22 +109,48 @@ function generateCommitMessage(prompt, cwd) {
   if (result.error) {
     removeOutputFile(outputFile);
     if (result.error.code === 'ETIMEDOUT') {
-      throw new Error('codex commit message generation timed out after ' + Math.round(timeoutMs / 1000) + 's');
+      throw new Error('codex ' + description + ' timed out after ' + Math.round(timeoutMs / 1000) + 's');
     }
     throw result.error;
   }
   if (result.status !== 0) {
     removeOutputFile(outputFile);
-    throw new Error('codex commit message generation failed with status ' + result.status + ': ' + commandOutput(result));
+    throw new Error('codex ' + description + ' failed with status ' + result.status + ': ' + commandOutput(result));
   }
 
   if (fs.existsSync(outputFile)) {
     var finalMessage = fs.readFileSync(outputFile, 'utf8');
     removeOutputFile(outputFile);
-    return cleanCommitMessage(finalMessage);
+    return cleanAgentOutput(finalMessage);
   }
 
-  return cleanCommitMessage(result.stdout);
+  return cleanAgentOutput(result.stdout);
+}
+
+function generateClaudeText(prompt, cwd) {
+  var result = childProcess.spawnSync('claude', ['-p', prompt], {
+    cwd: cwd,
+    encoding: 'utf8',
+    timeout: codexTimeoutMs(),
+    killSignal: 'SIGTERM'
+  });
+  if (result.error) {
+    if (result.error.code === 'ETIMEDOUT') {
+      throw new Error('claude generation timed out after ' + Math.round(codexTimeoutMs() / 1000) + 's');
+    }
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error('claude generation failed with status ' + result.status + ': ' + commandOutput(result));
+  }
+  return cleanAgentOutput(result.stdout);
+}
+
+function generateCommitMessage(prompt, cwd) {
+  return cleanCommitMessage(generateText(prompt, cwd, 'codex', {
+    outputPrefix: 'gmc-commit-message',
+    description: 'commit message generation'
+  }));
 }
 
 function codexTimeoutMs() {
@@ -157,14 +196,19 @@ function codexExecHelp() {
 }
 
 function cleanCommitMessage(message) {
+  return cleanAgentOutput(message).trim() + '\n';
+}
+
+function cleanAgentOutput(message) {
   return String(message || '')
-    .replace(/^```(?:text)?\s*/i, '')
+    .replace(/^```(?:text|json)?\s*/i, '')
     .replace(/```\s*$/i, '')
-    .trim() + '\n';
+    .trim();
 }
 
 module.exports = {
   launchAgent: launchAgent,
+  generateText: generateText,
   generateCommitMessage: generateCommitMessage,
   codexTimeoutMs: codexTimeoutMs
 };
