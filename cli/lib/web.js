@@ -3652,6 +3652,7 @@ function createTaskFromForm() {
       showTaskComposer(false);
       setTaskError('');
       renderTaskBoard();
+      refreshRepositoryStatus();
     })
     .catch(function(error) {
       setTaskError(t('taskCreateFailed') + error.message);
@@ -3681,6 +3682,7 @@ function updateTaskStatus(taskId, status) {
     .then(function(data) {
       state.repoTasks = data.tasks || [];
       renderTaskBoard();
+      refreshRepositoryStatus();
     })
     .catch(function(error) {
       setTaskError(t('taskUpdateFailed') + error.message);
@@ -3706,6 +3708,7 @@ function deleteTask(taskId) {
     .then(function(data) {
       state.repoTasks = data.tasks || [];
       renderTaskBoard();
+      refreshRepositoryStatus();
     })
     .catch(function(error) {
       setTaskError(t('taskDeleteFailed') + error.message);
@@ -3931,6 +3934,7 @@ function saveTaskDetail() {
       renderTaskDetail(updated);
       setTaskDetailEditing(false);
       setTaskError('');
+      refreshRepositoryStatus();
     })
     .catch(function(error) {
       setTaskError(t('taskSaveFailed') + error.message);
@@ -4010,6 +4014,11 @@ function setTaskError(message) {
   if (!target) return;
   target.textContent = message || '';
   target.classList.toggle('visible', !!message);
+}
+
+function refreshRepositoryStatus() {
+  if (!targetRepo) return;
+  load({ force: true });
 }
 
 function updateReadmeLink() {
