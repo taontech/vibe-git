@@ -56,7 +56,7 @@ gmc retry HEAD
 | `gmc install-hooks` | Ready | Install commit-message and task-status hooks. |
 | `gmc status` | Ready | Show current repository status and recent background work. |
 | `gmc message` | Ready | Generate a commit message from staged changes. |
-| `gmc commit [--no-edit]` | Ready | Generate a message, update related task statuses, and commit staged changes. |
+| `gmc commit [--no-edit]` | Ready | Generate a message, commit staged changes, and update related task statuses. |
 | `gmc retry [commit]` | Ready | Queue another background message attempt. |
 
 ## Requirements
@@ -71,6 +71,6 @@ gmc retry HEAD
 - GMC Web serves `127.0.0.1` only.
 - Credentials are read from environment variables and are not written to the repository.
 - Repository tasks are ordinary Markdown files under `.gmc/tasks`.
-- Commit flows ask the configured AI agent to move related tasks forward to `doing`, `review`, or `done` based on the staged diff.
+- Commit flows can move related tasks forward to `doing`, `review`, or `done` based on the commit diff, but task file changes are left in the working tree for a later user-selected commit.
 - Background commit-message rewrites only target the recorded commit while it is still `HEAD`.
 - Automatic rewrites are skipped during merge/rebase-style operations and for signed commits.

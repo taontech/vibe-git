@@ -257,8 +257,7 @@ function generateMessageCommand(flags) {
 
 function commitCommand(flags) {
   var root = git.repoRoot(process.cwd());
-  var taskUpdates = taskStatus.updateForStagedCommit(root);
-  var generated = generateCommitMessage(root, flags);
+  var generated = generateCommitMessage(root, flags, { taskStatus: true });
   var message = generated.message;
   var binding = generated.binding;
   var messageFile = git.writeGitFile(root, 'GMC_COMMIT_EDITMSG', message);
@@ -271,11 +270,7 @@ function commitCommand(flags) {
 
   git.runGit(['commit', '-F', messageFile], { cwd: root });
   console.log('Committed with message from ' + messageFile + '.');
-  if (taskUpdates.updates.length) {
-    console.log('Updated task statuses: ' + taskUpdates.updates.map(function (item) {
-      return item.id + ' -> ' + item.status;
-    }).join(', ') + '.');
-  }
+  applyTaskUpdates(root, generated.taskUpdates);
 }
 
 function retryCommand(ref) {
@@ -576,7 +571,8 @@ function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
-function generateCommitMessage(root, flags) {
+function generateCommitMessage(root, flags, options) {
+  options = options || {};
   var binding = config.readBinding(root);
   if (!git.hasStagedDiff(root)) {
     throw new Error('No staged changes. Run git add before gmc message or gmc commit.');
@@ -587,7 +583,14 @@ function generateCommitMessage(root, flags) {
     diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
   }
 
-  var prompt = prompts.commitMessagePrompt(
+  var tasks = options.taskStatus ? taskStatus.readRepositoryTasks(root).map(taskStatus.taskForPrompt) : [];
+  var prompt = tasks.length ? prompts.commitMessagePlanPrompt(
+    binding,
+    diff,
+    git.statusShort(root),
+    git.recentCommitSubjects(root, 20),
+    tasks
+  ) : prompts.commitMessagePrompt(
     binding,
     diff,
     git.statusShort(root),
@@ -597,19 +600,48 @@ function generateCommitMessage(root, flags) {
   if (flags.printPrompt) {
     return {
       binding: binding,
-      message: prompt + '\n'
+      message: prompt + '\n',
+      taskUpdates: []
     };
   }
 
+  var selectedAgent = binding ? binding.agent : config.currentAgent();
+  var raw = agent.generateText(prompt, root, selectedAgent, {
+    outputPrefix: tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
+    description: tasks.length ? 'commit plan generation' : 'commit message generation'
+  });
+  var taskUpdates = [];
+  if (tasks.length) {
+    var plan = taskStatus.parseCommitPlan(raw);
+    raw = plan.message;
+    taskUpdates = plan.taskUpdates;
+  }
   var message = prompts.appendCreatedBy(
-    agent.generateCommitMessage(prompt, root),
-    binding ? binding.agent : config.currentAgent()
+    raw,
+    selectedAgent
   );
   validateCommitMessage(message, binding);
   return {
     binding: binding,
-    message: message
+    message: message,
+    taskUpdates: taskUpdates
   };
+}
+
+function applyTaskUpdates(root, updates) {
+  if (!updates || !updates.length) {
+    return;
+  }
+  try {
+    var applied = taskStatus.applyUpdates(root, updates);
+    if (applied.updates.length) {
+      console.log('Updated task statuses in working tree: ' + applied.updates.map(function (item) {
+        return item.id + ' -> ' + item.status;
+      }).join(', ') + '.');
+    }
+  } catch (error) {
+    console.error('gmc: task status update skipped after commit: ' + error.message);
+  }
 }
 
 function validateCommitMessage(message, binding) {

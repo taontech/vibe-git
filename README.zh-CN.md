@@ -97,7 +97,7 @@ GMC Web 提供轻量任务看板，包含待办、进行中、待确认和已完
 
 每个任务只保留简单标题和 Markdown 内容。看板卡片适合快速浏览，任务详情弹框会渲染完整 Markdown，并支持直接编辑。
 
-通过 `gmc commit`、GMC Web 或 `git commit -m gmc` 提交时，GMC 会让当前配置的 AI agent 对比 staged diff 和任务列表。相关任务会自动前进到 `doing`、`review` 或 `done`，被改动的任务 Markdown 文件会一起进入本次提交。
+通过 `gmc commit`、GMC Web 或 `git commit -m gmc` 提交时，生成 commit message 的同一次 AI 请求也会对比本次 diff 和任务列表。相关任务会自动前进到 `doing`、`review` 或 `done`，但任务 Markdown 只作为提交后的工作区改动保留，是否纳入后续提交由用户自己决定。
 
 ### AI Commit Message
 
@@ -150,7 +150,7 @@ export GMC_CODEX_TIMEOUT_MS=600000
 | `gmc install-hooks` | 可用 | 安装 commit message 和任务状态 hooks。 |
 | `gmc status` | 可用 | 查看当前仓库状态和最近后台任务。 |
 | `gmc message` | 可用 | 基于 staged changes 生成 commit message。 |
-| `gmc commit [--no-edit]` | 可用 | 生成 message、更新相关任务状态并提交 staged changes。 |
+| `gmc commit [--no-edit]` | 可用 | 生成 message、提交 staged changes，并更新相关任务状态。 |
 | `gmc retry [commit]` | 可用 | 重新排队一次后台 message 生成。 |
 
 ## 安全模型

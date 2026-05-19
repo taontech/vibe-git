@@ -25,17 +25,6 @@ function commitMsgHook(messageFile) {
     return;
   }
 
-  try {
-    var updates = taskStatus.updateForStagedCommit(root);
-    if (updates.updates.length) {
-      process.stderr.write('GMC >>> Updated task statuses: ' + updates.updates.map(function (item) {
-        return item.id + ' -> ' + item.status;
-      }).join(', ') + '\n');
-    }
-  } catch (error) {
-    process.stderr.write('GMC >>> Task status update skipped: ' + error.message + '\n');
-  }
-
   writeGitJson(root, PENDING_FILE, {
     status: 'pending',
     createdAt: new Date().toISOString(),
@@ -108,13 +97,21 @@ function worker(targetOid) {
       }
 
       var binding = config.readBinding(root);
-      var prompt = buildPrompt(root, targetOid, binding);
-      log('requesting commit message from codex');
-      var message = prompts.appendCreatedBy(
-        agent.generateCommitMessage(prompt, root),
-        binding ? binding.agent : config.currentAgent()
-      );
-      log('received commit message from codex');
+      var promptInfo = buildPrompt(root, targetOid, binding);
+      var selectedAgent = binding ? binding.agent : config.currentAgent();
+      log('requesting commit message from ' + selectedAgent);
+      var generated = agent.generateText(promptInfo.prompt, root, selectedAgent, {
+        outputPrefix: promptInfo.planMode ? 'gmc-commit-plan' : 'gmc-commit-message',
+        description: promptInfo.planMode ? 'commit plan generation' : 'commit message generation'
+      });
+      var taskUpdates = [];
+      if (promptInfo.planMode) {
+        var plan = taskStatus.parseCommitPlan(generated);
+        generated = plan.message;
+        taskUpdates = plan.taskUpdates;
+      }
+      var message = prompts.appendCreatedBy(generated, selectedAgent);
+      log('received commit message from ' + selectedAgent);
       validateCommitMessage(message, binding);
 
       if (currentHead(root) !== targetOid) {
@@ -129,6 +126,7 @@ function worker(targetOid) {
         message: message
       });
       log('rewrote ' + targetOid + ' as ' + newOid);
+      applyTaskUpdates(root, taskUpdates, log);
     } catch (error) {
       updateTask(root, targetOid, {
         status: 'failed',
@@ -148,16 +146,51 @@ function buildPrompt(root, targetOid, binding) {
     diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
   }
 
-  return prompts.commitMessagePrompt(
-    binding,
-    diff,
-    git.statusShort(root),
-    git.recentCommitSubjects(root, 20),
-    {
-      changeDescription: 'committed changes',
-      diffLabel: 'Committed diff'
+  var tasks = taskStatus.readRepositoryTasks(root).map(taskStatus.taskForPrompt);
+  var options = {
+    changeDescription: 'committed changes',
+    diffLabel: 'Committed diff'
+  };
+  if (tasks.length) {
+    return {
+      planMode: true,
+      prompt: prompts.commitMessagePlanPrompt(
+        binding,
+        diff,
+        git.statusShort(root),
+        git.recentCommitSubjects(root, 20),
+        tasks,
+        options
+      )
+    };
+  }
+
+  return {
+    planMode: false,
+    prompt: prompts.commitMessagePrompt(
+      binding,
+      diff,
+      git.statusShort(root),
+      git.recentCommitSubjects(root, 20),
+      options
+    )
+  };
+}
+
+function applyTaskUpdates(root, updates, log) {
+  if (!updates || !updates.length) {
+    return;
+  }
+  try {
+    var applied = taskStatus.applyUpdates(root, updates);
+    if (applied.updates.length) {
+      log('updated task statuses in working tree: ' + applied.updates.map(function (item) {
+        return item.id + ' -> ' + item.status;
+      }).join(', '));
     }
-  );
+  } catch (error) {
+    log('task status update skipped after commit: ' + error.message);
+  }
 }
 
 function printPostCommitNotice(root, targetOid) {

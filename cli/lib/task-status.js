@@ -2,10 +2,7 @@
 
 var fs = require('fs');
 var path = require('path');
-var agent = require('./agent');
-var config = require('./config');
 var git = require('./git');
-var prompts = require('./prompts');
 
 var TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
 var STATUS_RANK = {
@@ -14,56 +11,6 @@ var STATUS_RANK = {
   review: 2,
   done: 3
 };
-var DIFF_LIMIT = 120000;
-
-function updateForStagedCommit(root, options) {
-  options = options || {};
-  var repoRoot = git.repoRoot(root);
-  if (process.env.GMC_SKIP_TASK_STATUS === '1') {
-    return noUpdates();
-  }
-  if (!git.hasStagedDiff(repoRoot)) {
-    return noUpdates();
-  }
-
-  var tasks = readRepositoryTasks(repoRoot);
-  if (!tasks.length) {
-    return noUpdates();
-  }
-
-  var diff = options.diff || git.stagedDiff(repoRoot);
-  if (!diff.trim()) {
-    return noUpdates();
-  }
-  if (diff.length > DIFF_LIMIT) {
-    diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
-  }
-
-  var selectedAgent = options.agent || currentAgent(repoRoot);
-  var prompt = prompts.taskStatusPrompt(tasks.map(taskForPrompt), diff, git.statusShort(repoRoot));
-  var text = agent.generateText(prompt, repoRoot, selectedAgent, {
-    outputPrefix: 'gmc-task-status',
-    description: 'task status generation'
-  });
-  var decisions = parseDecision(text);
-  var applied = applyDecisions(repoRoot, tasks, decisions);
-  if (applied.paths.length) {
-    git.runGit(['add', '-A', '--'].concat(applied.paths), { cwd: repoRoot });
-  }
-  return applied;
-}
-
-function currentAgent(repoRoot) {
-  var binding = config.readBinding(repoRoot);
-  return binding && binding.agent ? binding.agent : config.currentAgent();
-}
-
-function noUpdates() {
-  return {
-    updates: [],
-    paths: []
-  };
-}
 
 function taskForPrompt(task) {
   return {
@@ -74,18 +21,21 @@ function taskForPrompt(task) {
   };
 }
 
-function parseDecision(text) {
+function parseCommitPlan(text) {
   var jsonText = extractJson(text);
   var parsed;
   try {
     parsed = JSON.parse(jsonText);
   } catch (error) {
-    throw new Error('Could not parse task status AI response as JSON: ' + firstLine(text));
+    throw new Error('Could not parse AI commit plan as JSON: ' + firstLine(text));
   }
-  if (!parsed || !Array.isArray(parsed.updates)) {
-    throw new Error('Task status AI response must contain an updates array.');
+  if (!parsed || typeof parsed.message !== 'string' || !Array.isArray(parsed.taskUpdates)) {
+    throw new Error('AI commit plan must contain message and taskUpdates.');
   }
-  return parsed.updates;
+  return {
+    message: parsed.message,
+    taskUpdates: parsed.taskUpdates
+  };
 }
 
 function extractJson(text) {
@@ -140,6 +90,11 @@ function applyDecisions(repoRoot, tasks, decisions) {
     updates: updates,
     paths: unique(paths)
   };
+}
+
+function applyUpdates(root, decisions) {
+  var repoRoot = git.repoRoot(root);
+  return applyDecisions(repoRoot, readRepositoryTasks(repoRoot), decisions || []);
 }
 
 function readRepositoryTasks(repoRoot) {
@@ -276,6 +231,8 @@ function firstLine(value) {
 }
 
 module.exports = {
-  updateForStagedCommit: updateForStagedCommit,
-  readRepositoryTasks: readRepositoryTasks
+  applyUpdates: applyUpdates,
+  parseCommitPlan: parseCommitPlan,
+  readRepositoryTasks: readRepositoryTasks,
+  taskForPrompt: taskForPrompt
 };

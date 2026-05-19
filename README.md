@@ -97,7 +97,7 @@ GMC Web includes a lightweight task board with Todo, Doing, Review, and Done lan
 
 Each task keeps a simple title and Markdown content. The board shows compact cards for scanning, while the task detail dialog renders the full Markdown and lets you edit it.
 
-When you commit through `gmc commit`, GMC Web, or `git commit -m gmc`, GMC asks the configured AI agent to compare the staged diff with the current task list. Related tasks are moved forward to `doing`, `review`, or `done`, and the changed task Markdown files are staged into the same commit.
+When you commit through `gmc commit`, GMC Web, or `git commit -m gmc`, the same AI request that prepares the commit message can also compare the commit diff with the current task list. Related tasks are moved forward to `doing`, `review`, or `done` as working tree changes after the commit, so you can decide when to include those task files in a later commit.
 
 ### AI Commit Messages
 
@@ -150,7 +150,7 @@ export GMC_CODEX_TIMEOUT_MS=600000
 | `gmc install-hooks` | Ready | Install commit-message and task-status hooks. |
 | `gmc status` | Ready | Show current repository status and recent background work. |
 | `gmc message` | Ready | Generate a commit message from staged changes. |
-| `gmc commit [--no-edit]` | Ready | Generate a message, update related task statuses, and commit staged changes. |
+| `gmc commit [--no-edit]` | Ready | Generate a message, commit staged changes, and update related task statuses. |
 | `gmc retry [commit]` | Ready | Queue another background message attempt. |
 
 ## Safety Model

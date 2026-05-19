@@ -86,24 +86,56 @@ function commitMessagePrompt(binding, diff, status, recentSubjects, options) {
   ]).join('\n');
 }
 
-function taskStatusPrompt(tasks, diff, status) {
-  return [
-    'Decide whether this Git commit should update repository task statuses.',
+function commitMessagePlanPrompt(binding, diff, status, recentSubjects, tasks, options) {
+  options = options || {};
+  var changeDescription = options.changeDescription || 'staged changes';
+  var diffLabel = options.diffLabel || 'Staged diff';
+  var sections = [
+    'Generate a clear Git commit message and decide whether this commit should update repository task statuses.',
     '',
-    'You will receive the current task list and the staged commit diff.',
-    'Return JSON only. Do not use markdown.',
+    'Return JSON only. Do not use markdown or code fences.',
+    'Schema: {"message":"commit subject\\n\\ncommit body","taskUpdates":[{"id":"GMC-0001","status":"doing","reason":"short reason"}]}',
     '',
-    'Rules:',
+    'Commit message rules:',
+    '- The message field must contain only the commit message text.',
+    '- First line must be 72 characters or fewer.',
+    '- Use a concise subject, then add a body that explains the concrete details.',
+    '- Do not use vague summaries like "update version" when the diff shows specifics.',
+    '- Include important before -> after values visible in the diff, such as version numbers, renamed paths, changed defaults, flags, or config values.',
+    '- Describe each distinct feature, behavior, or config change in about 2-3 short body lines.',
+    '- Aim for at most 20 non-empty message lines total, but exceed that when needed to make a large change understandable.',
+    '- Use imperative mood.',
+    '- Mention only changes visible in the ' + changeDescription + '.',
+    '- Match the repository style suggested by recent commit subjects.',
+  ];
+  if (binding) {
+    sections.push('- Include this trailer exactly in the message field: Issue: ' + binding.issue);
+  }
+  sections = sections.concat([
+    '',
+    'Task status rules:',
     '- Only update tasks clearly related to the diff.',
     '- Use status "doing" when the diff starts or partially implements a task but does not clearly finish it.',
     '- Use status "review" when the diff appears implemented but still needs review or verification.',
     '- Use status "done" when the diff clearly completes the task.',
     '- Do not move a task backward, for example from done to doing.',
     '- Do not change unrelated tasks.',
-    '- If no task should change, return {"updates":[]}.',
+    '- If no task should change, use an empty taskUpdates array.',
+    '- Allowed task statuses: todo, doing, review, done.',
+    ''
+  ]);
+  if (binding) {
+    sections = sections.concat([
+      '',
+      'Bound issue:',
+      'Title: ' + (binding.title || ''),
+      'URL: ' + (binding.url || '')
+    ]);
+  }
+  return sections.concat([
     '',
-    'Allowed statuses: todo, doing, review, done.',
-    'Schema: {"updates":[{"id":"GMC-0001","status":"doing","reason":"short reason"}]}',
+    'Recent commit subjects:',
+    recentSubjects || '(none)',
     '',
     'Current tasks:',
     JSON.stringify(tasks || [], null, 2),
@@ -111,15 +143,15 @@ function taskStatusPrompt(tasks, diff, status) {
     'Git status:',
     status || '(clean)',
     '',
-    'Staged diff:',
+    diffLabel + ':',
     diff || '(empty)'
-  ].join('\n');
+  ]).join('\n');
 }
 
 module.exports = {
   issuePrompt: issuePrompt,
   commitMessagePrompt: commitMessagePrompt,
-  taskStatusPrompt: taskStatusPrompt,
+  commitMessagePlanPrompt: commitMessagePlanPrompt,
   createdByLine: createdByLine,
   appendCreatedBy: appendCreatedBy
 };

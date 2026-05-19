@@ -1862,25 +1862,15 @@ function commitSelectedFiles(root, selectedFiles) {
     throwHttpError('Selected files have no staged changes.');
   }
 
-  var taskUpdates = taskStatus.updateForStagedCommit(repoRoot);
-  taskUpdates.paths.forEach(function (taskPath) {
-    if (gitPaths.indexOf(taskPath) < 0) {
-      gitPaths.push(taskPath);
-    }
-  });
-
   var installed = checkInstallStatus(repoRoot);
   var result;
-  var commitEnv = Object.assign({}, process.env, {
-    GMC_SKIP_TASK_STATUS: '1'
-  });
+  var taskUpdates = [];
 
   if (installed.hooks) {
     // Hooks installed: git commit -m gmc triggers the commit-msg hook which generates AI message
     result = childProcess.spawnSync('git', ['commit', '-m', 'gmc', '--'].concat(gitPaths), {
       cwd: repoRoot,
-      encoding: 'utf8',
-      env: commitEnv
+      encoding: 'utf8'
     });
   } else {
     // No hooks: generate AI commit message directly
@@ -1889,7 +1879,14 @@ function commitSelectedFiles(root, selectedFiles) {
     if (diff.length > DIFF_LIMIT) {
       diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
     }
-    var prompt = prompts.commitMessagePrompt(
+    var tasks = taskStatus.readRepositoryTasks(repoRoot).map(taskStatus.taskForPrompt);
+    var prompt = tasks.length ? prompts.commitMessagePlanPrompt(
+      binding,
+      diff,
+      git.statusShort(repoRoot),
+      git.recentCommitSubjects(repoRoot, 20),
+      tasks
+    ) : prompts.commitMessagePrompt(
       binding,
       diff,
       git.statusShort(repoRoot),
@@ -1897,9 +1894,19 @@ function commitSelectedFiles(root, selectedFiles) {
     );
     var aiMessage;
     try {
+      var selectedAgent = binding ? binding.agent : config.currentAgent();
+      var generated = agent.generateText(prompt, repoRoot, selectedAgent, {
+        outputPrefix: tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
+        description: tasks.length ? 'commit plan generation' : 'commit message generation'
+      });
+      if (tasks.length) {
+        var plan = taskStatus.parseCommitPlan(generated);
+        generated = plan.message;
+        taskUpdates = plan.taskUpdates;
+      }
       aiMessage = prompts.appendCreatedBy(
-        agent.generateCommitMessage(prompt, repoRoot),
-        binding ? binding.agent : config.currentAgent()
+        generated,
+        selectedAgent
       );
     } catch (aiError) {
       var err = new Error('AI commit message generation failed: ' + aiError.message);
@@ -1909,8 +1916,7 @@ function commitSelectedFiles(root, selectedFiles) {
     var messageFile = git.writeGitFile(repoRoot, 'GMC_WEB_COMMIT_EDITMSG', aiMessage);
     result = childProcess.spawnSync('git', ['commit', '-F', messageFile, '--'].concat(gitPaths), {
       cwd: repoRoot,
-      encoding: 'utf8',
-      env: commitEnv
+      encoding: 'utf8'
     });
   }
 
@@ -1924,13 +1930,29 @@ function commitSelectedFiles(root, selectedFiles) {
     throw error;
   }
 
+  var appliedTaskUpdates = applyTaskUpdatesAfterCommit(repoRoot, taskUpdates);
   return {
     status: 'ok',
     oid: runGitOptional(repoRoot, ['rev-parse', 'HEAD']),
     output: ((result.stdout || '') + (result.stderr || '')).trim(),
-    taskUpdates: taskUpdates.updates,
+    taskUpdates: appliedTaskUpdates.updates,
     tasks: safeTasks(repoRoot)
   };
+}
+
+function applyTaskUpdatesAfterCommit(root, updates) {
+  if (!updates || !updates.length) {
+    return { updates: [], paths: [] };
+  }
+  try {
+    return taskStatus.applyUpdates(root, updates);
+  } catch (error) {
+    return {
+      updates: [],
+      paths: [],
+      error: error.message
+    };
+  }
 }
 
 function ignoreSelectedFiles(root, selectedFiles) {
