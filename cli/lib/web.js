@@ -188,6 +188,10 @@ function handleRequest(req, res) {
         handlePull(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/checkout-branch') {
+        handleCheckoutBranch(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/install') {
         handleInstall(req, res, parsed.query.repo);
         return;
@@ -289,6 +293,16 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname === '/api/repository-tree') {
+      sendJson(res, repositoryTree(targetRepo, parsed.query.path, parsed.query.recursive === '1'));
+      return;
+    }
+
+    if (parsed.pathname === '/api/repository-file') {
+      sendJson(res, repositoryFile(targetRepo, parsed.query.path));
+      return;
+    }
+
     if (parsed.pathname === '/api/tasks') {
       sendJson(res, readRepositoryTasks(targetRepo));
       return;
@@ -360,6 +374,15 @@ function handlePull(req, res, targetRepo) {
     return sendJsonError(res, 400, errorMsg);
   }
   sendJson(res, { status: 'ok', output: ((result.stdout || '') + (result.stderr || '')).trim() });
+}
+
+function handleCheckoutBranch(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    sendJson(res, checkoutBranch(targetRepo, body.branch));
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
 }
 
 function handleInstall(req, res, targetRepo) {
@@ -1429,7 +1452,278 @@ function branches(root) {
       subject: parts.slice(6).join('|') || '',
       remote: fullName.indexOf('refs/remotes/') === 0
     };
+  }).filter(function (branch) {
+    return branch.name && !/\/HEAD$/.test(branch.name);
   });
+}
+
+function checkoutBranch(root, branchName) {
+  var repoRoot = git.repoRoot(root);
+  var name = String(branchName || '').trim();
+  if (!name || name.indexOf('\0') >= 0) {
+    throwHttpError('Invalid branch name');
+  }
+
+  var allBranches = branches(repoRoot);
+  var selected = allBranches.find(function (branch) {
+    return branch.name === name;
+  });
+  if (!selected) {
+    throwHttpError('Branch not found: ' + name);
+  }
+  if (selected.current) {
+    return collectStatus(repoRoot);
+  }
+
+  var result;
+  if (selected.remote) {
+    var localName = name.replace(/^[^\/]+\//, '');
+    var localExists = allBranches.some(function (branch) {
+      return !branch.remote && branch.name === localName;
+    });
+    result = childProcess.spawnSync('git', localExists ? ['switch', localName] : ['switch', '--track', name], {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    });
+  } else {
+    result = childProcess.spawnSync('git', ['switch', name], {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    });
+  }
+
+  if (result.error || result.status !== 0) {
+    var message = (result.stderr || result.stdout || result.error && result.error.message || 'git switch failed').trim();
+    throwHttpError(message || 'Failed to switch branch.');
+  }
+  return collectStatus(repoRoot);
+}
+
+function repositoryTree(root, treePath, recursive) {
+  var repoRoot = git.repoRoot(root);
+  var cleanPath = normalizeRepositoryPath(treePath, true);
+  var branch = git.currentBranch(repoRoot) || '(detached)';
+  if (!hasHead(repoRoot)) {
+    return {
+      branch: branch,
+      path: cleanPath,
+      entries: [],
+      tree: recursive ? { name: '', path: '', type: 'tree', children: [] } : null
+    };
+  }
+
+  if (recursive) {
+    return {
+      branch: branch,
+      path: cleanPath,
+      entries: listRepositoryTree(repoRoot, cleanPath),
+      tree: buildRepositoryTree(repoRoot)
+    };
+  }
+
+  return {
+    branch: branch,
+    path: cleanPath,
+    entries: listRepositoryTree(repoRoot, cleanPath)
+  };
+}
+
+function listRepositoryTree(repoRoot, treePath) {
+  var spec = treePath ? ('HEAD:' + treePath) : 'HEAD';
+  var output = runGitOptional(repoRoot, ['ls-tree', '-z', '-l', spec]);
+  if (!output) return [];
+  return output.split('\0').filter(Boolean).map(function (record) {
+    return parseLsTreeRecord(record, treePath);
+  }).filter(Boolean).sort(compareTreeEntries);
+}
+
+function parseLsTreeRecord(record, parentPath) {
+  var tab = record.indexOf('\t');
+  if (tab < 0) return null;
+  var meta = record.slice(0, tab).split(/\s+/);
+  var name = record.slice(tab + 1);
+  var type = meta[1] === 'tree' ? 'tree' : meta[1] === 'commit' ? 'submodule' : 'blob';
+  return {
+    name: name,
+    path: parentPath ? (parentPath + '/' + name) : name,
+    type: type,
+    mode: meta[0] || '',
+    hash: meta[2] || '',
+    size: meta[3] && meta[3] !== '-' ? Number(meta[3]) || 0 : null
+  };
+}
+
+function buildRepositoryTree(repoRoot) {
+  var root = { name: '', path: '', type: 'tree', children: [] };
+  var output = runGitOptional(repoRoot, ['ls-tree', '-r', '-z', '-l', 'HEAD']);
+  if (!output) return root;
+
+  output.split('\0').filter(Boolean).forEach(function (record) {
+    var entry = parseLsTreeRecord(record, '');
+    if (!entry) return;
+    var parts = entry.path.split('/');
+    var cursor = root;
+    var cursorPath = '';
+    parts.forEach(function (part, index) {
+      cursorPath = cursorPath ? (cursorPath + '/' + part) : part;
+      var isLeaf = index === parts.length - 1;
+      var child = cursor.children.find(function (item) {
+        return item.name === part;
+      });
+      if (!child) {
+        child = isLeaf ? {
+          name: part,
+          path: entry.path,
+          type: entry.type,
+          mode: entry.mode,
+          size: entry.size,
+          children: []
+        } : {
+          name: part,
+          path: cursorPath,
+          type: 'tree',
+          children: []
+        };
+        cursor.children.push(child);
+      }
+      cursor = child;
+    });
+  });
+
+  sortRepositoryTree(root);
+  return root;
+}
+
+function sortRepositoryTree(node) {
+  if (!node || !node.children) return;
+  node.children.sort(compareTreeEntries);
+  node.children.forEach(sortRepositoryTree);
+}
+
+function compareTreeEntries(a, b) {
+  var aTree = a.type === 'tree';
+  var bTree = b.type === 'tree';
+  if (aTree && !bTree) return -1;
+  if (!aTree && bTree) return 1;
+  return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+}
+
+function repositoryFile(root, filePath) {
+  var repoRoot = git.repoRoot(root);
+  var cleanPath = normalizeRepositoryPath(filePath, false);
+  if (!hasHead(repoRoot)) throwHttpError('Repository has no commits.');
+  var type = runGitOptional(repoRoot, ['cat-file', '-t', 'HEAD:' + cleanPath]);
+  if (type !== 'blob') {
+    throwHttpError('Not a file: ' + cleanPath);
+  }
+  var size = Number(runGitOptional(repoRoot, ['cat-file', '-s', 'HEAD:' + cleanPath])) || 0;
+  var mime = mimeTypeForPath(cleanPath);
+  var maxReadableBytes = 1024 * 1024;
+  var maxBinaryBytes = 5 * 1024 * 1024;
+  var payload = {
+    branch: git.currentBranch(repoRoot) || '(detached)',
+    path: cleanPath,
+    name: path.basename(cleanPath),
+    type: 'blob',
+    size: size,
+    mime: mime,
+    language: languageForPath(cleanPath),
+    binary: true,
+    truncated: false,
+    content: '',
+    dataUrl: ''
+  };
+
+  if (size > maxBinaryBytes) {
+    return payload;
+  }
+
+  var result = childProcess.spawnSync('git', ['show', 'HEAD:' + cleanPath], {
+    cwd: repoRoot,
+    encoding: 'buffer',
+    maxBuffer: maxBinaryBytes + 1024
+  });
+  if (result.error || result.status !== 0) {
+    throwHttpError(((result.stderr && result.stderr.toString('utf8')) || result.error && result.error.message || 'Failed to read file').trim());
+  }
+  var buffer = result.stdout || Buffer.alloc(0);
+  var binary = isBinaryBuffer(buffer);
+  payload.binary = binary;
+  if (binary) {
+    if (mime.indexOf('image/') === 0) {
+      payload.dataUrl = 'data:' + mime + ';base64,' + buffer.toString('base64');
+    }
+    return payload;
+  }
+
+  payload.binary = false;
+  payload.truncated = buffer.length > maxReadableBytes;
+  payload.content = buffer.slice(0, maxReadableBytes).toString('utf8');
+  return payload;
+}
+
+function hasHead(repoRoot) {
+  return runGitOptional(repoRoot, ['rev-parse', '--verify', 'HEAD']) !== '';
+}
+
+function normalizeRepositoryPath(value, allowEmpty) {
+  var clean = String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!clean) {
+    if (allowEmpty) return '';
+    throwHttpError('Missing repository path');
+  }
+  if (path.isAbsolute(clean) || clean.indexOf('\0') >= 0) {
+    throwHttpError('Invalid repository path');
+  }
+  var parts = clean.split('/');
+  for (var i = 0; i < parts.length; i++) {
+    if (!parts[i] || parts[i] === '.' || parts[i] === '..') {
+      throwHttpError('Invalid repository path');
+    }
+  }
+  return clean;
+}
+
+function isBinaryBuffer(buffer) {
+  if (!buffer || !buffer.length) return false;
+  var sampleSize = Math.min(buffer.length, 8000);
+  for (var i = 0; i < sampleSize; i++) {
+    var byte = buffer[i];
+    if (byte === 0) return true;
+  }
+  return false;
+}
+
+function mimeTypeForPath(filePath) {
+  var ext = path.extname(filePath).toLowerCase();
+  var types = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon'
+  };
+  return types[ext] || 'text/plain; charset=utf-8';
+}
+
+function languageForPath(filePath) {
+  var ext = path.extname(filePath).toLowerCase().replace(/^\./, '');
+  var map = {
+    js: 'JavaScript',
+    jsx: 'JSX',
+    ts: 'TypeScript',
+    tsx: 'TSX',
+    json: 'JSON',
+    md: 'Markdown',
+    css: 'CSS',
+    html: 'HTML',
+    sh: 'Shell',
+    yml: 'YAML',
+    yaml: 'YAML'
+  };
+  return map[ext] || (ext ? ext.toUpperCase() : 'Text');
 }
 
 function commits(root, count) {
@@ -2153,6 +2447,61 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .branch-tree-row:hover { background: #f8fafc; }
 .tree-lines { color: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; margin-right: 4px; }
 #branches { max-height: 330px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 8px; }
+.repo-browser-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.branch-selector-wrap { position: relative; min-width: 0; }
+.branch-selector-button { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--text); cursor: pointer; font-weight: 750; }
+.branch-selector-button:hover, .branch-selector-button.open { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.branch-selector-button svg { flex: 0 0 auto; width: 16px; height: 16px; pointer-events: none; }
+.branch-selector-button .chevron { width: 14px; height: 14px; color: var(--muted); }
+.branch-selector-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-selector-menu { position: absolute; left: 0; top: calc(100% + 8px); z-index: var(--z-modal); display: none; width: min(320px, calc(100vw - 40px)); max-height: 360px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: var(--shadow); }
+.branch-selector-menu.open { display: grid; gap: 3px; }
+.branch-option { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; min-height: 34px; padding: 7px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer; text-align: left; font: inherit; }
+.branch-option:hover, .branch-option.current { border-color: var(--line-soft); background: #f8fafc; }
+.branch-option.current { color: var(--accent); font-weight: 800; }
+.branch-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-option-type { color: #94a3b8; font-size: 11px; font-weight: 700; }
+.repo-breadcrumb { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 8px 0 10px; color: var(--muted); font-size: 12px; overflow: hidden; }
+.repo-breadcrumb button { min-width: 0; max-width: 180px; padding: 0; border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-breadcrumb button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.repo-breadcrumb span { flex: 0 0 auto; color: #94a3b8; }
+.repo-browser { overflow: hidden; border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; }
+.repo-browser-empty, .repo-browser-loading, .file-tree-empty { padding: 18px; color: var(--muted); font-size: 13px; text-align: center; }
+.repo-entry { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; min-height: 39px; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line-soft); background: #fff; color: var(--text); cursor: pointer; text-align: left; font: inherit; }
+.repo-entry:last-child { border-bottom: 0; }
+.repo-entry:hover { background: #f8fafc; color: var(--accent); }
+.repo-entry svg { width: 18px; height: 18px; color: #64748b; }
+.repo-entry[data-entry-type="tree"] svg { color: #d97706; }
+.repo-entry-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.repo-entry-meta { color: #94a3b8; font-size: 12px; white-space: nowrap; }
+.repo-browser-status { min-height: 18px; margin-top: 8px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.repo-browser-status.error { color: var(--rose); }
+.file-detail-page { display: grid; gap: 14px; }
+.file-detail-page[hidden] { display: none; }
+.file-detail-toolbar { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 10px; }
+.file-detail-toolbar .copy-button { display: inline-flex; align-items: center; gap: 6px; height: 34px; }
+.file-detail-toolbar .copy-button svg { width: 15px; height: 15px; }
+.file-detail-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.file-tree-panel, .file-view-panel { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.file-tree-panel { padding: 14px; max-height: calc(100vh - 166px); overflow: auto; position: sticky; top: 82px; }
+.file-view-panel { overflow: hidden; }
+.file-tree { display: grid; gap: 2px; font-size: 13px; }
+.file-tree-group { display: grid; gap: 2px; }
+.file-tree-row { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 6px; align-items: center; width: 100%; min-height: 28px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #334155; cursor: pointer; text-align: left; font: inherit; }
+.file-tree-row:hover, .file-tree-row.active { background: #f8fafc; border-color: var(--line-soft); color: var(--accent); }
+.file-tree-row.active { font-weight: 800; }
+.file-tree-row svg { width: 15px; height: 15px; color: #64748b; }
+.file-tree-row[data-entry-type="tree"] svg { color: #d97706; }
+.file-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-view-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line-soft); background: #fbfdff; }
+.file-view-title { margin: 0; color: var(--text); font-size: 16px; line-height: 1.25; letter-spacing: 0; text-transform: none; overflow-wrap: anywhere; }
+.file-view-content { min-height: 440px; overflow: auto; background: #fff; }
+.code-view { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.55; }
+.code-line-no { padding: 0 10px; color: #94a3b8; background: #f8fafc; border-right: 1px solid var(--line-soft); text-align: right; user-select: none; }
+.code-line-text { min-width: 0; padding: 0 14px; white-space: pre; overflow-wrap: normal; }
+.code-line-no, .code-line-text { min-height: 20px; }
+.file-binary, .file-image-preview { display: grid; place-items: center; min-height: 360px; padding: 24px; color: var(--muted); text-align: center; }
+.file-image-preview img { max-width: 100%; max-height: 70vh; border-radius: 8px; border: 1px solid var(--line-soft); box-shadow: 0 14px 34px rgba(15,23,42,.10); }
 .readme-panel { margin-top: 0; }
 .readme-panel .readme-body { padding: 4px 0 0; font-size: 14px; line-height: 1.65; overflow-wrap: break-word; word-break: break-word; }
 .readme-body h1, .readme-body h2, .readme-body h3, .readme-body h4 { margin: 1.2em 0 .6em; font-weight: 700; }
@@ -2285,6 +2634,12 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   .branch-name { font-size: 20px; margin: 0; min-width: 0; flex: 0 1 auto; }
   .branch-summary-text .meta { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .calendar-grid { --calendar-cell: 9px; --calendar-gap: 2px; --calendar-label-width: 24px; flex: 0 0 auto; width: 100%; justify-content: flex-start; }
+  .file-detail-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+  .file-detail-layout { grid-template-columns: 1fr; }
+  .file-tree-panel { position: static; max-height: 260px; }
+  .repo-entry { grid-template-columns: 22px minmax(0, 1fr); }
+  .repo-entry-meta { display: none; }
+  .code-view { font-size: 12px; }
   .settings-hero { flex-direction: column; }
   .settings-row { align-items: flex-start; flex-direction: column; }
   .settings-actions { justify-content: flex-start; }
@@ -2402,9 +2757,22 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       </div>
       <div class="panel">
         <div class="panel-head">
-          <h2 data-i18n="branchesTree">Branches Tree</h2>
+          <h2 data-i18n="repositoryFiles">Repository Files</h2>
+          <div id="repoBrowserMeta" class="meta"></div>
         </div>
-        <div id="branches"></div>
+        <div class="repo-browser-controls">
+          <div class="branch-selector-wrap">
+            <button id="repoBranchButton" class="branch-selector-button" type="button" aria-haspopup="true" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+              <span id="repoBranchButtonText">...</span>
+              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+            </button>
+            <div id="repoBranchMenu" class="branch-selector-menu" role="menu"></div>
+          </div>
+        </div>
+        <nav id="repoBreadcrumb" class="repo-breadcrumb" aria-label="Repository path"></nav>
+        <div id="repoBrowser" class="repo-browser"></div>
+        <div id="repoBrowserStatus" class="repo-browser-status"></div>
       </div>
       <div class="panel readme-panel">
         <div class="panel-head">
@@ -2425,6 +2793,40 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
     </div>
   </section>
         </div>
+        <section id="fileDetailPage" class="file-detail-page" hidden>
+          <div class="file-detail-toolbar">
+            <button id="backToDashboard" class="copy-button" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+              <span data-i18n="back">Back</span>
+            </button>
+            <div class="branch-selector-wrap">
+              <button id="detailBranchButton" class="branch-selector-button" type="button" aria-haspopup="true" aria-expanded="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+                <span id="detailBranchButtonText">...</span>
+                <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+              </button>
+              <div id="detailBranchMenu" class="branch-selector-menu" role="menu"></div>
+            </div>
+            <nav id="fileDetailBreadcrumb" class="repo-breadcrumb" aria-label="Repository file path"></nav>
+          </div>
+          <div class="file-detail-layout">
+            <aside class="file-tree-panel">
+              <div class="panel-head">
+                <h2 data-i18n="fileTree">File Tree</h2>
+              </div>
+              <div id="fileTree" class="file-tree"></div>
+            </aside>
+            <section class="file-view-panel">
+              <div class="file-view-head">
+                <div>
+                  <h2 id="fileViewTitle" class="file-view-title">...</h2>
+                  <div id="fileViewMeta" class="meta"></div>
+                </div>
+              </div>
+              <div id="fileViewContent" class="file-view-content"></div>
+            </section>
+          </div>
+        </section>
       </div>
       <section id="taskPage" class="task-page" hidden>
         <div class="task-hero">
@@ -2590,7 +2992,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileViewPath: '', fileViewType: '', fileViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -2610,6 +3012,22 @@ var I18N = {
     pull: 'Pull',
     workingTree: '工作区',
     branchesTree: '分支树',
+    repositoryFiles: '仓库文件',
+    fileTree: '文件树',
+    filesCount: '项',
+    noRepositoryFiles: '当前分支没有可显示的文件。',
+    loadingFiles: '正在加载文件...',
+    loadingFile: '正在加载文件内容...',
+    fileLoadFailed: '文件加载失败：',
+    branchSwitchFailed: '切换分支失败：',
+    switchingBranch: '正在切换分支...',
+    localBranch: '本地',
+    remoteBranch: '远程',
+    binaryFile: '二进制文件无法直接预览。',
+    largeFile: '文件过大，已停止直接预览。',
+    truncatedFile: '内容已截断',
+    directory: '目录',
+    file: '文件',
     openReadme: '打开 README',
     commitGraph: '提交图',
     recentHistory: '最近仓库历史',
@@ -2761,6 +3179,22 @@ var I18N = {
     pull: 'Pull',
     workingTree: 'Working Tree',
     branchesTree: 'Branches Tree',
+    repositoryFiles: 'Repository Files',
+    fileTree: 'File Tree',
+    filesCount: 'items',
+    noRepositoryFiles: 'No files to show on this branch.',
+    loadingFiles: 'Loading files...',
+    loadingFile: 'Loading file...',
+    fileLoadFailed: 'Failed to load file: ',
+    branchSwitchFailed: 'Failed to switch branch: ',
+    switchingBranch: 'Switching branch...',
+    localBranch: 'local',
+    remoteBranch: 'remote',
+    binaryFile: 'Binary file preview is unavailable.',
+    largeFile: 'This file is too large to preview directly.',
+    truncatedFile: 'Content truncated',
+    directory: 'Directory',
+    file: 'File',
     openReadme: 'Open README',
     commitGraph: 'Commit Graph',
     recentHistory: 'Recent repository history',
@@ -2940,7 +3374,9 @@ function applyLanguage() {
   if (targetRepo) {
     if ($('upstream').dataset.empty === 'true') $('upstream').textContent = t('noUpstream');
     renderFiles(state.files || []);
-    renderBranches();
+    renderBranchMenus();
+    renderRepositoryBrowser();
+    renderFileTree();
     renderCommits(state.commits || []);
     window.setTimeout(function() { renderGraph(state.commits || []); }, 0);
   }
@@ -4054,6 +4490,7 @@ setPageTitle(targetRepo);
 bindLanguageControls();
 bindViewTabs();
 bindTaskControls();
+bindRepositoryBrowserControls();
 applyLanguage();
 initSecurityControls();
 
@@ -4225,6 +4662,7 @@ function render(data) {
     return;
   }
   updateRepoLink(data.repository && data.repository.root ? data.repository.root : targetRepo, targetRepo);
+  state.currentBranch = data.branch.current;
   $('branch').textContent = data.branch.current;
   $('upstream').dataset.empty = data.branch.upstream ? 'false' : 'true';
   $('upstream').textContent = data.branch.upstream || t('noUpstream');
@@ -4246,7 +4684,12 @@ function render(data) {
   renderFiles(data.status.files);
   
   processTopology(data);
-  renderBranches();
+  renderBranchMenus();
+  loadRepositoryBrowser({ force: true });
+  if (isFileDetailOpen()) {
+    loadFileTree({ force: true });
+    loadFileView(state.fileViewPath, state.fileViewType || 'blob');
+  }
   renderCommits(state.commits);
   
   clearTimeout(state.graphTimer);
@@ -4629,8 +5072,434 @@ function restoreSelectedFilesAction() {
     });
 }
 
+function bindRepositoryBrowserControls() {
+  ['repoBranchButton', 'detailBranchButton'].forEach(function(id) {
+    var button = $(id);
+    if (!button) return;
+    button.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleBranchMenu(id === 'repoBranchButton' ? 'repoBranchMenu' : 'detailBranchMenu');
+    });
+  });
+
+  ['repoBranchMenu', 'detailBranchMenu'].forEach(function(id) {
+    var menu = $(id);
+    if (!menu) return;
+    menu.addEventListener('click', function(event) {
+      var option = event.target.closest && event.target.closest('[data-checkout-branch]');
+      if (!option) return;
+      event.preventDefault();
+      checkoutSelectedBranch(option.getAttribute('data-checkout-branch'));
+    });
+  });
+
+  var browser = $('repoBrowser');
+  if (browser) {
+    browser.addEventListener('click', function(event) {
+      var item = event.target.closest && event.target.closest('[data-repo-path]');
+      if (!item) return;
+      event.preventDefault();
+      openFileDetail(item.getAttribute('data-repo-path'), item.getAttribute('data-entry-type'));
+    });
+  }
+
+  var back = $('backToDashboard');
+  if (back) back.addEventListener('click', closeFileDetailPage);
+
+  var tree = $('fileTree');
+  if (tree) {
+    tree.addEventListener('click', function(event) {
+      var item = event.target.closest && event.target.closest('[data-tree-path]');
+      if (!item) return;
+      event.preventDefault();
+      loadFileView(item.getAttribute('data-tree-path'), item.getAttribute('data-entry-type'));
+    });
+  }
+
+  ['repoBreadcrumb', 'fileDetailBreadcrumb'].forEach(function(id) {
+    var crumb = $(id);
+    if (!crumb) return;
+    crumb.addEventListener('click', function(event) {
+      var button = event.target.closest && event.target.closest('[data-breadcrumb-path]');
+      if (!button) return;
+      event.preventDefault();
+      var crumbPath = button.getAttribute('data-breadcrumb-path') || '';
+      if (id === 'repoBreadcrumb') {
+        state.repoBrowserPath = crumbPath;
+        loadRepositoryBrowser({ force: true });
+      } else {
+        loadFileView(crumbPath, 'tree');
+      }
+    });
+  });
+
+  document.addEventListener('click', function(event) {
+    if (event.target.closest && event.target.closest('.branch-selector-wrap')) return;
+    closeBranchMenus();
+  });
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') closeBranchMenus();
+  });
+}
+
+function toggleBranchMenu(menuId) {
+  var menu = $(menuId);
+  if (!menu) return;
+  var shouldOpen = !menu.classList.contains('open');
+  closeBranchMenus();
+  if (shouldOpen) {
+    menu.classList.add('open');
+    var button = menuId === 'repoBranchMenu' ? $('repoBranchButton') : $('detailBranchButton');
+    if (button) {
+      button.classList.add('open');
+      button.setAttribute('aria-expanded', 'true');
+    }
+  }
+}
+
+function closeBranchMenus() {
+  ['repoBranchMenu', 'detailBranchMenu'].forEach(function(id) {
+    var menu = $(id);
+    if (menu) menu.classList.remove('open');
+  });
+  ['repoBranchButton', 'detailBranchButton'].forEach(function(id) {
+    var button = $(id);
+    if (button) {
+      button.classList.remove('open');
+      button.setAttribute('aria-expanded', 'false');
+    }
+  });
+}
+
+function renderBranchMenus() {
+  var branchName = state.currentBranch || (state.sortedBranches.find(function(branch) { return branch.current; }) || {}).name || '...';
+  ['repoBranchButtonText', 'detailBranchButtonText'].forEach(function(id) {
+    var text = $(id);
+    if (text) text.textContent = branchName;
+  });
+
+  var html = state.sortedBranches.length ? state.sortedBranches.map(function(branch) {
+    var current = branch.current ? ' current' : '';
+    var check = branch.current ? '✓' : '';
+    return '<button class="branch-option' + current + '" type="button" role="menuitem" data-checkout-branch="' + escapeHtml(branch.name) + '">' +
+      '<span aria-hidden="true">' + check + '</span>' +
+      '<span class="branch-option-name">' + escapeHtml(branch.name) + '</span>' +
+      '<span class="branch-option-type">' + escapeHtml(branch.remote ? t('remoteBranch') : t('localBranch')) + '</span>' +
+    '</button>';
+  }).join('') : '<div class="repo-browser-empty">' + escapeHtml(t('noBranches')) + '</div>';
+
+  ['repoBranchMenu', 'detailBranchMenu'].forEach(function(id) {
+    var menu = $(id);
+    if (menu) menu.innerHTML = html;
+  });
+}
+
+function checkoutSelectedBranch(branchName) {
+  if (!branchName || state.branchSwitching) return;
+  closeBranchMenus();
+  if (branchName === state.currentBranch) return;
+  state.branchSwitching = true;
+  setRepoBrowserStatus(t('switchingBranch'), false);
+  fetch('/api/checkout-branch?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ branch: branchName })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoBrowserPath = '';
+      state.fileTree = null;
+      render(data);
+      setRepoBrowserStatus('', false);
+    })
+    .catch(function(error) {
+      setRepoBrowserStatus(t('branchSwitchFailed') + error.message, true);
+      alert(t('branchSwitchFailed') + error.message);
+    })
+    .finally(function() {
+      state.branchSwitching = false;
+      load({ force: true });
+    });
+}
+
+function loadRepositoryBrowser(options) {
+  options = options || {};
+  if (!targetRepo || state.repoBrowserLoading) return Promise.resolve(false);
+  if (state.repoBrowserLoaded && !options.force) {
+    renderRepositoryBrowser();
+    return Promise.resolve(true);
+  }
+  state.repoBrowserLoading = true;
+  renderRepositoryBrowser();
+  return fetch('/api/repository-tree?repo=' + encodeURIComponent(targetRepo) + '&path=' + encodeURIComponent(state.repoBrowserPath || ''), { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.currentBranch = data.branch || state.currentBranch;
+      state.repoBrowserPath = data.path || '';
+      state.repoBrowserEntries = data.entries || [];
+      state.repoBrowserLoaded = true;
+      renderBranchMenus();
+      renderRepositoryBrowser();
+      return true;
+    })
+    .catch(function(error) {
+      setRepoBrowserStatus(t('fileLoadFailed') + error.message, true);
+      return false;
+    })
+    .finally(function() {
+      state.repoBrowserLoading = false;
+      renderRepositoryBrowser();
+    });
+}
+
+function renderRepositoryBrowser() {
+  var target = $('repoBrowser');
+  if (!target) return;
+  renderBreadcrumb('repoBreadcrumb', state.repoBrowserPath || '');
+  var meta = $('repoBrowserMeta');
+  if (meta) meta.textContent = (state.repoBrowserEntries || []).length + ' ' + t('filesCount');
+  if (state.repoBrowserLoading && !state.repoBrowserLoaded) {
+    target.innerHTML = '<div class="repo-browser-loading">' + escapeHtml(t('loadingFiles')) + '</div>';
+    return;
+  }
+  var entries = state.repoBrowserEntries || [];
+  if (!entries.length) {
+    target.innerHTML = '<div class="repo-browser-empty">' + escapeHtml(t('noRepositoryFiles')) + '</div>';
+    return;
+  }
+  target.innerHTML = entries.map(repositoryEntryHtml).join('');
+}
+
+function repositoryEntryHtml(entry) {
+  return '<button class="repo-entry" type="button" data-repo-path="' + escapeHtml(entry.path) + '" data-entry-type="' + escapeHtml(entry.type) + '">' +
+    entryIcon(entry.type) +
+    '<span class="repo-entry-name">' + escapeHtml(entry.name) + '</span>' +
+    '<span class="repo-entry-meta">' + escapeHtml(entry.type === 'tree' ? t('directory') : formatFileSize(entry.size)) + '</span>' +
+  '</button>';
+}
+
+function setRepoBrowserStatus(message, isError) {
+  var target = $('repoBrowserStatus');
+  if (!target) return;
+  target.textContent = message || '';
+  target.className = 'repo-browser-status' + (isError ? ' error' : '');
+}
+
+function openFileDetail(filePath, entryType) {
+  state.fileViewPath = filePath || '';
+  state.fileViewType = entryType === 'tree' ? 'tree' : 'blob';
+  if ($('dashboardPage')) $('dashboardPage').hidden = true;
+  if ($('fileDetailPage')) $('fileDetailPage').hidden = false;
+  loadFileTree({ force: !state.fileTree });
+  loadFileView(state.fileViewPath, state.fileViewType);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function closeFileDetailPage() {
+  if ($('fileDetailPage')) $('fileDetailPage').hidden = true;
+  if ($('dashboardPage')) $('dashboardPage').hidden = false;
+  state.fileViewPath = '';
+  state.fileViewType = '';
+  refreshLayoutSoon();
+}
+
+function isFileDetailOpen() {
+  var page = $('fileDetailPage');
+  return !!(page && !page.hidden);
+}
+
+function loadFileTree(options) {
+  options = options || {};
+  if (!targetRepo || state.fileTreeLoading) return Promise.resolve(false);
+  if (state.fileTree && !options.force) {
+    renderFileTree();
+    return Promise.resolve(true);
+  }
+  state.fileTreeLoading = true;
+  renderFileTree();
+  return fetch('/api/repository-tree?repo=' + encodeURIComponent(targetRepo) + '&recursive=1', { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.currentBranch = data.branch || state.currentBranch;
+      state.fileTree = data.tree || null;
+      renderBranchMenus();
+      renderFileTree();
+      return true;
+    })
+    .catch(function(error) {
+      var tree = $('fileTree');
+      if (tree) tree.innerHTML = '<div class="file-tree-empty">' + escapeHtml(t('fileLoadFailed') + error.message) + '</div>';
+      return false;
+    })
+    .finally(function() {
+      state.fileTreeLoading = false;
+    });
+}
+
+function renderFileTree() {
+  var target = $('fileTree');
+  if (!target) return;
+  if (state.fileTreeLoading && !state.fileTree) {
+    target.innerHTML = '<div class="file-tree-empty">' + escapeHtml(t('loadingFiles')) + '</div>';
+    return;
+  }
+  if (!state.fileTree || !state.fileTree.children || !state.fileTree.children.length) {
+    target.innerHTML = '<div class="file-tree-empty">' + escapeHtml(t('noRepositoryFiles')) + '</div>';
+    return;
+  }
+  target.innerHTML = state.fileTree.children.map(function(child) {
+    return fileTreeNodeHtml(child, 0);
+  }).join('');
+}
+
+function fileTreeNodeHtml(node, depth) {
+  var active = node.path === state.fileViewPath ? ' active' : '';
+  var html = '<button class="file-tree-row' + active + '" type="button" style="padding-left:' + (6 + depth * 14) + 'px" data-tree-path="' + escapeHtml(node.path) + '" data-entry-type="' + escapeHtml(node.type) + '">' +
+    entryIcon(node.type) +
+    '<span class="file-tree-name">' + escapeHtml(node.name) + '</span>' +
+  '</button>';
+  if (node.type === 'tree' && node.children && node.children.length) {
+    html += '<div class="file-tree-group">' + node.children.map(function(child) {
+      return fileTreeNodeHtml(child, depth + 1);
+    }).join('') + '</div>';
+  }
+  return html;
+}
+
+function loadFileView(filePath, entryType) {
+  if (!targetRepo || state.fileViewLoading) return Promise.resolve(false);
+  state.fileViewPath = filePath;
+  state.fileViewType = entryType === 'tree' ? 'tree' : 'blob';
+  state.fileViewLoading = true;
+  renderFileTree();
+  renderBreadcrumb('fileDetailBreadcrumb', filePath);
+  renderFileLoading();
+  var url = entryType === 'tree'
+    ? '/api/repository-tree?repo=' + encodeURIComponent(targetRepo) + '&path=' + encodeURIComponent(filePath)
+    : '/api/repository-file?repo=' + encodeURIComponent(targetRepo) + '&path=' + encodeURIComponent(filePath);
+  return fetch(url, { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      if (entryType === 'tree') renderDirectoryView(data);
+      else renderFileView(data);
+      return true;
+    })
+    .catch(function(error) {
+      $('fileViewTitle').textContent = fileNameFromPath(filePath);
+      $('fileViewMeta').textContent = '';
+      $('fileViewContent').innerHTML = '<div class="repo-browser-empty">' + escapeHtml(t('fileLoadFailed') + error.message) + '</div>';
+      return false;
+    })
+    .finally(function() {
+      state.fileViewLoading = false;
+      renderFileTree();
+    });
+}
+
+function renderFileLoading() {
+  if ($('fileViewTitle')) $('fileViewTitle').textContent = fileNameFromPath(state.fileViewPath) || state.currentBranch || '...';
+  if ($('fileViewMeta')) $('fileViewMeta').textContent = t('loadingFile');
+  if ($('fileViewContent')) $('fileViewContent').innerHTML = '<div class="repo-browser-loading">' + escapeHtml(t('loadingFile')) + '</div>';
+}
+
+function renderDirectoryView(data) {
+  var title = data.path ? fileNameFromPath(data.path) : state.currentBranch;
+  $('fileViewTitle').textContent = title || t('repositoryFiles');
+  $('fileViewMeta').textContent = (data.entries || []).length + ' ' + t('filesCount');
+  $('fileViewContent').innerHTML = '<div class="repo-browser file-view-directory">' +
+    ((data.entries || []).length ? data.entries.map(function(entry) {
+      return repositoryEntryHtml(entry).replace(/data-repo-path=/g, 'data-tree-path=');
+    }).join('') : '<div class="repo-browser-empty">' + escapeHtml(t('noRepositoryFiles')) + '</div>') +
+  '</div>';
+  $('fileViewContent').querySelectorAll('[data-tree-path]').forEach(function(item) {
+    item.addEventListener('click', function(event) {
+      event.preventDefault();
+      loadFileView(item.getAttribute('data-tree-path'), item.getAttribute('data-entry-type'));
+    });
+  });
+}
+
+function renderFileView(data) {
+  $('fileViewTitle').textContent = data.name || fileNameFromPath(data.path);
+  $('fileViewMeta').textContent = [formatFileSize(data.size), data.language, data.truncated ? t('truncatedFile') : ''].filter(Boolean).join(' · ');
+  renderBreadcrumb('fileDetailBreadcrumb', data.path || state.fileViewPath);
+  if (data.dataUrl) {
+    $('fileViewContent').innerHTML = '<div class="file-image-preview"><img src="' + escapeHtml(data.dataUrl) + '" alt="' + escapeHtml(data.name || data.path) + '"></div>';
+    return;
+  }
+  if (data.binary) {
+    $('fileViewContent').innerHTML = '<div class="file-binary">' + escapeHtml(data.size > 5 * 1024 * 1024 ? t('largeFile') : t('binaryFile')) + '</div>';
+    return;
+  }
+  $('fileViewContent').innerHTML = codeViewHtml(data.content || '');
+}
+
+function codeViewHtml(content) {
+  var lines = String(content || '').split(/\\r?\\n/);
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  if (!lines.length) lines = [''];
+  return '<pre class="code-view">' + lines.map(function(line, index) {
+    return '<span class="code-line-no">' + (index + 1) + '</span><span class="code-line-text">' + escapeHtml(line) + '</span>';
+  }).join('') + '</pre>';
+}
+
+function renderBreadcrumb(targetId, filePath) {
+  var target = $(targetId);
+  if (!target) return;
+  var parts = String(filePath || '').split('/').filter(Boolean);
+  var cursor = '';
+  var html = '<button type="button" data-breadcrumb-path="">' + escapeHtml(repoDisplayName(targetRepo) || state.currentBranch || 'repo') + '</button>';
+  parts.forEach(function(part) {
+    cursor = cursor ? (cursor + '/' + part) : part;
+    html += '<span>/</span><button type="button" data-breadcrumb-path="' + escapeHtml(cursor) + '">' + escapeHtml(part) + '</button>';
+  });
+  target.innerHTML = html;
+}
+
+function entryIcon(type) {
+  if (type === 'tree') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10l2 2h5.5A2.5 2.5 0 0 1 20 8.5v7A2.5 2.5 0 0 1 17.5 18h-11A2.5 2.5 0 0 1 4 15.5z"></path></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"></path><path d="M14 2v5h5"></path></svg>';
+}
+
+function formatFileSize(size) {
+  if (size == null || Number.isNaN(Number(size))) return '';
+  var value = Number(size);
+  if (value < 1024) return value + ' B';
+  if (value < 1024 * 1024) return (value / 1024).toFixed(value < 10 * 1024 ? 1 : 0) + ' KB';
+  return (value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0) + ' MB';
+}
+
+function fileNameFromPath(filePath) {
+  var parts = String(filePath || '').split('/').filter(Boolean);
+  return parts[parts.length - 1] || '';
+}
+
 function renderBranches() {
   var box = $('branches');
+  if (!box) return;
   if (!state.sortedBranches.length) { box.innerHTML = '<div class="meta">' + escapeHtml(t('noBranches')) + '</div>'; return; }
 
   var childrenMap = {};
