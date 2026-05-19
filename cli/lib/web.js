@@ -303,6 +303,11 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname === '/api/file-diff') {
+      sendJson(res, fileDiff(targetRepo, parsed.query.path));
+      return;
+    }
+
     if (parsed.pathname === '/api/tasks') {
       sendJson(res, readRepositoryTasks(targetRepo));
       return;
@@ -1662,6 +1667,46 @@ function repositoryFile(root, filePath) {
   return payload;
 }
 
+function fileDiff(root, filePath) {
+  var repoRoot = git.repoRoot(root);
+  var cleanPath = normalizeRepositoryPath(filePath, false);
+  var changedFiles = parseStatusOutput(runGitOptional(repoRoot, ['status', '--porcelain=v1', '-b', '-z'])).files;
+  var file = changedFiles.find(function (item) {
+    return item.path === cleanPath;
+  });
+  if (!file) {
+    throwHttpError('File has no working tree changes: ' + cleanPath);
+  }
+
+  var output = '';
+  if (file.code === '??') {
+    var untracked = childProcess.spawnSync('git', ['diff', '--no-index', '--', os.devNull || '/dev/null', cleanPath], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer: DIFF_LIMIT + 1024
+    });
+    output = (untracked.stdout || untracked.stderr || '').trim();
+  } else {
+    output = runGitOptional(repoRoot, ['diff', 'HEAD', '--', cleanPath]);
+    if (!output && file.originalPath) {
+      output = runGitOptional(repoRoot, ['diff', 'HEAD', '--', file.originalPath, cleanPath]);
+    }
+  }
+
+  var truncated = output.length > DIFF_LIMIT;
+  if (truncated) {
+    output = output.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
+  }
+
+  return {
+    path: cleanPath,
+    displayPath: file.displayPath || cleanPath,
+    code: file.code,
+    diff: output,
+    truncated: truncated
+  };
+}
+
 function hasHead(repoRoot) {
   return runGitOptional(repoRoot, ['rev-parse', '--verify', 'HEAD']) !== '';
 }
@@ -2440,6 +2485,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .file-row input { width: 15px; height: 15px; accent-color: var(--accent); }
 .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--amber); font-weight: 750; }
 .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-diff-link { min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.file-diff-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .commit-status { min-height: 17px; margin-top: 9px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .commit-status.error { color: var(--rose); }
 .branch-block { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 2px; flex-shrink: 0; }
@@ -2478,6 +2525,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .repo-browser-status.error { color: var(--rose); }
 .file-detail-page { display: grid; gap: 14px; }
 .file-detail-page[hidden] { display: none; }
+.diff-detail-page { display: grid; gap: 14px; }
+.diff-detail-page[hidden] { display: none; }
 .file-detail-toolbar { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 10px; }
 .file-detail-toolbar .copy-button { display: inline-flex; align-items: center; gap: 6px; height: 34px; }
 .file-detail-toolbar .copy-button svg { width: 15px; height: 15px; }
@@ -2487,11 +2536,16 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .file-view-panel { overflow: hidden; }
 .file-tree { display: grid; gap: 2px; font-size: 13px; }
 .file-tree-group { display: grid; gap: 2px; }
-.file-tree-row { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 6px; align-items: center; width: 100%; min-height: 28px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #334155; cursor: pointer; text-align: left; font: inherit; }
+.file-tree-row { display: grid; grid-template-columns: 18px 17px minmax(0, 1fr); gap: 5px; align-items: center; width: 100%; min-height: 28px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #334155; cursor: pointer; text-align: left; font: inherit; }
 .file-tree-row:hover, .file-tree-row.active { background: #f8fafc; border-color: var(--line-soft); color: var(--accent); }
 .file-tree-row.active { font-weight: 800; }
 .file-tree-row svg { width: 15px; height: 15px; color: #64748b; }
 .file-tree-row[data-entry-type="tree"] svg { color: #d97706; }
+.file-tree-toggle { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #64748b; cursor: pointer; }
+.file-tree-toggle:hover { background: #e2e8f0; color: var(--accent); }
+.file-tree-toggle svg { width: 13px; height: 13px; transition: transform .14s; }
+.file-tree-toggle.expanded svg { transform: rotate(90deg); }
+.file-tree-toggle-placeholder { width: 18px; height: 18px; }
 .file-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-view-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line-soft); background: #fbfdff; }
 .file-view-title { margin: 0; color: var(--text); font-size: 16px; line-height: 1.25; letter-spacing: 0; text-transform: none; overflow-wrap: anywhere; }
@@ -2502,6 +2556,16 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .code-line-no, .code-line-text { min-height: 20px; }
 .file-binary, .file-image-preview { display: grid; place-items: center; min-height: 360px; padding: 24px; color: var(--muted); text-align: center; }
 .file-image-preview img { max-width: 100%; max-height: 70vh; border-radius: 8px; border: 1px solid var(--line-soft); box-shadow: 0 14px 34px rgba(15,23,42,.10); }
+.diff-view-panel { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.04); overflow: hidden; }
+.diff-view-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line-soft); background: #fbfdff; }
+.diff-view-title { margin: 0; color: var(--text); font-size: 16px; line-height: 1.25; letter-spacing: 0; text-transform: none; overflow-wrap: anywhere; }
+.diff-view-content { min-height: 440px; overflow: auto; background: #fff; }
+.diff-code { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.55; }
+.diff-line { display: block; min-height: 20px; padding: 0 14px; white-space: pre; }
+.diff-line.add { background: #dcfce7; color: #166534; }
+.diff-line.del { background: #fee2e2; color: #991b1b; }
+.diff-line.hunk { background: #eff6ff; color: #1d4ed8; }
+.diff-line.meta { background: #f8fafc; color: #475569; }
 .readme-panel { margin-top: 0; }
 .readme-panel .readme-body { padding: 4px 0 0; font-size: 14px; line-height: 1.65; overflow-wrap: break-word; word-break: break-word; }
 .readme-body h1, .readme-body h2, .readme-body h3, .readme-body h4 { margin: 1.2em 0 .6em; font-weight: 700; }
@@ -2827,6 +2891,24 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             </section>
           </div>
         </section>
+        <section id="diffDetailPage" class="diff-detail-page" hidden>
+          <div class="file-detail-toolbar">
+            <button id="backFromDiff" class="copy-button" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+              <span data-i18n="back">Back</span>
+            </button>
+            <nav id="diffBreadcrumb" class="repo-breadcrumb" aria-label="Diff file path"></nav>
+          </div>
+          <section class="diff-view-panel">
+            <div class="diff-view-head">
+              <div>
+                <h2 id="diffViewTitle" class="diff-view-title">...</h2>
+                <div id="diffViewMeta" class="meta"></div>
+              </div>
+            </div>
+            <div id="diffViewContent" class="diff-view-content"></div>
+          </section>
+        </section>
       </div>
       <section id="taskPage" class="task-page" hidden>
         <div class="task-hero">
@@ -2992,7 +3074,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileViewPath: '', fileViewType: '', fileViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -3028,6 +3110,10 @@ var I18N = {
     truncatedFile: '内容已截断',
     directory: '目录',
     file: '文件',
+    diffView: 'Diff 视图',
+    loadingDiff: '正在加载 Diff...',
+    diffLoadFailed: 'Diff 加载失败：',
+    noDiff: '没有可显示的 diff。',
     openReadme: '打开 README',
     commitGraph: '提交图',
     recentHistory: '最近仓库历史',
@@ -3195,6 +3281,10 @@ var I18N = {
     truncatedFile: 'Content truncated',
     directory: 'Directory',
     file: 'File',
+    diffView: 'Diff View',
+    loadingDiff: 'Loading diff...',
+    diffLoadFailed: 'Failed to load diff: ',
+    noDiff: 'No diff to show.',
     openReadme: 'Open README',
     commitGraph: 'Commit Graph',
     recentHistory: 'Recent repository history',
@@ -4524,7 +4614,7 @@ window.addEventListener('resize', function() {
   if (state.contributions) renderCalendar(state.contributions);
 });
 document.addEventListener('visibilitychange', function() {
-  if (!document.hidden && state.auto && targetRepo) {
+  if (!document.hidden && state.auto && targetRepo && !isDetailPageOpen()) {
     load({ force: true });
   } else {
     schedule();
@@ -4547,6 +4637,7 @@ if (${process.env.GMC_GITWEB_LIVE_RELOAD ? 'true' : 'false'}) {
 function schedule() {
   clearTimeout(state.timer);
   if (!state.auto || !targetRepo) return;
+  if (isDetailPageOpen()) return;
   state.timer = setTimeout(load, document.hidden ? HIDDEN_STATUS_INTERVAL_MS : AUTO_STATUS_INTERVAL_MS);
 }
 
@@ -4686,10 +4777,6 @@ function render(data) {
   processTopology(data);
   renderBranchMenus();
   loadRepositoryBrowser({ force: true });
-  if (isFileDetailOpen()) {
-    loadFileTree({ force: true });
-    loadFileView(state.fileViewPath, state.fileViewType || 'blob');
-  }
   renderCommits(state.commits);
   
   clearTimeout(state.graphTimer);
@@ -4857,11 +4944,11 @@ function renderFiles(files) {
       files.map(function(f) {
         var checked = state.selected[f.path] ? ' checked' : '';
         var displayPath = f.displayPath || f.path;
-        return '<label class="file-row" title="' + escapeHtml(displayPath) + '">' +
+        return '<div class="file-row" title="' + escapeHtml(displayPath) + '">' +
           '<input class="file-check" type="checkbox" value="' + escapeHtml(f.path) + '"' + checked + '>' +
           '<span class="code">' + escapeHtml(f.code) + '</span>' +
-          '<span class="file-name">' + escapeHtml(displayPath) + '</span>' +
-        '</label>';
+          '<button class="file-name file-diff-link" type="button" data-diff-path="' + escapeHtml(f.path) + '">' + escapeHtml(displayPath) + '</button>' +
+        '</div>';
       }).join(''),
     '</div>',
     '<div id="commitStatus" class="commit-status"></div>'
@@ -4902,6 +4989,13 @@ function bindFileControls(files) {
   if (restoreButton) {
     restoreButton.addEventListener('click', restoreSelectedFilesAction);
   }
+  document.querySelectorAll('.file-diff-link').forEach(function(link) {
+    link.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      openDiffDetail(link.getAttribute('data-diff-path'));
+    });
+  });
 
   updateCommitControls();
 }
@@ -5106,10 +5200,19 @@ function bindRepositoryBrowserControls() {
 
   var back = $('backToDashboard');
   if (back) back.addEventListener('click', closeFileDetailPage);
+  var diffBack = $('backFromDiff');
+  if (diffBack) diffBack.addEventListener('click', closeDiffDetailPage);
 
   var tree = $('fileTree');
   if (tree) {
     tree.addEventListener('click', function(event) {
+      var toggle = event.target.closest && event.target.closest('[data-tree-toggle]');
+      if (toggle) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleFileTreePath(toggle.getAttribute('data-tree-toggle'));
+        return;
+      }
       var item = event.target.closest && event.target.closest('[data-tree-path]');
       if (!item) return;
       event.preventDefault();
@@ -5215,7 +5318,14 @@ function checkoutSelectedBranch(branchName) {
     .then(function(data) {
       state.repoBrowserPath = '';
       state.fileTree = null;
+      state.fileTreeExpanded = {};
       render(data);
+      if (isFileDetailOpen()) {
+        loadFileTree({ force: true });
+        loadFileView(state.fileViewPath, state.fileViewType || 'blob');
+      } else if (isDiffDetailOpen()) {
+        loadDiffView(state.diffViewPath);
+      }
       setRepoBrowserStatus('', false);
     })
     .catch(function(error) {
@@ -5301,6 +5411,8 @@ function openFileDetail(filePath, entryType) {
   state.fileViewType = entryType === 'tree' ? 'tree' : 'blob';
   if ($('dashboardPage')) $('dashboardPage').hidden = true;
   if ($('fileDetailPage')) $('fileDetailPage').hidden = false;
+  if ($('diffDetailPage')) $('diffDetailPage').hidden = true;
+  clearTimeout(state.timer);
   loadFileTree({ force: !state.fileTree });
   loadFileView(state.fileViewPath, state.fileViewType);
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -5312,11 +5424,95 @@ function closeFileDetailPage() {
   state.fileViewPath = '';
   state.fileViewType = '';
   refreshLayoutSoon();
+  schedule();
+}
+
+function openDiffDetail(filePath) {
+  if (!filePath) return;
+  state.diffViewPath = filePath;
+  if ($('dashboardPage')) $('dashboardPage').hidden = true;
+  if ($('fileDetailPage')) $('fileDetailPage').hidden = true;
+  if ($('diffDetailPage')) $('diffDetailPage').hidden = false;
+  clearTimeout(state.timer);
+  loadDiffView(filePath);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function closeDiffDetailPage() {
+  if ($('diffDetailPage')) $('diffDetailPage').hidden = true;
+  if ($('dashboardPage')) $('dashboardPage').hidden = false;
+  state.diffViewPath = '';
+  refreshLayoutSoon();
+  schedule();
 }
 
 function isFileDetailOpen() {
   var page = $('fileDetailPage');
   return !!(page && !page.hidden);
+}
+
+function isDiffDetailOpen() {
+  var page = $('diffDetailPage');
+  return !!(page && !page.hidden);
+}
+
+function isDetailPageOpen() {
+  return isFileDetailOpen() || isDiffDetailOpen();
+}
+
+function loadDiffView(filePath) {
+  if (!targetRepo || !filePath || state.diffViewLoading) return Promise.resolve(false);
+  state.diffViewLoading = true;
+  renderDiffLoading(filePath);
+  return fetch('/api/file-diff?repo=' + encodeURIComponent(targetRepo) + '&path=' + encodeURIComponent(filePath), { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      renderDiffView(data);
+      return true;
+    })
+    .catch(function(error) {
+      $('diffViewTitle').textContent = fileNameFromPath(filePath);
+      $('diffViewMeta').textContent = '';
+      $('diffViewContent').innerHTML = '<div class="repo-browser-empty">' + escapeHtml(t('diffLoadFailed') + error.message) + '</div>';
+      return false;
+    })
+    .finally(function() {
+      state.diffViewLoading = false;
+    });
+}
+
+function renderDiffLoading(filePath) {
+  renderBreadcrumb('diffBreadcrumb', filePath);
+  if ($('diffViewTitle')) $('diffViewTitle').textContent = fileNameFromPath(filePath);
+  if ($('diffViewMeta')) $('diffViewMeta').textContent = t('loadingDiff');
+  if ($('diffViewContent')) $('diffViewContent').innerHTML = '<div class="repo-browser-loading">' + escapeHtml(t('loadingDiff')) + '</div>';
+}
+
+function renderDiffView(data) {
+  $('diffViewTitle').textContent = data.displayPath || data.path || state.diffViewPath;
+  $('diffViewMeta').textContent = [data.code, data.truncated ? t('truncatedFile') : ''].filter(Boolean).join(' · ');
+  renderBreadcrumb('diffBreadcrumb', data.path || state.diffViewPath);
+  $('diffViewContent').innerHTML = diffCodeHtml(data.diff || '');
+}
+
+function diffCodeHtml(diff) {
+  var lines = String(diff || '').split(/\\r?\\n/);
+  if (!diff) {
+    return '<div class="repo-browser-empty">' + escapeHtml(t('noDiff')) + '</div>';
+  }
+  return '<pre class="diff-code">' + lines.map(function(line) {
+    var cls = 'ctx';
+    if (line.indexOf('+++') === 0 || line.indexOf('---') === 0 || line.indexOf('diff --git') === 0 || line.indexOf('index ') === 0) cls = 'meta';
+    else if (line.indexOf('@@') === 0) cls = 'hunk';
+    else if (line.charAt(0) === '+') cls = 'add';
+    else if (line.charAt(0) === '-') cls = 'del';
+    return '<span class="diff-line ' + cls + '">' + escapeHtml(line || ' ') + '</span>';
+  }).join('') + '</pre>';
 }
 
 function loadFileTree(options) {
@@ -5368,13 +5564,24 @@ function renderFileTree() {
   }).join('');
 }
 
+function toggleFileTreePath(filePath) {
+  if (!filePath) return;
+  state.fileTreeExpanded[filePath] = !state.fileTreeExpanded[filePath];
+  renderFileTree();
+}
+
 function fileTreeNodeHtml(node, depth) {
   var active = node.path === state.fileViewPath ? ' active' : '';
-  var html = '<button class="file-tree-row' + active + '" type="button" style="padding-left:' + (6 + depth * 14) + 'px" data-tree-path="' + escapeHtml(node.path) + '" data-entry-type="' + escapeHtml(node.type) + '">' +
-    entryIcon(node.type) +
+  var isTree = node.type === 'tree';
+  var expanded = isTree && state.fileTreeExpanded[node.path] === true;
+  var toggle = isTree
+    ? '<button class="file-tree-toggle' + (expanded ? ' expanded' : '') + '" type="button" data-tree-toggle="' + escapeHtml(node.path) + '" aria-label="' + escapeHtml((expanded ? 'Collapse ' : 'Expand ') + node.name) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button>'
+    : '<span class="file-tree-toggle-placeholder"></span>';
+  var html = '<div class="file-tree-row' + active + '" role="button" tabindex="0" style="padding-left:' + (6 + depth * 14) + 'px" data-tree-path="' + escapeHtml(node.path) + '" data-entry-type="' + escapeHtml(node.type) + '">' +
+    toggle + entryIcon(node.type) +
     '<span class="file-tree-name">' + escapeHtml(node.name) + '</span>' +
-  '</button>';
-  if (node.type === 'tree' && node.children && node.children.length) {
+  '</div>';
+  if (expanded && node.children && node.children.length) {
     html += '<div class="file-tree-group">' + node.children.map(function(child) {
       return fileTreeNodeHtml(child, depth + 1);
     }).join('') + '</div>';
