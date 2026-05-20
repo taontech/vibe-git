@@ -5,12 +5,15 @@ function createdByLine(agent) {
   if (name === 'claude') {
     return 'claude created';
   }
+  if (name === 'antigravity') {
+    return 'antigravity created';
+  }
   return 'codex created';
 }
 
 function appendCreatedBy(message, agent) {
   var text = String(message || '')
-    .replace(/\n+(codex|claude) created\s*$/i, '')
+    .replace(/\n+(codex|claude|antigravity) created\s*$/i, '')
     .trim();
   return text + '\n\n' + createdByLine(agent) + '\n';
 }

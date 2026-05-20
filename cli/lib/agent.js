@@ -59,7 +59,13 @@ function launchAgent(options) {
     return;
   }
 
-  throw new Error('Unsupported agent: ' + agent + '. Use codex or claude.');
+  if (agent === 'antigravity') {
+    // agy supports --prompt-interactive (or -i) to start a coding session
+    spawnInherited('agy', ['--prompt-interactive', prompt], cwd);
+    return;
+  }
+
+  throw new Error('Unsupported agent: ' + agent + '. Use codex, claude or antigravity.');
 }
 
 function generateText(prompt, cwd, selectedAgent, options) {
@@ -71,7 +77,10 @@ function generateText(prompt, cwd, selectedAgent, options) {
   if (selectedAgent === 'claude') {
     return generateClaudeText(prompt, cwd);
   }
-  throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex or claude.');
+  if (selectedAgent === 'antigravity') {
+    return generateAntigravityText(prompt, cwd);
+  }
+  throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex, claude or antigravity.');
 }
 
 function generateCodexText(prompt, cwd, options) {
@@ -142,6 +151,25 @@ function generateClaudeText(prompt, cwd) {
   }
   if (result.status !== 0) {
     throw new Error('claude generation failed with status ' + result.status + ': ' + commandOutput(result));
+  }
+  return cleanAgentOutput(result.stdout);
+}
+
+function generateAntigravityText(prompt, cwd) {
+  var result = childProcess.spawnSync('agy', ['--prompt', prompt], {
+    cwd: cwd,
+    encoding: 'utf8',
+    timeout: codexTimeoutMs(),
+    killSignal: 'SIGTERM'
+  });
+  if (result.error) {
+    if (result.error.code === 'ETIMEDOUT') {
+      throw new Error('antigravity generation timed out after ' + Math.round(codexTimeoutMs() / 1000) + 's');
+    }
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error('antigravity generation failed with status ' + result.status + ': ' + commandOutput(result));
   }
   return cleanAgentOutput(result.stdout);
 }
