@@ -35,7 +35,7 @@
   },
   "scripts": {
     "start": "node bin/gmc.js",
-    "test": "node --check bin/gmc.js && node --check lib/git.js && node --check lib/github.js && node --check lib/config.js && node --check lib/prompts.js && node --check lib/agent.js && node --check lib/task-status.js && node --check lib/autogmc.js && node --check lib/web.js",
+    "test": "node --check bin/gmc.js && node --check lib/git.js && node --check lib/github.js && node --check lib/config.js && node --check lib/prompts.js && node --check lib/agent.js && node --check lib/commit-message.js && node --check lib/task-status.js && node --check lib/autogmc.js && node --check lib/web.js",
     "prepublishOnly": "npm test"
   },
   "engine-strict": true,

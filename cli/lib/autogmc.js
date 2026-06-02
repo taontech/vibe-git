@@ -5,6 +5,7 @@ var fs = require('fs');
 var path = require('path');
 var agent = require('./agent');
 var config = require('./config');
+var commitMessage = require('./commit-message');
 var git = require('./git');
 var prompts = require('./prompts');
 var taskStatus = require('./task-status');
@@ -112,7 +113,7 @@ function worker(targetOid) {
       }
       var message = prompts.appendCreatedBy(generated, selectedAgent);
       log('received commit message from ' + selectedAgent);
-      validateCommitMessage(message, binding);
+      message = commitMessage.prepare(message, binding);
 
       if (currentHead(root) !== targetOid) {
         return skip(root, targetOid, 'target commit changed while generating message', log);
@@ -244,37 +245,6 @@ function rewriteHeadMessage(root, targetOid, message) {
   git.runGit(['update-ref', '-m', 'gmc: replace generated commit message', 'HEAD', newOid, targetOid], { cwd: root });
   removeFile(messageFile);
   return newOid;
-}
-
-function validateCommitMessage(message, binding) {
-  var text = String(message || '').trim();
-  var firstLine = text.split(/\r?\n/)[0] || '';
-  var forbiddenPatterns = [
-    /OpenAI Codex/i,
-    /User instructions:/i,
-    /Staged diff:/i,
-    /Committed diff:/i,
-    /stream error:/i,
-    /\bERROR:/i,
-    /unexpected status \d+/i,
-    /^-{8,}$/m,
-    /^\[\d{4}-\d{2}-\d{2}T/m
-  ];
-
-  if (!text) {
-    throw new Error('Codex returned an empty commit message.');
-  }
-  if (binding && text.indexOf('Issue: ' + binding.issue) < 0) {
-    throw new Error('Generated commit message is missing required trailer: Issue: ' + binding.issue);
-  }
-  if (firstLine.length > 72) {
-    throw new Error('Generated commit subject is longer than 72 characters: ' + firstLine);
-  }
-  forbiddenPatterns.forEach(function (pattern) {
-    if (pattern.test(text)) {
-      throw new Error('Generated commit message looks like Codex logs instead of a commit message. Aborting.');
-    }
-  });
 }
 
 function cleanupCommitMessage(message) {

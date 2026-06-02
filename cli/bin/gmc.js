@@ -9,6 +9,7 @@ var path = require('path');
 var git = require('../lib/git');
 var github = require('../lib/github');
 var config = require('../lib/config');
+var commitMessage = require('../lib/commit-message');
 var prompts = require('../lib/prompts');
 var agent = require('../lib/agent');
 var autogmc = require('../lib/autogmc');
@@ -265,7 +266,7 @@ function commitCommand(flags) {
   if (!flags.noEdit) {
     editFile(messageFile, root);
     message = fs.readFileSync(messageFile, 'utf8');
-    validateCommitMessage(message, binding);
+    commitMessage.validate(message, binding);
   }
 
   git.runGit(['commit', '-F', messageFile], { cwd: root });
@@ -620,7 +621,7 @@ function generateCommitMessage(root, flags, options) {
     raw,
     selectedAgent
   );
-  validateCommitMessage(message, binding);
+  message = commitMessage.prepare(message, binding);
   return {
     binding: binding,
     message: message,
@@ -641,36 +642,6 @@ function applyTaskUpdates(root, updates) {
     }
   } catch (error) {
     console.error('gmc: task status update skipped after commit: ' + error.message);
-  }
-}
-
-function validateCommitMessage(message, binding) {
-  var text = String(message || '').trim();
-  var firstLine = text.split(/\r?\n/)[0] || '';
-  var forbiddenPatterns = [
-    /OpenAI Codex/i,
-    /User instructions:/i,
-    /Staged diff:/i,
-    /stream error:/i,
-    /\bERROR:/i,
-    /unexpected status \d+/i,
-    /^-{8,}$/m,
-    /^\[\d{4}-\d{2}-\d{2}T/m
-  ];
-
-  if (!text) {
-    throw new Error('Codex returned an empty commit message.');
-  }
-  if (binding && text.indexOf('Issue: ' + binding.issue) < 0) {
-    throw new Error('Generated commit message is missing required trailer: Issue: ' + binding.issue);
-  }
-  if (firstLine.length > 72) {
-    throw new Error('Generated commit subject is longer than 72 characters: ' + firstLine);
-  }
-  for (var i = 0; i < forbiddenPatterns.length; i++) {
-    if (forbiddenPatterns[i].test(text)) {
-      throw new Error('Generated commit message looks like Codex logs instead of a commit message. Aborting.');
-    }
   }
 }
 

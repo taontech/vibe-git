@@ -10,6 +10,7 @@ var url = require('url');
 var autogmc = require('./autogmc');
 var agent = require('./agent');
 var config = require('./config');
+var commitMessage = require('./commit-message');
 var git = require('./git');
 var prompts = require('./prompts');
 var taskStatus = require('./task-status');
@@ -1908,6 +1909,7 @@ function commitSelectedFiles(root, selectedFiles) {
         generated,
         selectedAgent
       );
+      aiMessage = commitMessage.prepare(aiMessage, binding);
     } catch (aiError) {
       var err = new Error('AI commit message generation failed: ' + aiError.message);
       err.httpStatus = 500;
