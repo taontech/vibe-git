@@ -31,6 +31,10 @@ function writeConfig(metadata) {
 }
 
 function currentAgent() {
+  var globalGitAgent = git.getGlobalConfig('gmc.agent');
+  if (globalGitAgent) {
+    return normalizeAgent(globalGitAgent);
+  }
   var metadata = readConfig();
   if (metadata.agent) {
     return normalizeAgent(metadata.agent);
@@ -40,9 +44,14 @@ function currentAgent() {
 
 function setAgent(agent) {
   var selectedAgent = normalizeAgent(agent);
-  var metadata = readConfig();
-  metadata.agent = selectedAgent;
-  writeConfig(metadata);
+  git.setGlobalConfig('gmc.agent', selectedAgent);
+  try {
+    var metadata = readConfig();
+    metadata.agent = selectedAgent;
+    writeConfig(metadata);
+  } catch (error) {
+    // Ignore filesystem write errors since git config --global succeeded
+  }
   return selectedAgent;
 }
 

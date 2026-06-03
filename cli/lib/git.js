@@ -73,6 +73,20 @@ function setConfig(key, value, cwd) {
   return runGit(['config', '--local', key, value], { cwd: repoRoot(cwd) });
 }
 
+function getGlobalConfig(key) {
+  var result = runGit(['config', '--global', '--get', key], {
+    allowFailure: true
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return (result.stdout || '').trim() || null;
+}
+
+function setGlobalConfig(key, value) {
+  return runGit(['config', '--global', key, value]);
+}
+
 function branchExists(branch, cwd) {
   var result = runGit(['rev-parse', '--verify', 'refs/heads/' + branch], {
     cwd: repoRoot(cwd),
@@ -161,6 +175,8 @@ module.exports = {
   parseGitHubRemote: parseGitHubRemote,
   getConfig: getConfig,
   setConfig: setConfig,
+  getGlobalConfig: getGlobalConfig,
+  setGlobalConfig: setGlobalConfig,
   branchExists: branchExists,
   ensureBranch: ensureBranch,
   branchName: branchName,
