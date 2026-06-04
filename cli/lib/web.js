@@ -576,19 +576,39 @@ function checkInstallStatus(root) {
   var repoRoot = git.repoRoot(root);
   var gitDirPath = git.gitDir(root);
   var hooks = { commitMsg: false, postCommit: false };
+  var currentScriptPath = path.resolve(__dirname, '../bin/gmc.js');
+  var realCurrentScriptPath = '';
+  try {
+    realCurrentScriptPath = fs.realpathSync(currentScriptPath);
+  } catch (e) { /* ignore */ }
+
+  function verifyHookFile(filePath) {
+    if (!fs.existsSync(filePath)) {
+      return false;
+    }
+    var content = fs.readFileSync(filePath, 'utf8');
+    if (content.indexOf('# GMHOOK') < 0) {
+      return false;
+    }
+    var match = content.match(/exec\s+['"]?[^'"]+['"]?\s+['"]([^'"]+)['"]\s+hook/);
+    if (!match) {
+      return false;
+    }
+    try {
+      var realScriptPath = fs.realpathSync(match[1]);
+      return realScriptPath === realCurrentScriptPath;
+    } catch (e) {
+      return false;
+    }
+  }
+
   try {
     var cmPath = path.join(gitDirPath, 'hooks', 'commit-msg');
-    if (fs.existsSync(cmPath)) {
-      var content = fs.readFileSync(cmPath, 'utf8');
-      hooks.commitMsg = content.indexOf('# GMHOOK') >= 0;
-    }
+    hooks.commitMsg = verifyHookFile(cmPath);
   } catch (e) { /* ignore */ }
   try {
     var pcPath = path.join(gitDirPath, 'hooks', 'post-commit');
-    if (fs.existsSync(pcPath)) {
-      var content = fs.readFileSync(pcPath, 'utf8');
-      hooks.postCommit = content.indexOf('# GMHOOK') >= 0;
-    }
+    hooks.postCommit = verifyHookFile(pcPath);
   } catch (e) { /* ignore */ }
   var weblocPath = path.join(repoRoot, 'git.webloc');
   return {
