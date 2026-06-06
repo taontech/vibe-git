@@ -44,7 +44,7 @@ function issuePrompt(issue) {
   ].join('\n');
 }
 
-function commitMessagePrompt(binding, diff, status, recentSubjects, options) {
+function commitMessagePrompt(binding, diff, status, options) {
   options = options || {};
   var changeDescription = options.changeDescription || 'staged changes';
   var diffLabel = options.diffLabel || 'Staged diff';
@@ -56,8 +56,7 @@ function commitMessagePrompt(binding, diff, status, recentSubjects, options) {
     '- Describe each distinct feature, behavior, or config change in about 2-3 short body lines.',
     '- Aim for at most 20 non-empty lines total, but exceed that when needed to make a large change understandable.',
     '- Use imperative mood.',
-    '- Mention only changes visible in the ' + changeDescription + '.',
-    '- Match the repository style suggested by recent commit subjects.'
+    '- Mention only changes visible in the ' + changeDescription + '.'
   ];
   var sections = [
     'Generate a clear Git commit message for the ' + changeDescription + '.',
@@ -81,9 +80,6 @@ function commitMessagePrompt(binding, diff, status, recentSubjects, options) {
 
   return sections.concat([
     '',
-    'Recent commit subjects:',
-    recentSubjects || '(none)',
-    '',
     'Git status:',
     status || '(clean)',
     '',
@@ -92,7 +88,7 @@ function commitMessagePrompt(binding, diff, status, recentSubjects, options) {
   ]).join('\n');
 }
 
-function commitMessagePlanPrompt(binding, diff, status, recentSubjects, tasks, options) {
+function commitMessagePlanPrompt(binding, diff, status, tasks, options) {
   options = options || {};
   var changeDescription = options.changeDescription || 'staged changes';
   var diffLabel = options.diffLabel || 'Staged diff';
@@ -112,7 +108,6 @@ function commitMessagePlanPrompt(binding, diff, status, recentSubjects, tasks, o
     '- Aim for at most 20 non-empty message lines total, but exceed that when needed to make a large change understandable.',
     '- Use imperative mood.',
     '- Mention only changes visible in the ' + changeDescription + '.',
-    '- Match the repository style suggested by recent commit subjects.',
   ];
   if (binding) {
     sections.push('- Include this trailer exactly in the message field: Issue: ' + binding.issue);
@@ -139,9 +134,6 @@ function commitMessagePlanPrompt(binding, diff, status, recentSubjects, tasks, o
     ]);
   }
   return sections.concat([
-    '',
-    'Recent commit subjects:',
-    recentSubjects || '(none)',
     '',
     'Current tasks:',
     JSON.stringify(tasks || [], null, 2),

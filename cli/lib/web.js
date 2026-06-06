@@ -2076,18 +2076,16 @@ function commitSelectedFiles(root, selectedFiles) {
     if (diff.length > DIFF_LIMIT) {
       diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
     }
-    var tasks = taskStatus.readRepositoryTasks(repoRoot).map(taskStatus.taskForPrompt);
+    var tasks = taskStatus.readUnfinishedTasksForPrompt(repoRoot);
     var prompt = tasks.length ? prompts.commitMessagePlanPrompt(
       binding,
       diff,
       git.statusShort(repoRoot),
-      git.recentCommitSubjects(repoRoot, 20),
       tasks
     ) : prompts.commitMessagePrompt(
       binding,
       diff,
-      git.statusShort(repoRoot),
-      git.recentCommitSubjects(repoRoot, 20)
+      git.statusShort(repoRoot)
     );
     var aiMessage;
     try {

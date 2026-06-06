@@ -7,6 +7,11 @@ var path = require('path');
 
 var codexExecHelpCache = null;
 var DEFAULT_CODEX_TIMEOUT_MS = 10 * 60 * 1000;
+var CLAUDE_TEXT_SYSTEM_PROMPT = [
+  'Generate only the requested text response.',
+  'Do not inspect the repository, use tools, load project instructions, or explain your work.',
+  'Follow the user prompt exactly.'
+].join(' ');
 
 function spawnInherited(command, args, cwd) {
   var result = childProcess.spawnSync(command, args, {
@@ -145,9 +150,18 @@ function generateCodexText(prompt, cwd, options) {
 }
 
 function generateClaudeText(prompt, cwd) {
-  var result = childProcess.spawnSync('claude', ['-p', prompt], {
+  var result = childProcess.spawnSync('claude', [
+    '-p',
+    '--no-session-persistence',
+    '--disable-slash-commands',
+    '--strict-mcp-config',
+    '--mcp-config', '{"mcpServers":{}}',
+    '--tools', '',
+    '--system-prompt', CLAUDE_TEXT_SYSTEM_PROMPT
+  ], {
     cwd: cwd,
     encoding: 'utf8',
+    input: prompt,
     timeout: codexTimeoutMs(),
     killSignal: 'SIGTERM'
   });

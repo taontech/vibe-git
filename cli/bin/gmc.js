@@ -590,18 +590,16 @@ function generateCommitMessage(root, flags, options) {
     diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
   }
 
-  var tasks = options.taskStatus ? taskStatus.readRepositoryTasks(root).map(taskStatus.taskForPrompt) : [];
+  var tasks = options.taskStatus ? taskStatus.readUnfinishedTasksForPrompt(root) : [];
   var prompt = tasks.length ? prompts.commitMessagePlanPrompt(
     binding,
     diff,
     git.statusShort(root),
-    git.recentCommitSubjects(root, 20),
     tasks
   ) : prompts.commitMessagePrompt(
     binding,
     diff,
-    git.statusShort(root),
-    git.recentCommitSubjects(root, 20)
+    git.statusShort(root)
   );
 
   if (flags.printPrompt) {

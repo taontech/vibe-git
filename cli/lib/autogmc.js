@@ -147,7 +147,7 @@ function buildPrompt(root, targetOid, binding) {
     diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
   }
 
-  var tasks = taskStatus.readRepositoryTasks(root).map(taskStatus.taskForPrompt);
+  var tasks = taskStatus.readUnfinishedTasksForPrompt(root);
   var options = {
     changeDescription: 'committed changes',
     diffLabel: 'Committed diff'
@@ -159,7 +159,6 @@ function buildPrompt(root, targetOid, binding) {
         binding,
         diff,
         git.statusShort(root),
-        git.recentCommitSubjects(root, 20),
         tasks,
         options
       )
@@ -172,7 +171,6 @@ function buildPrompt(root, targetOid, binding) {
       binding,
       diff,
       git.statusShort(root),
-      git.recentCommitSubjects(root, 20),
       options
     )
   };

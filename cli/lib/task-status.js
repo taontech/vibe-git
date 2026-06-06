@@ -21,6 +21,13 @@ function taskForPrompt(task) {
   };
 }
 
+function readUnfinishedTasksForPrompt(root) {
+  var repoRoot = git.repoRoot(root);
+  return readRepositoryTasks(repoRoot)
+    .filter(function (task) { return task.status !== 'done'; })
+    .map(taskForPrompt);
+}
+
 function parseCommitPlan(text) {
   var jsonText = extractJson(text);
   var parsed;
@@ -234,5 +241,6 @@ module.exports = {
   applyUpdates: applyUpdates,
   parseCommitPlan: parseCommitPlan,
   readRepositoryTasks: readRepositoryTasks,
+  readUnfinishedTasksForPrompt: readUnfinishedTasksForPrompt,
   taskForPrompt: taskForPrompt
 };
