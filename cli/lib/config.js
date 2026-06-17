@@ -11,10 +11,10 @@ var DEFAULT_AGENT = 'codex';
 
 function normalizeAgent(agent) {
   var value = String(agent || '').toLowerCase();
-  if (value === 'codex' || value === 'claude' || value === 'antigravity') {
+  if (value === 'codex' || value === 'claude' || value === 'antigravity' || value === 'opencode') {
     return value;
   }
-  throw new Error('Unsupported agent: ' + (agent || '(none)') + '. Use codex, claude or antigravity.');
+  throw new Error('Unsupported agent: ' + (agent || '(none)') + '. Use codex, claude, antigravity or opencode.');
 }
 
 function readConfig() {

@@ -8,12 +8,15 @@ function createdByLine(agent) {
   if (name === 'antigravity') {
     return 'antigravity created';
   }
+  if (name === 'opencode') {
+    return 'opencode created';
+  }
   return 'codex created';
 }
 
 function appendCreatedBy(message, agent) {
   var text = String(message || '')
-    .replace(/\n+(codex|claude|antigravity) created\s*$/i, '')
+    .replace(/\n+(codex|claude|antigravity|opencode) created\s*$/i, '')
     .trim();
   return text + '\n\n' + createdByLine(agent) + '\n';
 }

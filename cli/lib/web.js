@@ -206,6 +206,10 @@ function handleRequest(req, res) {
         handleOpenTerminal(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/open-agent') {
+        handleOpenAgent(req, res, parsed.query.repo, parsed.query.agent);
+        return;
+      }
       if (parsed.pathname === '/api/repositories/remove') {
         handleRemoveRepository(req, res);
         return;
@@ -422,6 +426,19 @@ function handleOpenTerminal(req, res, targetRepo) {
   }
   try {
     sendJson(res, openTerminalAtRepository(targetRepo));
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleOpenAgent(req, res, targetRepo, agent) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  if (!agent) return sendJsonError(res, 400, 'Missing agent parameter');
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Opening Agent is only available from 127.0.0.1.');
+  }
+  try {
+    sendJson(res, openAgentAtRepository(targetRepo, agent));
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
@@ -757,6 +774,45 @@ function openTerminalAppAtPath(repoRoot, command) {
     terminal: 'Terminal',
     path: repoRoot
   };
+}
+
+function openAgentAtRepository(root, agent) {
+  console.log('openAgentAtRepository called: root=%s agent=%s', root, agent);
+  var repoRoot = git.repoRoot(root);
+  console.log('repoRoot resolved: %s', repoRoot);
+  if (process.platform !== 'darwin') {
+    throwHttpError('Opening Agent is only supported on macOS.');
+  }
+  if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+    throwHttpError('Repository path does not exist: ' + repoRoot);
+  }
+
+  var command = 'cd ' + shellQuote(repoRoot);
+  switch (agent) {
+    case 'opencode':
+      command += ' && opencode';
+      break;
+    case 'claude':
+      command += ' && claude';
+      break;
+    case 'codex':
+      command += ' && codex';
+      break;
+    case 'antigravity':
+      command += ' && agy';
+      break;
+    default:
+      throwHttpError('Unsupported agent: ' + agent);
+  }
+
+  if (hasMacApplication('iTerm')) {
+    try {
+      return openITermAtPath(repoRoot, command);
+    } catch (error) {
+      return openTerminalAppAtPath(repoRoot, command);
+    }
+  }
+  return openTerminalAppAtPath(repoRoot, command);
 }
 
 function readJsonBody(req) {
@@ -2106,9 +2162,9 @@ function gmcHelpText() {
     'git commit -m gmc - generate commit message with gmc hooks',
     '',
     'Usage:',
-    '  gmc <issue> [--agent codex|claude|antigravity] [--exec] [--no-branch]',
-    '  gmc agent [codex|claude|antigravity]',
-    '  gmc bind <issue> [--agent codex|claude|antigravity]',
+    '  gmc <issue> [--agent codex|claude|antigravity|opencode] [--exec] [--no-branch]',
+    '  gmc agent [codex|claude|antigravity|opencode]',
+    '  gmc bind <issue> [--agent codex|claude|antigravity|opencode]',
     '  gmc status',
     '  gmc message [--print-prompt]',
     '  gmc commit [--no-edit]',
@@ -2379,6 +2435,11 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .repo-terminal-button[hidden] { display: none; }
 .repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
 .repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
+.agent-quick-entry { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; padding-left: 6px; border-left: 1px solid var(--line); margin-left: 2px; }
+.agent-quick-entry[hidden] { display: none; }
+.agent-quick-btn { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
+.agent-quick-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
+.agent-quick-btn svg { width: 13px; height: 13px; pointer-events: none; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
 .local-security-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .local-security-controls[hidden] { display: none; }
@@ -2811,6 +2872,20 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
               <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
               </button>
+              <div id="agentQuickEntry" class="agent-quick-entry" hidden>
+                <button class="agent-quick-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c-1.5 0-3 .7-3 2v14c0 1.3 1.5 2 3 2s3-.7 3-2V5c0-1.3-1.5-2-3-2z"/><circle cx="12" cy="12" r="2"/><path d="M9 7c-2 0-4 1-4 3v4c0 2 2 3 4 3M15 7c2 0 4 1 4 3v4c0 2-2 3-4 3"/></svg>
+                </button>
+                <button class="agent-quick-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+                </button>
+                <button class="agent-quick-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 10 3-3 3 3"/><path d="m9 14 3 3 3-3"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                </button>
+                <button class="agent-quick-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 17 12 3 19 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4807,6 +4882,8 @@ function updateTerminalButton(repoPath) {
   button.hidden = !canOpen;
   button.title = canOpen ? (t('openTerminalPrefix') + repoPath) : t('terminalLocalOnly');
   button.setAttribute('aria-label', t('openTerminal'));
+  var quickEntry = $('agentQuickEntry');
+  if (quickEntry) quickEntry.hidden = !canOpen;
 }
 
 function openCurrentRepository(event) {
@@ -4838,6 +4915,30 @@ function openCurrentTerminal(event) {
     })
     .catch(function(error) {
       alert(t('openTerminalFailed') + error.message);
+    });
+}
+
+function openAgentTerminal(event, btn) {
+  console.log('openAgentTerminal called');
+  if (event) event.preventDefault();
+  if (!targetRepo) { console.log('no targetRepo'); return; }
+  if (!canOpenRepositoryLocally()) { console.log('not local'); return; }
+  var agent = btn.getAttribute('data-agent');
+  console.log('agent:', agent);
+  if (!agent) { console.log('no agent'); return; }
+  var url = '/api/open-agent?repo=' + encodeURIComponent(targetRepo) + '&agent=' + encodeURIComponent(agent);
+  console.log('fetching:', url);
+  fetch(url, { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        console.log('response:', data);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      console.error('fetch error:', error);
+      alert(t('openTerminalFailed') + agent + ': ' + error.message);
     });
 }
 
@@ -5353,6 +5454,10 @@ if (!targetRepo) {
 
 $('repo').addEventListener('click', openCurrentRepository);
 $('openTerminal').addEventListener('click', openCurrentTerminal);
+$('agentQuickEntry').addEventListener('click', function(e) {
+  var btn = e.target.closest('.agent-quick-btn');
+  if (btn) openAgentTerminal(e, btn);
+});
 $('sidebarToggle').addEventListener('click', toggleSidebar);
 $('sidebarClose').addEventListener('click', toggleSidebar);
 
@@ -6784,6 +6889,11 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
 .repo-terminal-button[hidden] { display: none; }
 .repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
 .repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
+.agent-quick-entry { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; padding-left: 6px; border-left: 1px solid var(--line); margin-left: 2px; }
+.agent-quick-entry[hidden] { display: none; }
+.agent-quick-btn { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
+.agent-quick-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
+.agent-quick-btn svg { width: 13px; height: 13px; pointer-events: none; }
 .button { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; white-space: nowrap; }
 .button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
@@ -6823,6 +6933,20 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
         <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
         </button>
+        <div id="agentQuickEntry" class="agent-quick-entry" hidden>
+          <button class="agent-quick-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c-1.5 0-3 .7-3 2v14c0 1.3 1.5 2 3 2s3-.7 3-2V5c0-1.3-1.5-2-3-2z"/><circle cx="12" cy="12" r="2"/><path d="M9 7c-2 0-4 1-4 3v4c0 2 2 3 4 3M15 7c2 0 4 1 4 3v4c0 2-2 3-4 3"/></svg>
+          </button>
+          <button class="agent-quick-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+          </button>
+          <button class="agent-quick-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 10 3-3 3 3"/><path d="m9 14 3 3 3-3"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          </button>
+          <button class="agent-quick-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 17 12 3 19 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+          </button>
+        </div>
       </div>
     </div>
     <a id="backLink" class="button" href="/">Back to GitWeb</a>
@@ -6948,6 +7072,10 @@ updateRepoLink(targetRepo || rt('noRepositorySelected'), targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
 document.getElementById('repo').addEventListener('click', openCurrentRepository);
 document.getElementById('openTerminal').addEventListener('click', openCurrentTerminal);
+document.getElementById('agentQuickEntry').addEventListener('click', function(e) {
+  var btn = e.target.closest('.agent-quick-btn');
+  if (btn) openAgentTerminal(e, btn);
+});
 
 if (!targetRepo) {
   bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('noRepositorySelected')) + '</div>';
@@ -7027,6 +7155,8 @@ function updateTerminalButton(repoPath) {
   button.hidden = !canOpen;
   button.title = canOpen ? (rt('openTerminalPrefix') + repoPath) : rt('terminalLocalOnly');
   button.setAttribute('aria-label', rt('openTerminal'));
+  var quickEntry = document.getElementById('agentQuickEntry');
+  if (quickEntry) quickEntry.hidden = !canOpen;
 }
 
 function openCurrentRepository(event) {
@@ -7058,6 +7188,30 @@ function openCurrentTerminal(event) {
     })
     .catch(function(error) {
       alert(rt('openTerminalFailed') + error.message);
+    });
+}
+
+function openAgentTerminal(event, btn) {
+  console.log('openAgentTerminal called');
+  if (event) event.preventDefault();
+  if (!targetRepo) { console.log('no targetRepo'); return; }
+  if (!canOpenRepositoryLocally()) { console.log('not local'); return; }
+  var agent = btn.getAttribute('data-agent');
+  console.log('agent:', agent);
+  if (!agent) { console.log('no agent'); return; }
+  var url = '/api/open-agent?repo=' + encodeURIComponent(targetRepo) + '&agent=' + encodeURIComponent(agent);
+  console.log('fetching:', url);
+  fetch(url, { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        console.log('response:', data);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      console.error('fetch error:', error);
+      alert(rt('openTerminalFailed') + agent + ': ' + error.message);
     });
 }
 

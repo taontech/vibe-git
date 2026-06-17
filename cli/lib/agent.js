@@ -183,7 +183,7 @@ function generateAntigravityText(prompt, cwd) {
 }
 
 function generateOpencodeText(prompt, cwd) {
-  var result = childProcess.spawnSync('opencode', ['-p', prompt], {
+  var result = childProcess.spawnSync('opencode', ['run', prompt], {
     cwd: cwd,
     encoding: 'utf8',
     timeout: codexTimeoutMs(),
