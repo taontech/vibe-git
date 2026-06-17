@@ -2428,18 +2428,15 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .topbar-tools { display: contents; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
 h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: .08em; }
-.repo-line { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: min(920px, 64vw); margin-top: 2px; }
+.repo-line { display: block; margin-top: 2px; }
 .repo { display: block; min-width: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-.repo-terminal-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
-.repo-terminal-button[hidden] { display: none; }
-.repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
-.repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
-.agent-quick-entry { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; padding-left: 6px; border-left: 1px solid var(--line); margin-left: 2px; }
-.agent-quick-entry[hidden] { display: none; }
-.agent-quick-btn { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
-.agent-quick-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
-.agent-quick-btn svg { width: 13px; height: 13px; pointer-events: none; }
+.agent-bar { display: flex; align-items: center; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.agent-bar[hidden] { display: none; }
+.agent-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; font-weight: 500; white-space: nowrap; transition: color .16s, background .16s, border-color .16s; }
+.agent-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.agent-btn svg { width: 14px; height: 14px; flex-shrink: 0; pointer-events: none; }
+.agent-btn[hidden] { display: none; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; justify-content: flex-end; min-width: 0; }
 .local-security-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .local-security-controls[hidden] { display: none; }
@@ -2869,23 +2866,28 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             <h1 id="appTitle">GMC GitWeb</h1>
             <div class="repo-line">
               <a id="repo" class="repo" data-i18n="loading">Loading...</a>
-              <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
+            </div>
+            <div class="agent-bar" id="agentBar" hidden>
+              <button id="openTerminal" class="agent-btn" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
+                <span>Terminal</span>
               </button>
-              <div id="agentQuickEntry" class="agent-quick-entry" hidden>
-                <button class="agent-quick-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c-1.5 0-3 .7-3 2v14c0 1.3 1.5 2 3 2s3-.7 3-2V5c0-1.3-1.5-2-3-2z"/><circle cx="12" cy="12" r="2"/><path d="M9 7c-2 0-4 1-4 3v4c0 2 2 3 4 3M15 7c2 0 4 1 4 3v4c0 2-2 3-4 3"/></svg>
-                </button>
-                <button class="agent-quick-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
-                </button>
-                <button class="agent-quick-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 10 3-3 3 3"/><path d="m9 14 3 3 3-3"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-                </button>
-                <button class="agent-quick-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 17 12 3 19 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-                </button>
-              </div>
+              <button class="agent-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z"/></svg>
+                <span>OpenCode</span>
+              </button>
+              <button class="agent-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M20 12a8 8 0 1 0-8 8"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
+                <span>Claude</span>
+              </button>
+              <button class="agent-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8 4 4-4 4"/><path d="m16 8-4 4 4 4"/><path d="M5 20h14"/></svg>
+                <span>Codex</span>
+              </button>
+              <button class="agent-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"/></svg>
+                <span>Antigravity</span>
+              </button>
             </div>
           </div>
         </div>
@@ -4882,8 +4884,8 @@ function updateTerminalButton(repoPath) {
   button.hidden = !canOpen;
   button.title = canOpen ? (t('openTerminalPrefix') + repoPath) : t('terminalLocalOnly');
   button.setAttribute('aria-label', t('openTerminal'));
-  var quickEntry = $('agentQuickEntry');
-  if (quickEntry) quickEntry.hidden = !canOpen;
+  var agentBar = $('agentBar');
+  if (agentBar) agentBar.hidden = !canOpen;
 }
 
 function openCurrentRepository(event) {
@@ -5454,8 +5456,8 @@ if (!targetRepo) {
 
 $('repo').addEventListener('click', openCurrentRepository);
 $('openTerminal').addEventListener('click', openCurrentTerminal);
-$('agentQuickEntry').addEventListener('click', function(e) {
-  var btn = e.target.closest('.agent-quick-btn');
+$('agentBar').addEventListener('click', function(e) {
+  var btn = e.target.closest('.agent-btn');
   if (btn) openAgentTerminal(e, btn);
 });
 $('sidebarToggle').addEventListener('click', toggleSidebar);
@@ -6882,18 +6884,15 @@ body { background: linear-gradient(180deg, #ffffff 0, var(--bg) 280px); }
 .shell { width: min(980px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 40px; }
 .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-height: 1.12; }
-.repo-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 4px; }
+.repo-line { display: block; margin-top: 4px; }
 .repo { display: block; min-width: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow-wrap: anywhere; text-decoration: none; }
 .repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-.repo-terminal-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
-.repo-terminal-button[hidden] { display: none; }
-.repo-terminal-button:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
-.repo-terminal-button svg { width: 15px; height: 15px; pointer-events: none; }
-.agent-quick-entry { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; padding-left: 6px; border-left: 1px solid var(--line); margin-left: 2px; }
-.agent-quick-entry[hidden] { display: none; }
-.agent-quick-btn { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; transition: color .16s, background .16s, border-color .16s; }
-.agent-quick-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--line); }
-.agent-quick-btn svg { width: 13px; height: 13px; pointer-events: none; }
+.agent-bar { display: flex; align-items: center; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.agent-bar[hidden] { display: none; }
+.agent-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; font-weight: 500; white-space: nowrap; transition: color .16s, background .16s, border-color .16s; }
+.agent-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.agent-btn svg { width: 14px; height: 14px; flex-shrink: 0; pointer-events: none; }
+.agent-btn[hidden] { display: none; }
 .button { display: inline-flex; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: #fff; text-decoration: none; font-weight: 650; white-space: nowrap; }
 .button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
@@ -6930,23 +6929,28 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
       <h1 id="title">README</h1>
       <div class="repo-line">
         <a id="repo" class="repo"></a>
-        <button id="openTerminal" class="repo-terminal-button" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
+      </div>
+      <div class="agent-bar" id="agentBar" hidden>
+        <button id="openTerminal" class="agent-btn" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
+          <span>Terminal</span>
         </button>
-        <div id="agentQuickEntry" class="agent-quick-entry" hidden>
-          <button class="agent-quick-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c-1.5 0-3 .7-3 2v14c0 1.3 1.5 2 3 2s3-.7 3-2V5c0-1.3-1.5-2-3-2z"/><circle cx="12" cy="12" r="2"/><path d="M9 7c-2 0-4 1-4 3v4c0 2 2 3 4 3M15 7c2 0 4 1 4 3v4c0 2-2 3-4 3"/></svg>
-          </button>
-          <button class="agent-quick-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
-          </button>
-          <button class="agent-quick-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 10 3-3 3 3"/><path d="m9 14 3 3 3-3"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-          </button>
-          <button class="agent-quick-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 17 12 3 19 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-          </button>
-        </div>
+        <button class="agent-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z"/></svg>
+          <span>OpenCode</span>
+        </button>
+        <button class="agent-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M20 12a8 8 0 1 0-8 8"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
+          <span>Claude</span>
+        </button>
+        <button class="agent-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8 4 4-4 4"/><path d="m16 8-4 4 4 4"/><path d="M5 20h14"/></svg>
+          <span>Codex</span>
+        </button>
+        <button class="agent-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"/></svg>
+          <span>Antigravity</span>
+        </button>
       </div>
     </div>
     <a id="backLink" class="button" href="/">Back to GitWeb</a>
@@ -7072,8 +7076,8 @@ updateRepoLink(targetRepo || rt('noRepositorySelected'), targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
 document.getElementById('repo').addEventListener('click', openCurrentRepository);
 document.getElementById('openTerminal').addEventListener('click', openCurrentTerminal);
-document.getElementById('agentQuickEntry').addEventListener('click', function(e) {
-  var btn = e.target.closest('.agent-quick-btn');
+document.getElementById('agentBar').addEventListener('click', function(e) {
+  var btn = e.target.closest('.agent-btn');
   if (btn) openAgentTerminal(e, btn);
 });
 
@@ -7155,8 +7159,8 @@ function updateTerminalButton(repoPath) {
   button.hidden = !canOpen;
   button.title = canOpen ? (rt('openTerminalPrefix') + repoPath) : rt('terminalLocalOnly');
   button.setAttribute('aria-label', rt('openTerminal'));
-  var quickEntry = document.getElementById('agentQuickEntry');
-  if (quickEntry) quickEntry.hidden = !canOpen;
+  var agentBar = document.getElementById('agentBar');
+  if (agentBar) agentBar.hidden = !canOpen;
 }
 
 function openCurrentRepository(event) {
