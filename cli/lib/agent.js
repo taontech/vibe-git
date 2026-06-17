@@ -65,7 +65,12 @@ function launchAgent(options) {
     return;
   }
 
-  throw new Error('Unsupported agent: ' + agent + '. Use codex, claude or antigravity.');
+  if (agent === 'opencode') {
+    spawnInherited('opencode', [prompt], cwd);
+    return;
+  }
+
+  throw new Error('Unsupported agent: ' + agent + '. Use codex, claude, antigravity or opencode.');
 }
 
 function generateText(prompt, cwd, selectedAgent, options) {
@@ -80,7 +85,10 @@ function generateText(prompt, cwd, selectedAgent, options) {
   if (selectedAgent === 'antigravity') {
     return generateAntigravityText(prompt, cwd);
   }
-  throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex, claude or antigravity.');
+  if (selectedAgent === 'opencode') {
+    return generateOpencodeText(prompt, cwd);
+  }
+  throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex, claude, antigravity or opencode.');
 }
 
 function generateCodexText(prompt, cwd, options) {
@@ -170,6 +178,25 @@ function generateAntigravityText(prompt, cwd) {
   }
   if (result.status !== 0) {
     throw new Error('antigravity generation failed with status ' + result.status + ': ' + commandOutput(result));
+  }
+  return cleanAgentOutput(result.stdout);
+}
+
+function generateOpencodeText(prompt, cwd) {
+  var result = childProcess.spawnSync('opencode', ['-p', prompt], {
+    cwd: cwd,
+    encoding: 'utf8',
+    timeout: codexTimeoutMs(),
+    killSignal: 'SIGTERM'
+  });
+  if (result.error) {
+    if (result.error.code === 'ETIMEDOUT') {
+      throw new Error('opencode generation timed out after ' + Math.round(codexTimeoutMs() / 1000) + 's');
+    }
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error('opencode generation failed with status ' + result.status + ': ' + commandOutput(result));
   }
   return cleanAgentOutput(result.stdout);
 }
