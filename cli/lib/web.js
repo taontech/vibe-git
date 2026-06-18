@@ -2049,11 +2049,21 @@ function commitSelectedFiles(root, selectedFiles) {
     throwHttpError('Selected files have no staged changes.');
   }
 
+  var mergeConflictModule = require('./merge-conflict');
+  var isMergeInProgress = mergeConflictModule.inMerge(repoRoot);
+
   var installed = checkInstallStatus(repoRoot);
   var result;
   var taskUpdates = [];
 
-  if (installed.hooks) {
+  // During a merge, partial commit (-- <files>) is forbidden.
+  // Use a full git commit --no-edit to complete the merge.
+  if (isMergeInProgress) {
+    result = childProcess.spawnSync('git', ['commit', '--no-edit'], {
+      cwd: repoRoot,
+      encoding: 'utf8'
+    });
+  } else if (installed.hooks) {
     // Hooks installed: git commit -m gmc triggers the commit-msg hook which generates AI message
     result = childProcess.spawnSync('git', ['commit', '-m', 'gmc', '--'].concat(gitPaths), {
       cwd: repoRoot,
