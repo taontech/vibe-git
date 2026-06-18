@@ -154,10 +154,46 @@ function commitMessagePlanPrompt(binding, diff, status, recentSubjects, tasks, o
   ]).join('\n');
 }
 
+function mergeConflictPrompt(options) {
+  return [
+    'You are resolving a Git merge conflict.',
+    '',
+    'File: ' + options.filePath,
+    'Current branch: ' + options.branch,
+    'Merging branch: ' + options.mergeBranch,
+    '',
+    'Instructions:',
+    '- Analyze the conflict below and produce a clean resolved file.',
+    '- Use the base version (common ancestor) as context to understand what changed on each side.',
+    '- Preserve the intent of changes from both sides when possible.',
+    '- Remove ALL conflict markers (<<<<<<<, =======, >>>>>>>).',
+    '- Keep the file syntactically valid.',
+    '- When changes genuinely conflict, choose the correct side based on context.',
+    '- Output ONLY the resolved file content. Do not use markdown, code fences, or explanation.',
+    '',
+    'Ours (HEAD):',
+    '----------------------------------------',
+    (options.ours || '(empty file)'),
+    '',
+    'Theirs (incoming):',
+    '----------------------------------------',
+    (options.theirs || '(empty file)'),
+    '',
+    'Base (common ancestor):',
+    '----------------------------------------',
+    (options.base || '(empty or no base)'),
+    '',
+    'Conflicted file (with markers):',
+    '----------------------------------------',
+    (options.conflicted || '(empty)')
+  ].join('\n');
+}
+
 module.exports = {
   issuePrompt: issuePrompt,
   commitMessagePrompt: commitMessagePrompt,
   commitMessagePlanPrompt: commitMessagePlanPrompt,
+  mergeConflictPrompt: mergeConflictPrompt,
   createdByLine: createdByLine,
   appendCreatedBy: appendCreatedBy
 };

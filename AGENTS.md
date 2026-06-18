@@ -57,6 +57,8 @@ git add .
 git commit -m gmc     # returns immediately; AI rewrites in background
 gmc status            # check background task status
 gmc retry HEAD        # retry failed message generation
+gmc resolve-merge [file]  # resolve merge conflicts via AI
+gmc resolve-merge --list  # list conflicted files
 ```
 
 ## Testing

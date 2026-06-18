@@ -238,6 +238,14 @@ function handleRequest(req, res) {
         handleDeleteTask(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/merge/resolve-file') {
+        handleMergeResolveFile(req, res, parsed.query.repo);
+        return;
+      }
+      if (parsed.pathname === '/api/merge/accept-file') {
+        handleMergeAcceptFile(req, res, parsed.query.repo);
+        return;
+      }
       send(res, 405, 'text/plain; charset=utf-8', 'Method not allowed');
       return;
     }
@@ -324,6 +332,11 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname === '/api/merge/conflict-detail') {
+      handleMergeConflictDetail(req, res, targetRepo);
+      return;
+    }
+
     send(res, 404, 'text/plain; charset=utf-8', 'Not found');
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
@@ -404,6 +417,83 @@ function handleInstall(req, res, targetRepo) {
     sendJson(res, { status: 'ok', install: checkInstallStatus(repoRoot) });
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleMergeResolveFile(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    var filePath = body && body.path;
+    if (!filePath) {
+      var err = new Error('Missing file path');
+      err.httpStatus = 400;
+      throw err;
+    }
+    var mergeConflict = require('./merge-conflict');
+    var detail = mergeConflict.getConflictDetail(targetRepo, filePath);
+    if (!detail) {
+      var err2 = new Error('File is not in a merge conflict');
+      err2.httpStatus = 400;
+      throw err2;
+    }
+    return detail;
+  }).then(function (detail) {
+    sendJson(res, {
+      ours: detail.ours,
+      theirs: detail.theirs,
+      base: detail.base,
+      conflicted: detail.conflicted,
+      branch: detail.branch,
+      mergeBranch: detail.mergeBranch
+    });
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleMergeAcceptFile(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    var filePath = body && body.path;
+    if (!filePath) {
+      var err = new Error('Missing file path');
+      err.httpStatus = 400;
+      throw err;
+    }
+    var mergeConflict = require('./merge-conflict');
+    var repoRoot = git.repoRoot(targetRepo);
+    if (body.content) {
+      mergeConflict.resolveFileWithContent(targetRepo, filePath, body.content);
+    } else {
+      mergeConflict.resolveFile(targetRepo, filePath);
+    }
+    var fullPath = path.resolve(repoRoot, filePath);
+    var valid = mergeConflict.validateResolution(fullPath);
+    if (!valid.valid) {
+      var err2 = new Error(valid.error);
+      err2.httpStatus = 400;
+      throw err2;
+    }
+    return { status: 'ok', path: filePath };
+  }).then(function (result) {
+    sendJson(res, result);
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleMergeConflictDetail(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  try {
+    var parsed = url.parse(req.url, true);
+    var filePath = parsed.query && parsed.query.path;
+    if (!filePath) return sendJsonError(res, 400, 'Missing file path');
+    var mergeConflict = require('./merge-conflict');
+    var detail = mergeConflict.getConflictDetail(targetRepo, filePath);
+    if (!detail) return sendJsonError(res, 400, 'Not a merge conflict');
+    sendJson(res, detail);
+  } catch (error) {
+    sendJsonError(res, 500, error.message);
   }
 }
 
@@ -1756,6 +1846,26 @@ function fileDiff(root, filePath) {
     throwHttpError('File has no working tree changes: ' + cleanPath);
   }
 
+  // Merge conflict file — show working tree diff with marker highlighting
+  if (file.code === 'UU') {
+    var output = runGitOptional(repoRoot, ['diff', 'HEAD', '--', cleanPath]);
+    if (!output && file.originalPath) {
+      output = runGitOptional(repoRoot, ['diff', 'HEAD', '--', file.originalPath, cleanPath]);
+    }
+    var truncated = output.length > DIFF_LIMIT;
+    if (truncated) {
+      output = output.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
+    }
+    return {
+      path: cleanPath,
+      displayPath: file.displayPath || cleanPath,
+      code: 'UU',
+      diff: output,
+      truncated: truncated,
+      mergeConflict: true
+    };
+  }
+
   var output = '';
   if (file.code === '??') {
     var untracked = childProcess.spawnSync('git', ['diff', '--no-index', '--', os.devNull || '/dev/null', cleanPath], {
@@ -3037,6 +3147,21 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             </button>
             <nav id="diffBreadcrumb" class="repo-breadcrumb" aria-label="Diff file path"></nav>
           </div>
+          <section id="conflictInfo" class="diff-view-panel" style="margin-bottom:14px;border-left:4px solid #d97706;background:#fffbeb;" hidden>
+            <div class="diff-view-head" style="background:#fffbeb;border-bottom:0;">
+              <div>
+                <h2 class="diff-view-title" style="color:#92400e;font-size:15px;">
+                  <span data-i18n="mergeConflict">🔀 Merge Conflict</span>
+                </h2>
+                <div id="conflictMergeInfo" class="meta" style="color:#92400e;"></div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button id="btnResolveConflict" class="commit-button" type="button" data-i18n="resolveConflict" style="background:#d97706;border-color:#d97706;">🤖 AI Resolve</button>
+                <button id="btnManualEdit" class="copy-button" type="button" data-i18n="manualEdit">Manual Edit</button>
+              </div>
+            </div>
+            <div id="conflictStatus" class="meta" style="padding:0 16px 12px;color:#92400e;"></div>
+          </section>
           <section class="diff-view-panel">
             <div class="diff-view-head">
               <div>
@@ -3383,7 +3508,15 @@ var I18N = {
     editTask: '编辑',
     saveTask: '保存',
     savingTask: '保存中...',
-    taskSaveFailed: '任务保存失败：'
+    taskSaveFailed: '任务保存失败：',
+    mergeConflict: '🔀 合并冲突',
+    resolveConflict: '🤖 AI 解决',
+    manualEdit: '手动编辑',
+    resolvingConflict: '正在调用 AI 分析冲突...',
+    conflictResolveFailed: 'AI 合并失败：',
+    conflictResolved: 'AI 合并完成！文件已暂存。',
+    conflictAcceptFailed: '合并方案写入失败：',
+    editSaveAndAccept: '保存并接受'
   },
   en: {
     language: 'Language',
@@ -3554,7 +3687,15 @@ var I18N = {
     editTask: 'Edit',
     saveTask: 'Save',
     savingTask: 'Saving...',
-    taskSaveFailed: 'Failed to save task: '
+    taskSaveFailed: 'Failed to save task: ',
+    mergeConflict: '🔀 Merge Conflict',
+    resolveConflict: '🤖 AI Resolve',
+    manualEdit: 'Manual Edit',
+    resolvingConflict: 'Resolving conflict with AI...',
+    conflictResolveFailed: 'AI resolution failed: ',
+    conflictResolved: 'AI resolved! File staged.',
+    conflictAcceptFailed: 'Failed to apply resolution: ',
+    editSaveAndAccept: 'Save & Accept'
   }
 };
 I18N.ja = Object.assign({}, I18N.en, {
@@ -6310,6 +6451,119 @@ function closeDiffDetailPage() {
   schedule();
 }
 
+function bindConflictControls() {
+  var resolveBtn = $('btnResolveConflict');
+  if (resolveBtn) {
+    resolveBtn.addEventListener('click', function() {
+      resolveConflictWithAI(state.diffViewPath);
+    });
+  }
+  var editBtn = $('btnManualEdit');
+  if (editBtn) {
+    editBtn.addEventListener('click', function() {
+      manualEditConflict(state.diffViewPath);
+    });
+  }
+}
+
+function resolveConflictWithAI(filePath) {
+  if (!filePath || state.resolvingConflict) return;
+  state.resolvingConflict = true;
+  var btn = $('btnResolveConflict');
+  var status = $('conflictStatus');
+  if (btn) { btn.disabled = true; }
+  if (status) { status.textContent = t('resolvingConflict'); status.className = 'meta'; }
+
+  fetch('/api/merge/accept-file?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      if (status) { status.textContent = t('conflictResolved'); status.className = 'meta'; }
+      if (btn) { btn.disabled = false; }
+      setTimeout(function() { closeDiffDetailPage(); load({ force: true }); }, 800);
+    })
+    .catch(function(error) {
+      if (status) { status.textContent = t('conflictResolveFailed') + error.message; status.className = 'meta error'; }
+      if (btn) { btn.disabled = false; }
+    })
+    .finally(function() {
+      state.resolvingConflict = false;
+    });
+}
+
+function manualEditConflict(filePath) {
+  if (!filePath) return;
+  fetch('/api/merge/conflict-detail?repo=' + encodeURIComponent(targetRepo) + '&path=' + encodeURIComponent(filePath), { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(detail) {
+      showConflictEditor(filePath, detail.conflicted || '');
+    })
+    .catch(function(error) {
+      var status = $('conflictStatus');
+      if (status) { status.textContent = error.message; status.className = 'meta error'; }
+    });
+}
+
+function showConflictEditor(filePath, content) {
+  var backdrop = $('tokenConfirmModal');
+  if (!backdrop) return;
+  backdrop.innerHTML = [
+    '<div class="modal" style="width:min(800px,96%);">',
+    '  <h2>' + escapeHtml(t('mergeConflict')) + ': ' + escapeHtml(filePath) + '</h2>',
+    '  <p style="margin-bottom:12px;color:var(--muted);">' + escapeHtml(t('manualEdit')) + '</p>',
+    '  <textarea id="conflictEditor" style="width:100%;min-height:360px;border:1px solid var(--line);border-radius:7px;padding:10px;font-family:monospace;font-size:13px;line-height:1.5;resize:vertical;" spellcheck="false">' + escapeHtml(content) + '</textarea>',
+    '  <div class="modal-actions">',
+    '    <button id="cancelConflictEdit" class="copy-button" type="button">' + escapeHtml(t('cancel')) + '</button>',
+    '    <button id="saveConflictEdit" class="commit-button" type="button">' + escapeHtml(t('editSaveAndAccept')) + '</button>',
+    '  </div>',
+    '</div>'
+  ].join('');
+  backdrop.classList.add('visible');
+
+  $('cancelConflictEdit').addEventListener('click', function() {
+    backdrop.classList.remove('visible');
+  });
+  $('saveConflictEdit').addEventListener('click', function() {
+    var resolved = $('conflictEditor').value;
+    $('saveConflictEdit').disabled = true;
+    $('saveConflictEdit').textContent = t('working');
+    fetch('/api/merge/accept-file?repo=' + encodeURIComponent(targetRepo), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath, content: resolved })
+    })
+      .then(function(res) {
+        return res.json().then(function(d) {
+          if (!res.ok || d.error) throw new Error(d.error || 'HTTP ' + res.status);
+          return d;
+        });
+      })
+      .then(function() {
+        backdrop.classList.remove('visible');
+        closeDiffDetailPage();
+        load({ force: true });
+      })
+      .catch(function(error) {
+        alert(error.message);
+        $('saveConflictEdit').disabled = false;
+        $('saveConflictEdit').textContent = t('editSaveAndAccept');
+      });
+  });
+}
+
 function isFileDetailOpen() {
   var page = $('fileDetailPage');
   return !!(page && !page.hidden);
@@ -6337,6 +6591,7 @@ function loadDiffView(filePath) {
     })
     .then(function(data) {
       renderDiffView(data);
+      bindConflictControls();
       return true;
     })
     .catch(function(error) {
@@ -6362,6 +6617,18 @@ function renderDiffView(data) {
   $('diffViewMeta').textContent = [data.code, data.truncated ? t('truncatedFile') : ''].filter(Boolean).join(' · ');
   renderBreadcrumb('diffBreadcrumb', data.path || state.diffViewPath);
   $('diffViewContent').innerHTML = diffCodeHtml(data.diff || '');
+
+  // Show conflict info for UU (merge conflict) files
+  var conflictInfo = $('conflictInfo');
+  if (data.mergeConflict && conflictInfo) {
+    conflictInfo.hidden = false;
+    var mergeInfo = $('conflictMergeInfo');
+    if (mergeInfo) {
+      mergeInfo.textContent = data.displayPath || data.path || state.diffViewPath;
+    }
+  } else if (conflictInfo) {
+    conflictInfo.hidden = true;
+  }
 }
 
 function diffCodeHtml(diff) {

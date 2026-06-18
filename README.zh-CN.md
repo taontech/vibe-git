@@ -18,7 +18,7 @@
 | 点击查看提交详情 | 不离开页面就能看完整 commit message 和文件摘要。 |
 | 仓库任务看板 | 把轻量任务保存到 `.gmc/tasks`，任务随代码一起提交和拉取。 |
 | GMC 后台任务状态 | 在同一个页面追踪 AI commit message 改写是否完成、失败或跳过。 |
-
+| 快捷的Web操作 | 在可视化页面内操作各种功能（直达终端\各个agents cli\查看文件\push\pull） |
 ```mermaid
 flowchart LR
   A["打开一个 Git 仓库"] --> B["gmc web"]
