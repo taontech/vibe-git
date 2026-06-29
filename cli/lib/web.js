@@ -218,6 +218,10 @@ function handleRequest(req, res) {
         handleRemoveRepository(req, res);
         return;
       }
+      if (parsed.pathname === '/api/select-repository') {
+        handleSelectRepository(req, res);
+        return;
+      }
       if (parsed.pathname === '/api/security/external-access') {
         handleExternalAccessSetting(req, res);
         return;
@@ -504,6 +508,58 @@ function handleMergeConflictDetail(req, res, targetRepo) {
   } catch (error) {
     sendJsonError(res, 500, error.message);
   }
+}
+
+function handleSelectRepository(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Adding repositories is only available from 127.0.0.1.');
+  }
+  try {
+    sendJson(res, selectRepository());
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function selectRepository() {
+  if (process.platform !== 'darwin') {
+    throwHttpError('Selecting repositories via system dialog is only supported on macOS.');
+  }
+
+  var script = 'POSIX path of (choose folder with prompt "选择 Git 仓库目录")';
+  var result = childProcess.spawnSync('osascript', ['-e', script], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    return { status: 'cancelled' };
+  }
+
+  var posixPath = (result.stdout || '').trim();
+  // Remove trailing newline/carriage return
+  posixPath = posixPath.replace(/[\r\n]+$/, '');
+
+  if (!posixPath || !fs.existsSync(posixPath)) {
+    throwHttpError('Selected path does not exist: ' + posixPath);
+  }
+  if (!fs.statSync(posixPath).isDirectory()) {
+    throwHttpError('Selected path is not a directory.');
+  }
+
+  // Resolve and verify git repo
+  var repoRoot = git.repoRoot(posixPath);
+  if (!repoRoot) {
+    throwHttpError('Selected directory is not a Git repository.');
+  }
+
+  // Install hooks and webloc
+  installHooksAndWeb(repoRoot);
+
+  // Add to recent repos
+  recordRepositoryVisit(repoRoot);
+
+  return {
+    status: 'ok',
+    path: repoRoot,
+    name: repoName(repoRoot)
+  };
 }
 
 function handleOpenRepository(req, res, targetRepo) {
@@ -3108,9 +3164,14 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <h2 data-i18n="recentRepos">Recent Repos</h2>
-      <button id="sidebarClose" class="sidebar-toggle" title="Close Sidebar" data-i18n-title="closeSidebar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-      </button>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="addRepoBtn" class="sidebar-toggle" title="Add Repository" style="display:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+        </button>
+        <button id="sidebarClose" class="sidebar-toggle" title="Close Sidebar" data-i18n-title="closeSidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
     </div>
     <div id="repoList" class="repo-list"></div>
   </aside>
@@ -5446,6 +5507,26 @@ function initSidebar() {
   applySidebarState();
   bindSidebarEvents();
   loadRepoHistory();
+
+  var addBtn = $('addRepoBtn');
+  if (addBtn) {
+    if (canOpenRepositoryLocally()) {
+      addBtn.style.display = '';
+      addBtn.title = 'Add Git Repository';
+      addBtn.addEventListener('click', function() {
+        addBtn.disabled = true;
+        fetch('/api/select-repository', { method: 'POST' })
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            if (data.status === 'cancelled') return;
+            if (data.error) { alert(data.error); return; }
+            if (data.path) window.location.href = '?repo=' + encodeURIComponent(data.path);
+          })
+          .catch(function(err) { alert('Failed: ' + err.message); })
+          .finally(function() { addBtn.disabled = false; });
+      });
+    }
+  }
 }
 
 function initSecurityControls() {
