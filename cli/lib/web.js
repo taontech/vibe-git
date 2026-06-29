@@ -210,6 +210,10 @@ function handleRequest(req, res) {
         handleOpenAgent(req, res, parsed.query.repo, parsed.query.agent);
         return;
       }
+      if (parsed.pathname === '/api/open-ide') {
+        handleOpenIde(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/repositories/remove') {
         handleRemoveRepository(req, res);
         return;
@@ -334,6 +338,11 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/merge/conflict-detail') {
       handleMergeConflictDetail(req, res, targetRepo);
+      return;
+    }
+
+    if (parsed.pathname === '/api/detect-project') {
+      sendJson(res, detectProjectType(targetRepo));
       return;
     }
 
@@ -517,6 +526,114 @@ function handleOpenTerminal(req, res, targetRepo) {
   try {
     sendJson(res, openTerminalAtRepository(targetRepo));
   } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function detectProjectType(root) {
+  try {
+    var repoRoot = git.repoRoot(root);
+    if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+      return { type: 'unknown', ide: 'code', ideLabel: 'VS Code', ideIcon: 'code' };
+    }
+
+    // iOS / Xcode
+    var xcodeMatch = fs.readdirSync(repoRoot).some(function(name) {
+      return /\.xcodeproj$/i.test(name) || /\.xcworkspace$/i.test(name);
+    });
+    if (xcodeMatch) {
+      return { type: 'ios', ide: 'xcode', ideLabel: 'Xcode', ideIcon: 'xcode' };
+    }
+
+    // Android
+    var hasRootGradle = fs.existsSync(path.join(repoRoot, 'build.gradle')) ||
+      fs.existsSync(path.join(repoRoot, 'build.gradle.kts'));
+    var hasAppGradle = fs.existsSync(path.join(repoRoot, 'app', 'build.gradle')) ||
+      fs.existsSync(path.join(repoRoot, 'app', 'build.gradle.kts'));
+    if (hasRootGradle || hasAppGradle) {
+      return { type: 'android', ide: 'android-studio', ideLabel: 'Android Studio', ideIcon: 'android' };
+    }
+
+    // Default: VS Code
+    return { type: 'other', ide: 'code', ideLabel: 'VS Code', ideIcon: 'code' };
+  } catch (e) {
+    return { type: 'unknown', ide: 'code', ideLabel: 'VS Code', ideIcon: 'code' };
+  }
+}
+
+function handleOpenIde(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Opening IDE is only available from 127.0.0.1.');
+  }
+  try {
+    var repoRoot = git.repoRoot(targetRepo);
+    if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+      throwHttpError('Repository path does not exist: ' + repoRoot);
+    }
+
+    var project = detectProjectType(targetRepo);
+    var result;
+    var env = Object.assign({}, process.env);
+
+    switch (project.ide) {
+      case 'xcode': {
+        var xcodeFiles = fs.readdirSync(repoRoot).filter(function(name) {
+          return /\.xcworkspace$/i.test(name) || /\.xcodeproj$/i.test(name);
+        });
+        var ws = xcodeFiles.filter(function(name) { return /\.xcworkspace$/i.test(name); });
+        var pbx = xcodeFiles.filter(function(name) { return /\.xcodeproj$/i.test(name); });
+        var xcodeTarget = (ws.length ? ws : pbx)[0];
+        if (xcodeTarget) {
+          result = childProcess.spawnSync('open', [path.join(repoRoot, xcodeTarget)], { env: env, encoding: 'utf8' });
+        } else {
+          throwHttpError('No Xcode project file found');
+        }
+        break;
+      }
+      case 'android-studio':
+        // Try open with bundle ID (most reliable)
+        result = childProcess.spawnSync('open', ['-b', 'com.google.android.studio', repoRoot], { env: env, encoding: 'utf8' });
+        if (result.error || result.status !== 0) {
+          // Try by app name
+          result = childProcess.spawnSync('open', ['-a', 'Android Studio', repoRoot], { env: env, encoding: 'utf8' });
+        }
+        if (result.error || result.status !== 0) {
+          // Try studio CLI
+          result = childProcess.spawnSync('studio', ['.'], { cwd: repoRoot, env: env, encoding: 'utf8' });
+        }
+        break;
+      case 'code':
+      default:
+        // Try code CLI first
+        result = childProcess.spawnSync('code', ['.'], { cwd: repoRoot, env: env, encoding: 'utf8' });
+        if (result.error || result.status !== 0) {
+          // Try open with bundle ID for VS Code
+          result = childProcess.spawnSync('open', ['-b', 'com.microsoft.VSCode', repoRoot], { env: env, encoding: 'utf8' });
+        }
+        if (result.error || result.status !== 0) {
+          // Try open with app name
+          result = childProcess.spawnSync('open', ['-a', 'Visual Studio Code', repoRoot], { env: env, encoding: 'utf8' });
+        }
+        if (result.error || result.status !== 0) {
+          // Fallback: open the folder in Finder
+          result = childProcess.spawnSync('open', [repoRoot], { env: env, encoding: 'utf8' });
+        }
+        break;
+    }
+
+    if (result.error || result.status !== 0) {
+      var stderr = (result.stderr || '').trim();
+      var stdout = (result.stdout || '').trim();
+      console.error('handleOpenIde failed: ide=%s status=%s error=%s stderr=%s stdout=%s',
+        project.ide, result.status, result.error ? result.error.message : '', stderr, stdout);
+      var errorMsg = stderr || stdout || (result.error && result.error.message) || ('Exit code ' + result.status);
+      throwHttpError(errorMsg || 'Failed to open project in ' + project.ideLabel);
+    }
+
+    sendJson(res, { status: 'ok', ide: project.ide, ideLabel: project.ideLabel });
+  } catch (error) {
+    console.error('handleOpenIde exception:', error.message);
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
 }
@@ -2684,13 +2801,16 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .branch-summary-panel { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; overflow: hidden; }
 .branch-summary-text { min-width: 0; flex: 1 1 auto; }
 .branch-name { font-size: 32px; font-weight: 780; margin: 3px 0 2px; letter-spacing: 0; overflow-wrap: anywhere; }
-.meters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; height: 100%; }
-.meter { padding: 12px; border-radius: 8px; background: var(--panel-soft); border: 1px solid var(--line-soft); position: relative; }
-.meter strong { display: block; font-size: 24px; color: var(--accent); line-height: 1.1; }
-.meter span { font-size: 12px; color: var(--muted); }
-.meter .action-btn { position: absolute; right: 12px; top: 12px; font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--line); background: #fff; cursor: pointer; color: var(--text); font-weight: 600; }
-.meter .action-btn:hover { border-color: var(--accent); color: var(--accent); }
-.meter .action-btn:disabled { opacity: .62; cursor: progress; color: var(--muted); background: #f8fafc; }
+.action-panel { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.action-meters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.action-meter { padding: 8px 10px; border-radius: 6px; background: var(--panel-soft); border: 1px solid var(--line-soft); position: relative; }
+.action-meter strong { display: block; font-size: 18px; color: var(--accent); line-height: 1.15; }
+.action-meter span { font-size: 11px; color: var(--muted); }
+.action-meter .action-btn { position: absolute; right: 8px; top: 8px; font-size: 10px; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line); background: #fff; cursor: pointer; color: var(--text); font-weight: 600; }
+.action-meter .action-btn:hover { border-color: var(--accent); color: var(--accent); }
+.action-meter .action-btn:disabled { opacity: .62; cursor: progress; color: var(--muted); background: #f8fafc; }
+.action-buttons { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+.action-buttons[hidden] { display: none; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
 .timeline-container { --graph-width: 30px; display: grid; grid-template-columns: var(--graph-width) minmax(0, 1fr); column-gap: 6px; align-items: flex-start; position: relative; height: min(66vh, 680px); min-height: 430px; min-width: 0; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--line-soft); border-radius: 8px; background: linear-gradient(90deg, #fbfdff 0, #fbfdff calc(var(--graph-width) + 10px), #ffffff calc(var(--graph-width) + 10px)); padding: 10px 10px 10px 4px; }
 #graph { width: var(--graph-width); min-width: var(--graph-width); pointer-events: auto; overflow: visible; }
@@ -2923,7 +3043,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   .task-board { grid-template-columns: 1fr; }
   .commit { grid-template-columns: 1fr; } 
   .hash { display: none; } 
-  .meters { grid-template-columns: 1fr; } 
+  .action-meters { grid-template-columns: 1fr; } 
   .timeline-container { height: 520px; } 
   .branch-summary-panel { flex-direction: column; align-items: stretch; gap: 12px; }
   .branch-summary-text { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -2958,6 +3078,15 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .sidebar-toggle svg { width: 20px; height: 20px; }
 #sidebarToggle { margin-left: -12px; margin-right: 8px; }
 #sidebarClose { margin-right: -8px; display: none; }
+
+.qa-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 62px; height: 56px; padding: 6px 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); cursor: pointer; transition: color .16s, background .16s, border-color .16s, transform .16s, box-shadow .16s; box-shadow: 0 1px 2px rgba(15,23,42,.03); }
+.qa-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 22px rgba(6,141,109,.12); }
+.qa-btn:active { transform: translateY(0); }
+.qa-btn svg { width: 20px; height: 20px; flex-shrink: 0; pointer-events: none; }
+.qa-btn span { font-size: 9px; font-weight: 650; line-height: 1.1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.qa-ide-btn { position: relative; }
+.qa-ide-btn[hidden] { display: none; }
+.qa-ide-btn:hover { color: #7c3aed; border-color: #7c3aed; background: #f5f3ff; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -2985,28 +3114,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             <div class="repo-line">
               <a id="repo" class="repo" data-i18n="loading">Loading...</a>
             </div>
-            <div class="agent-bar" id="agentBar" hidden>
-              <button id="openTerminal" class="agent-btn" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
-                <span>Terminal</span>
-              </button>
-              <button class="agent-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z"/></svg>
-                <span>OpenCode</span>
-              </button>
-              <button class="agent-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M20 12a8 8 0 1 0-8 8"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
-                <span>Claude</span>
-              </button>
-              <button class="agent-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8 4 4-4 4"/><path d="m16 8-4 4 4 4"/><path d="M5 20h14"/></svg>
-                <span>Codex</span>
-              </button>
-              <button class="agent-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"/></svg>
-                <span>Antigravity</span>
-              </button>
-            </div>
+
           </div>
         </div>
         <div class="topbar-tools">
@@ -3059,10 +3167,38 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       </div>
       <div id="calendar" class="calendar-grid"></div>
     </div>
-    <div class="meters">
-      <div class="meter"><strong id="ahead">0</strong><span data-i18n="ahead">ahead</span> <button id="btnPush" class="action-btn" style="display:none" data-i18n="push">Push</button></div>
-      <div class="meter"><strong id="behind">0</strong><span data-i18n="behind">behind</span> <button id="btnPull" class="action-btn" data-i18n="pull">Pull</button></div>
-      <div class="meter"><strong id="dirty">0</strong><span data-i18n="changedFiles">changed files</span></div>
+    <div class="panel action-panel">
+      <div class="action-meters">
+        <div class="action-meter"><strong id="ahead">0</strong><span data-i18n="ahead">ahead</span> <button id="btnPush" class="action-btn" style="display:none" data-i18n="push">Push</button></div>
+        <div class="action-meter"><strong id="behind">0</strong><span data-i18n="behind">behind</span> <button id="btnPull" class="action-btn" data-i18n="pull">Pull</button></div>
+        <div class="action-meter"><strong id="dirty">0</strong><span data-i18n="changedFiles">changed files</span></div>
+      </div>
+      <div id="quickActions" class="action-buttons" hidden>
+        <button id="qaTerminal" class="qa-btn" type="button" data-agent="terminal" title="在终端中打开">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+          <span>Terminal</span>
+        </button>
+        <button class="qa-btn" type="button" data-agent="opencode" title="OpenCode">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.4 16.6 4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
+          <span>OpenCode</span>
+        </button>
+        <button class="qa-btn" type="button" data-agent="claude" title="Claude Code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" fill="none"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2v4" stroke-width="1.6"/><path d="M12 18v4" stroke-width="1.6"/><path d="M2 12h4" stroke-width="1.6"/><path d="M18 12h4" stroke-width="1.6"/></svg>
+          <span>Claude</span>
+        </button>
+        <button class="qa-btn" type="button" data-agent="codex" title="Codex CLI">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/><path d="M4 21h16"/></svg>
+          <span>Codex</span>
+        </button>
+        <button class="qa-btn" type="button" data-agent="antigravity" title="Antigravity CLI">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 18.5V3" stroke-width="2.5"/><path d="M8 7l4-4 4 4"/><path d="M18 13c0 3.3-2.7 6-6 6s-6-2.7-6-6"/><circle cx="6" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="18" cy="6" r="1.5" fill="currentColor" stroke="none"/></svg>
+          <span>Antigravity</span>
+        </button>
+        <button id="qaOpenIde" class="qa-btn qa-ide-btn" type="button" data-agent="open-ide" title="在 IDE 中打开项目" hidden>
+          <svg id="qaIdeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span id="qaIdeLabel">VS Code</span>
+        </button>
+      </div>
     </div>
   </section>
 
@@ -5027,14 +5163,18 @@ function updateRepoLink(text, repoPath) {
 }
 
 function updateTerminalButton(repoPath) {
-  var button = $('openTerminal');
-  if (!button) return;
+  var qaBar = $('quickActions');
+  if (!qaBar) return;
   var canOpen = !!(repoPath && canOpenRepositoryLocally());
-  button.hidden = !canOpen;
-  button.title = canOpen ? (t('openTerminalPrefix') + repoPath) : t('terminalLocalOnly');
-  button.setAttribute('aria-label', t('openTerminal'));
-  var agentBar = $('agentBar');
-  if (agentBar) agentBar.hidden = !canOpen;
+  qaBar.hidden = !canOpen;
+  if (canOpen) {
+    var terminalBtn = $('qaTerminal');
+    if (terminalBtn) {
+      terminalBtn.title = t('openTerminalPrefix') + repoPath;
+      terminalBtn.setAttribute('aria-label', t('openTerminal'));
+    }
+    detectProjectAndUpdateIde(repoPath);
+  }
 }
 
 function openCurrentRepository(event) {
@@ -5066,6 +5206,59 @@ function openCurrentTerminal(event) {
     })
     .catch(function(error) {
       alert(t('openTerminalFailed') + error.message);
+    });
+}
+
+function detectProjectAndUpdateIde(repoPath) {
+  if (!repoPath) return;
+  var ideBtn = $('qaOpenIde');
+  if (!ideBtn) return;
+  fetch('/api/detect-project?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(project) {
+      var ideIcon = $('qaIdeIcon');
+      var ideLabel = $('qaIdeLabel');
+      if (ideLabel) ideLabel.textContent = project.ideLabel || 'VS Code';
+      if (ideIcon) {
+        if (project.ide === 'xcode') {
+          ideIcon.innerHTML = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="10" y1="13" x2="14" y2="13"/><line x1="10" y1="17" x2="14" y2="17"/><path d="M9 4h2v2H9z" fill="currentColor"/>';
+        } else if (project.ide === 'android-studio') {
+          ideIcon.innerHTML = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><circle cx="10" cy="13" r="1.5" fill="currentColor" stroke="none"/><circle cx="14" cy="17" r="1.5" fill="currentColor" stroke="none"/><path d="M7 19 17 9"/>';
+        } else {
+          ideIcon.innerHTML = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>';
+        }
+      }
+      ideBtn.hidden = false;
+    })
+    .catch(function() {
+      var ideLabel = $('qaIdeLabel');
+      if (ideLabel) ideLabel.textContent = 'VS Code';
+      var ideBtn = $('qaOpenIde');
+      if (ideBtn) ideBtn.hidden = false;
+    });
+}
+
+function openProjectIde(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-ide?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      var ideLabel = $('qaIdeLabel');
+      var name = ideLabel ? ideLabel.textContent : 'IDE';
+      console.error('openProjectIde error:', error.message);
+      alert('Failed to open ' + name + ': ' + error.message);
     });
 }
 
@@ -5604,10 +5797,17 @@ if (!targetRepo) {
 }
 
 $('repo').addEventListener('click', openCurrentRepository);
-$('openTerminal').addEventListener('click', openCurrentTerminal);
-$('agentBar').addEventListener('click', function(e) {
-  var btn = e.target.closest('.agent-btn');
-  if (btn) openAgentTerminal(e, btn);
+$('quickActions').addEventListener('click', function(e) {
+  var btn = e.target.closest('.qa-btn');
+  if (!btn) return;
+  var agent = btn.getAttribute('data-agent');
+  if (agent === 'terminal') {
+    openCurrentTerminal(e);
+  } else if (agent === 'open-ide') {
+    openProjectIde(e);
+  } else {
+    openAgentTerminal(e, btn);
+  }
 });
 $('sidebarToggle').addEventListener('click', toggleSidebar);
 $('sidebarClose').addEventListener('click', toggleSidebar);
@@ -7192,6 +7392,13 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
 .readme-body .mermaid { margin: .8em 0; overflow-x: auto; }
 .readme-help pre { white-space: pre-wrap; }
 .meta { color: var(--muted); font-size: 12px; }
+.quick-actions { display: flex; gap: 10px; align-items: stretch; margin-top: 10px; flex-wrap: wrap; }
+.quick-actions[hidden] { display: none; }
+.qa-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 62px; height: 56px; padding: 6px 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); cursor: pointer; transition: color .16s, background .16s, border-color .16s, transform .16s; }
+.qa-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); transform: translateY(-1px); }
+.qa-btn svg { width: 20px; height: 20px; flex-shrink: 0; pointer-events: none; }
+.qa-btn span { font-size: 9px; font-weight: 650; line-height: 1.1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.qa-ide-btn[hidden] { display: none; }
 @media (max-width: 620px) { .topbar { flex-direction: column; } .shell { width: min(100% - 24px, 980px); padding-top: 16px; } }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -7205,28 +7412,35 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
       <div class="repo-line">
         <a id="repo" class="repo"></a>
       </div>
-      <div class="agent-bar" id="agentBar" hidden>
-        <button id="openTerminal" class="agent-btn" type="button" hidden title="在终端中打开" aria-label="在终端中打开">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"></path><path d="M12 19h8"></path></svg>
+      <section id="readmeQuickActions" class="quick-actions" hidden>
+        <button class="qa-btn" type="button" data-agent="terminal" title="在终端中打开">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
           <span>Terminal</span>
         </button>
-        <button class="agent-btn" data-agent="opencode" title="OpenCode" aria-label="OpenCode">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z"/></svg>
+        <button class="qa-btn" type="button" data-agent="opencode" title="OpenCode">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.4 16.6 4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
           <span>OpenCode</span>
         </button>
-        <button class="agent-btn" data-agent="claude" title="Claude Code" aria-label="Claude Code">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M20 12a8 8 0 1 0-8 8"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
+        <button class="qa-btn" type="button" data-agent="claude" title="Claude Code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" fill="none"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2v4" stroke-width="1.6"/><path d="M12 18v4" stroke-width="1.6"/><path d="M2 12h4" stroke-width="1.6"/><path d="M18 12h4" stroke-width="1.6"/></svg>
           <span>Claude</span>
         </button>
-        <button class="agent-btn" data-agent="codex" title="Codex CLI" aria-label="Codex CLI">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8 4 4-4 4"/><path d="m16 8-4 4 4 4"/><path d="M5 20h14"/></svg>
+        <button class="qa-btn" type="button" data-agent="codex" title="Codex CLI">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/><path d="M4 21h16"/></svg>
           <span>Codex</span>
         </button>
-        <button class="agent-btn" data-agent="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"/></svg>
+        <button class="qa-btn" type="button" data-agent="antigravity" title="Antigravity CLI">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 18.5V3" stroke-width="2.5"/><path d="M8 7l4-4 4 4"/><path d="M18 13c0 3.3-2.7 6-6 6s-6-2.7-6-6"/><circle cx="6" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="18" cy="6" r="1.5" fill="currentColor" stroke="none"/></svg>
           <span>Antigravity</span>
         </button>
-      </div>
+        <button class="qa-btn qa-ide-btn" type="button" data-agent="open-ide" title="在 IDE 中打开项目" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>VS Code</span>
+        </button>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>VS Code</span>
+        </button>
+      </section>
     </div>
     <a id="backLink" class="button" href="/">Back to GitWeb</a>
   </header>
@@ -7350,10 +7564,17 @@ bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('loading')) + '</div>';
 updateRepoLink(targetRepo || rt('noRepositorySelected'), targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
 document.getElementById('repo').addEventListener('click', openCurrentRepository);
-document.getElementById('openTerminal').addEventListener('click', openCurrentTerminal);
-document.getElementById('agentBar').addEventListener('click', function(e) {
-  var btn = e.target.closest('.agent-btn');
-  if (btn) openAgentTerminal(e, btn);
+document.getElementById('readmeQuickActions').addEventListener('click', function(e) {
+  var btn = e.target.closest('.qa-btn');
+  if (!btn) return;
+  var agent = btn.getAttribute('data-agent');
+  if (agent === 'terminal') {
+    openCurrentTerminal(e);
+  } else if (agent === 'open-ide') {
+    openProjectIde(e);
+  } else {
+    openAgentTerminal(e, btn);
+  }
 });
 
 if (!targetRepo) {
@@ -7428,14 +7649,28 @@ function updateRepoLink(text, repoPath) {
 }
 
 function updateTerminalButton(repoPath) {
-  var button = document.getElementById('openTerminal');
-  if (!button) return;
+  var qaBar = document.getElementById('readmeQuickActions');
+  if (!qaBar) return;
   var canOpen = !!(repoPath && canOpenRepositoryLocally());
-  button.hidden = !canOpen;
-  button.title = canOpen ? (rt('openTerminalPrefix') + repoPath) : rt('terminalLocalOnly');
-  button.setAttribute('aria-label', rt('openTerminal'));
-  var agentBar = document.getElementById('agentBar');
-  if (agentBar) agentBar.hidden = !canOpen;
+  qaBar.hidden = !canOpen;
+  if (canOpen && targetRepo) {
+    var terminalBtn = qaBar.querySelector('[data-agent="terminal"]');
+    if (terminalBtn) {
+      terminalBtn.title = rt('openTerminalPrefix') + repoPath;
+      terminalBtn.setAttribute('aria-label', rt('openTerminal'));
+    }
+    // detect project and update IDE button
+    fetch('/api/detect-project?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
+      .then(function(res) { return res.json(); })
+      .then(function(project) {
+        var ideBtn = qaBar.querySelector('[data-agent="open-ide"]');
+        if (!ideBtn) return;
+        var label = ideBtn.querySelector('span');
+        if (label) label.textContent = project.ideLabel || 'VS Code';
+        ideBtn.hidden = false;
+      })
+      .catch(function() {});
+  }
 }
 
 function openCurrentRepository(event) {
@@ -7467,6 +7702,22 @@ function openCurrentTerminal(event) {
     })
     .catch(function(error) {
       alert(rt('openTerminalFailed') + error.message);
+    });
+}
+
+function openProjectIde(event) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+  fetch('/api/open-ide?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .catch(function(error) {
+      alert('Failed to open IDE: ' + error.message);
     });
 }
 
