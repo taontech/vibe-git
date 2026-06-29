@@ -2798,9 +2798,22 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .grid > *, .summary-panel > *, .side, .panel { min-width: 0; }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
 .summary-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 440px); gap: 16px; margin-bottom: 16px; align-items: stretch; min-width: 0; }
-.branch-summary-panel { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; overflow: hidden; }
+.branch-summary-panel { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
 .branch-summary-text { min-width: 0; flex: 1 1 auto; }
 .branch-name { font-size: 32px; font-weight: 780; margin: 3px 0 2px; letter-spacing: 0; overflow-wrap: anywhere; }
+.branch-selector-wrap-inline { position: relative; }
+.branch-selector-wrap-inline .branch-selector-button {
+  font-size: 32px; font-weight: 780; padding: 3px 10px 3px 6px; margin: 3px 0 2px;
+  border: 1px solid transparent; background: transparent; color: var(--text);
+  cursor: pointer; border-radius: 7px; min-height: auto; gap: 6px;
+}
+.branch-selector-wrap-inline .branch-selector-button:hover,
+.branch-selector-wrap-inline .branch-selector-button.open {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+}
+.branch-selector-wrap-inline .branch-selector-button svg { width: 22px; height: 22px; flex-shrink: 0; }
+.branch-selector-wrap-inline .branch-selector-button .chevron { width: 20px; height: 20px; color: var(--muted); }
+.branch-selector-wrap-inline .branch-selector-menu { left: 0; top: calc(100% + 4px); }
 .action-panel { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .action-meters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .action-meter { padding: 8px 10px; border-radius: 6px; background: var(--panel-soft); border: 1px solid var(--line-soft); position: relative; }
@@ -3162,7 +3175,14 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
     <div class="panel branch-summary-panel">
       <div class="branch-summary-text">
         <h2 data-i18n="currentBranch">Current Branch</h2>
-        <div id="branch" class="branch-name">...</div>
+        <div class="branch-selector-wrap branch-selector-wrap-inline">
+          <button id="branch" class="branch-selector-button" type="button" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+            <span id="branchText">...</span>
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+          </button>
+          <div id="branchMenu" class="branch-selector-menu" role="menu"></div>
+        </div>
         <div id="upstream" class="meta"></div>
       </div>
       <div id="calendar" class="calendar-grid"></div>
@@ -3215,16 +3235,6 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
         <div class="panel-head">
           <h2 data-i18n="repositoryFiles">Repository Files</h2>
           <div id="repoBrowserMeta" class="meta"></div>
-        </div>
-        <div class="repo-browser-controls">
-          <div class="branch-selector-wrap">
-            <button id="repoBranchButton" class="branch-selector-button" type="button" aria-haspopup="true" aria-expanded="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
-              <span id="repoBranchButtonText">...</span>
-              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
-            </button>
-            <div id="repoBranchMenu" class="branch-selector-menu" role="menu"></div>
-          </div>
         </div>
         <nav id="repoBreadcrumb" class="repo-breadcrumb" aria-label="Repository path"></nav>
         <div id="repoBrowser" class="repo-browser"></div>
@@ -5788,7 +5798,7 @@ initSecurityControls();
 
 if (!targetRepo) {
   updateRepoLink(t('repoRunning'), null);
-  $('branch').textContent = t('noRepositorySelected');
+  $('branchText').textContent = t('noRepositorySelected');
   initSidebar();
 } else {
   updateRepoLink(targetRepo, targetRepo);
@@ -5967,7 +5977,7 @@ function render(data) {
   }
   updateRepoLink(data.repository && data.repository.root ? data.repository.root : targetRepo, targetRepo);
   state.currentBranch = data.branch.current;
-  $('branch').textContent = data.branch.current;
+  $('branchText').textContent = data.branch.current;
   $('upstream').dataset.empty = data.branch.upstream ? 'false' : 'true';
   $('upstream').textContent = data.branch.upstream || t('noUpstream');
   $('ahead').textContent = data.branch.ahead;
@@ -6380,17 +6390,17 @@ function restoreSelectedFilesAction() {
 }
 
 function bindRepositoryBrowserControls() {
-  ['repoBranchButton', 'detailBranchButton'].forEach(function(id) {
+  ['branch', 'detailBranchButton'].forEach(function(id) {
     var button = $(id);
     if (!button) return;
     button.addEventListener('click', function(event) {
       event.preventDefault();
       event.stopPropagation();
-      toggleBranchMenu(id === 'repoBranchButton' ? 'repoBranchMenu' : 'detailBranchMenu');
+      toggleBranchMenu(id === 'branch' ? 'branchMenu' : 'detailBranchMenu');
     });
   });
 
-  ['repoBranchMenu', 'detailBranchMenu'].forEach(function(id) {
+  ['branchMenu', 'detailBranchMenu'].forEach(function(id) {
     var menu = $(id);
     if (!menu) return;
     menu.addEventListener('click', function(event) {
@@ -6466,7 +6476,7 @@ function toggleBranchMenu(menuId) {
   closeBranchMenus();
   if (shouldOpen) {
     menu.classList.add('open');
-    var button = menuId === 'repoBranchMenu' ? $('repoBranchButton') : $('detailBranchButton');
+    var button = menuId === 'branchMenu' ? $('branch') : $('detailBranchButton');
     if (button) {
       button.classList.add('open');
       button.setAttribute('aria-expanded', 'true');
@@ -6475,11 +6485,11 @@ function toggleBranchMenu(menuId) {
 }
 
 function closeBranchMenus() {
-  ['repoBranchMenu', 'detailBranchMenu'].forEach(function(id) {
+  ['branchMenu', 'detailBranchMenu'].forEach(function(id) {
     var menu = $(id);
     if (menu) menu.classList.remove('open');
   });
-  ['repoBranchButton', 'detailBranchButton'].forEach(function(id) {
+  ['branch', 'detailBranchButton'].forEach(function(id) {
     var button = $(id);
     if (button) {
       button.classList.remove('open');
@@ -6490,7 +6500,7 @@ function closeBranchMenus() {
 
 function renderBranchMenus() {
   var branchName = state.currentBranch || (state.sortedBranches.find(function(branch) { return branch.current; }) || {}).name || '...';
-  ['repoBranchButtonText', 'detailBranchButtonText'].forEach(function(id) {
+  ['branchText', 'detailBranchButtonText'].forEach(function(id) {
     var text = $(id);
     if (text) text.textContent = branchName;
   });
@@ -6505,7 +6515,7 @@ function renderBranchMenus() {
     '</button>';
   }).join('') : '<div class="repo-browser-empty">' + escapeHtml(t('noBranches')) + '</div>';
 
-  ['repoBranchMenu', 'detailBranchMenu'].forEach(function(id) {
+  ['branchMenu', 'detailBranchMenu'].forEach(function(id) {
     var menu = $(id);
     if (menu) menu.innerHTML = html;
   });
@@ -7412,35 +7422,6 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
       <div class="repo-line">
         <a id="repo" class="repo"></a>
       </div>
-      <section id="readmeQuickActions" class="quick-actions" hidden>
-        <button class="qa-btn" type="button" data-agent="terminal" title="在终端中打开">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-          <span>Terminal</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="opencode" title="OpenCode">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.4 16.6 4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
-          <span>OpenCode</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="claude" title="Claude Code">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" fill="none"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2v4" stroke-width="1.6"/><path d="M12 18v4" stroke-width="1.6"/><path d="M2 12h4" stroke-width="1.6"/><path d="M18 12h4" stroke-width="1.6"/></svg>
-          <span>Claude</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="codex" title="Codex CLI">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/><path d="M4 21h16"/></svg>
-          <span>Codex</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="antigravity" title="Antigravity CLI">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 18.5V3" stroke-width="2.5"/><path d="M8 7l4-4 4 4"/><path d="M18 13c0 3.3-2.7 6-6 6s-6-2.7-6-6"/><circle cx="6" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="18" cy="6" r="1.5" fill="currentColor" stroke="none"/></svg>
-          <span>Antigravity</span>
-        </button>
-        <button class="qa-btn qa-ide-btn" type="button" data-agent="open-ide" title="在 IDE 中打开项目" hidden>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-          <span>VS Code</span>
-        </button>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-          <span>VS Code</span>
-        </button>
-      </section>
     </div>
     <a id="backLink" class="button" href="/">Back to GitWeb</a>
   </header>
@@ -7564,18 +7545,6 @@ bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('loading')) + '</div>';
 updateRepoLink(targetRepo || rt('noRepositorySelected'), targetRepo);
 document.getElementById('backLink').href = targetRepo ? '/?repo=' + encodeURIComponent(targetRepo) : '/';
 document.getElementById('repo').addEventListener('click', openCurrentRepository);
-document.getElementById('readmeQuickActions').addEventListener('click', function(e) {
-  var btn = e.target.closest('.qa-btn');
-  if (!btn) return;
-  var agent = btn.getAttribute('data-agent');
-  if (agent === 'terminal') {
-    openCurrentTerminal(e);
-  } else if (agent === 'open-ide') {
-    openProjectIde(e);
-  } else {
-    openAgentTerminal(e, btn);
-  }
-});
 
 if (!targetRepo) {
   bodyEl.innerHTML = '<div class="meta">' + escapeHtml(rt('noRepositorySelected')) + '</div>';
@@ -7644,32 +7613,6 @@ function updateRepoLink(text, repoPath) {
     } else {
       link.removeAttribute('title');
     }
-  }
-  updateTerminalButton(repoPath);
-}
-
-function updateTerminalButton(repoPath) {
-  var qaBar = document.getElementById('readmeQuickActions');
-  if (!qaBar) return;
-  var canOpen = !!(repoPath && canOpenRepositoryLocally());
-  qaBar.hidden = !canOpen;
-  if (canOpen && targetRepo) {
-    var terminalBtn = qaBar.querySelector('[data-agent="terminal"]');
-    if (terminalBtn) {
-      terminalBtn.title = rt('openTerminalPrefix') + repoPath;
-      terminalBtn.setAttribute('aria-label', rt('openTerminal'));
-    }
-    // detect project and update IDE button
-    fetch('/api/detect-project?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
-      .then(function(res) { return res.json(); })
-      .then(function(project) {
-        var ideBtn = qaBar.querySelector('[data-agent="open-ide"]');
-        if (!ideBtn) return;
-        var label = ideBtn.querySelector('span');
-        if (label) label.textContent = project.ideLabel || 'VS Code';
-        ideBtn.hidden = false;
-      })
-      .catch(function() {});
   }
 }
 
