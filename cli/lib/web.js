@@ -297,6 +297,17 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname.startsWith('/icons/')) {
+      var iconPath = path.join(__dirname, 'icons', path.basename(parsed.pathname));
+      if (fs.existsSync(iconPath)) {
+        var svg = fs.readFileSync(iconPath, 'utf8');
+        send(res, 200, 'image/svg+xml; charset=utf-8', svg);
+      } else {
+        send(res, 404, 'text/plain; charset=utf-8', 'Icon not found');
+      }
+      return;
+    }
+
     var targetRepo = parsed.query.repo;
     if (!targetRepo) {
       if (parsed.pathname.startsWith('/api/')) {
@@ -3151,7 +3162,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .qa-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 62px; height: 56px; padding: 6px 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); cursor: pointer; transition: color .16s, background .16s, border-color .16s, transform .16s, box-shadow .16s; box-shadow: 0 1px 2px rgba(15,23,42,.03); }
 .qa-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 22px rgba(6,141,109,.12); }
 .qa-btn:active { transform: translateY(0); }
-.qa-btn svg { width: 20px; height: 20px; flex-shrink: 0; pointer-events: none; }
+.qa-btn svg, .qa-icon { width: 20px; height: 20px; flex-shrink: 0; pointer-events: none; }
+.qa-icon { display: block; object-fit: contain; }
 .qa-btn span { font-size: 9px; font-weight: 650; line-height: 1.1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .qa-ide-btn { position: relative; }
 .qa-ide-btn[hidden] { display: none; }
@@ -3260,23 +3272,23 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           <span>Terminal</span>
         </button>
         <button class="qa-btn" type="button" data-agent="opencode" title="OpenCode">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.4 16.6 4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
+          <img class="qa-icon" src="/icons/opencode.svg" alt="" width="20" height="20">
           <span>OpenCode</span>
         </button>
         <button class="qa-btn" type="button" data-agent="claude" title="Claude Code">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" fill="none"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2v4" stroke-width="1.6"/><path d="M12 18v4" stroke-width="1.6"/><path d="M2 12h4" stroke-width="1.6"/><path d="M18 12h4" stroke-width="1.6"/></svg>
+          <img class="qa-icon" src="/icons/claude.svg" alt="" width="20" height="20">
           <span>Claude</span>
         </button>
         <button class="qa-btn" type="button" data-agent="codex" title="Codex CLI">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/><path d="M4 21h16"/></svg>
+          <img class="qa-icon" src="/icons/codex.svg" alt="" width="20" height="20">
           <span>Codex</span>
         </button>
         <button class="qa-btn" type="button" data-agent="antigravity" title="Antigravity CLI">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 18.5V3" stroke-width="2.5"/><path d="M8 7l4-4 4 4"/><path d="M18 13c0 3.3-2.7 6-6 6s-6-2.7-6-6"/><circle cx="6" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="18" cy="6" r="1.5" fill="currentColor" stroke="none"/></svg>
+          <img class="qa-icon" src="/icons/antigravity.svg" alt="" width="20" height="20">
           <span>Antigravity</span>
         </button>
         <button id="qaOpenIde" class="qa-btn qa-ide-btn" type="button" data-agent="open-ide" title="在 IDE 中打开项目" hidden>
-          <svg id="qaIdeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <img id="qaIdeIcon" class="qa-icon" src="/icons/vscode.svg" alt="" width="20" height="20">
           <span id="qaIdeLabel">VS Code</span>
         </button>
       </div>
@@ -5297,11 +5309,11 @@ function detectProjectAndUpdateIde(repoPath) {
       if (ideLabel) ideLabel.textContent = project.ideLabel || 'VS Code';
       if (ideIcon) {
         if (project.ide === 'xcode') {
-          ideIcon.innerHTML = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="10" y1="13" x2="14" y2="13"/><line x1="10" y1="17" x2="14" y2="17"/><path d="M9 4h2v2H9z" fill="currentColor"/>';
+          ideIcon.src = '/icons/xcode.svg';
         } else if (project.ide === 'android-studio') {
-          ideIcon.innerHTML = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><circle cx="10" cy="13" r="1.5" fill="currentColor" stroke="none"/><circle cx="14" cy="17" r="1.5" fill="currentColor" stroke="none"/><path d="M7 19 17 9"/>';
+          ideIcon.src = '/icons/android-studio.svg';
         } else {
-          ideIcon.innerHTML = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>';
+          ideIcon.src = '/icons/vscode.svg';
         }
       }
       ideBtn.hidden = false;
@@ -7487,7 +7499,8 @@ h1 { margin: 0; font-size: 24px; font-weight: 760; letter-spacing: 0; line-heigh
 .quick-actions[hidden] { display: none; }
 .qa-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 62px; height: 56px; padding: 6px 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); cursor: pointer; transition: color .16s, background .16s, border-color .16s, transform .16s; }
 .qa-btn:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); transform: translateY(-1px); }
-.qa-btn svg { width: 20px; height: 20px; flex-shrink: 0; pointer-events: none; }
+.qa-btn svg, .qa-icon { width: 20px; height: 20px; flex-shrink: 0; pointer-events: none; }
+.qa-icon { display: block; object-fit: contain; }
 .qa-btn span { font-size: 9px; font-weight: 650; line-height: 1.1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .qa-ide-btn[hidden] { display: none; }
 @media (max-width: 620px) { .topbar { flex-direction: column; } .shell { width: min(100% - 24px, 980px); padding-top: 16px; } }
