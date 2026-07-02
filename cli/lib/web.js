@@ -1889,9 +1889,30 @@ function listRepositoryTree(repoRoot, treePath) {
   var spec = treePath ? ('HEAD:' + treePath) : 'HEAD';
   var output = runGitOptional(repoRoot, ['ls-tree', '-z', '-l', spec]);
   if (!output) return [];
-  return output.split('\0').filter(Boolean).map(function (record) {
+  var entries = output.split('\0').filter(Boolean).map(function (record) {
     return parseLsTreeRecord(record, treePath);
   }).filter(Boolean).sort(compareTreeEntries);
+  entries.forEach(function (entry) {
+    if (entry.type === 'tree') {
+      entry.size = getRecursiveTreeSize(repoRoot, entry.path);
+    }
+  });
+  return entries;
+}
+
+function getRecursiveTreeSize(repoRoot, treePath) {
+  var output = runGitOptional(repoRoot, ['ls-tree', '-r', '-z', '-l', 'HEAD:' + treePath]);
+  if (!output) return 0;
+  var total = 0;
+  output.split('\0').filter(Boolean).forEach(function (record) {
+    var tab = record.indexOf('\t');
+    if (tab < 0) return;
+    var meta = record.slice(0, tab).split(/\s+/);
+    if (meta[1] === 'blob' && meta[3] && meta[3] !== '-') {
+      total += Number(meta[3]) || 0;
+    }
+  });
+  return total;
 }
 
 function parseLsTreeRecord(record, parentPath) {
@@ -6711,7 +6732,7 @@ function repositoryEntryHtml(entry) {
   return '<button class="repo-entry" type="button" data-repo-path="' + escapeHtml(entry.path) + '" data-entry-type="' + escapeHtml(entry.type) + '">' +
     entryIcon(entry.type) +
     '<span class="repo-entry-name">' + escapeHtml(entry.name) + '</span>' +
-    '<span class="repo-entry-meta">' + escapeHtml(entry.type === 'tree' ? t('directory') : formatFileSize(entry.size)) + '</span>' +
+    '<span class="repo-entry-meta">' + escapeHtml(entry.size != null ? formatFileSize(entry.size) : '') + '</span>' +
   '</button>';
 }
 
