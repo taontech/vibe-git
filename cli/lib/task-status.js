@@ -28,13 +28,30 @@ function readUnfinishedTasksForPrompt(root) {
     .map(taskForPrompt);
 }
 
+function cleanInvalidJsonEscapes(str) {
+  return str.replace(/\\([^"\\/bfnrt]|u(?![0-9a-fA-F]{4}))/g, '$1');
+}
+
+function sanitizeJson(str) {
+  str = cleanInvalidJsonEscapes(str);
+  str = str.replace(/([,{]\s*)\\"(\w+)\\"(\s*:)/g, '$1"$2"$3');
+  str = str.replace(/(:\s*)\\"([^"\\]*)\\"(?=\s*[,}])/g, '$1"$2"');
+  str = str.replace(/([\[,]\s*)\\"([^"\\]*)\\"(?=\s*[,\]])/g, '$1"$2"');
+  str = str.replace(/\\"(\s*\})/g, '"$1');
+  return str;
+}
+
 function parseCommitPlan(text) {
   var jsonText = extractJson(text);
   var parsed;
   try {
     parsed = JSON.parse(jsonText);
   } catch (error) {
-    throw new Error('Could not parse AI commit plan as JSON: ' + firstLine(text));
+    try {
+      parsed = JSON.parse(sanitizeJson(jsonText));
+    } catch (e2) {
+      throw new Error('Could not parse AI commit plan as JSON: ' + firstLine(text));
+    }
   }
   if (!parsed || typeof parsed.message !== 'string' || !Array.isArray(parsed.taskUpdates)) {
     throw new Error('AI commit plan must contain message and taskUpdates.');

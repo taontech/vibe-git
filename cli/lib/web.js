@@ -1892,11 +1892,35 @@ function listRepositoryTree(repoRoot, treePath) {
   var entries = output.split('\0').filter(Boolean).map(function (record) {
     return parseLsTreeRecord(record, treePath);
   }).filter(Boolean).sort(compareTreeEntries);
-  entries.forEach(function (entry) {
-    if (entry.type === 'tree') {
-      entry.size = getRecursiveTreeSize(repoRoot, entry.path);
+
+  var hasTrees = entries.some(function (entry) { return entry.type === 'tree'; });
+  if (hasTrees) {
+    var subfolderSizes = {};
+    var recursiveOutput = runGitOptional(repoRoot, ['ls-tree', '-r', '-z', '-l', spec]);
+    if (recursiveOutput) {
+      recursiveOutput.split('\0').filter(Boolean).forEach(function (record) {
+        var tab = record.indexOf('\t');
+        if (tab < 0) return;
+        var meta = record.slice(0, tab).split(/\s+/);
+        if (meta[1] === 'blob' && meta[3] && meta[3] !== '-') {
+          var size = Number(meta[3]) || 0;
+          var relativePath = record.slice(tab + 1);
+          var slashIndex = relativePath.indexOf('/');
+          if (slashIndex >= 0) {
+            var topLevelDir = relativePath.slice(0, slashIndex);
+            if (topLevelDir) {
+              subfolderSizes[topLevelDir] = (subfolderSizes[topLevelDir] || 0) + size;
+            }
+          }
+        }
+      });
     }
-  });
+    entries.forEach(function (entry) {
+      if (entry.type === 'tree') {
+        entry.size = subfolderSizes[entry.name] || 0;
+      }
+    });
+  }
   return entries;
 }
 
