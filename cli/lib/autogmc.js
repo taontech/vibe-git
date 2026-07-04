@@ -99,6 +99,7 @@ function worker(targetOid) {
 
       var binding = config.readBinding(root);
       var promptInfo = buildPrompt(root, targetOid, binding);
+      removeCommitLanguage(root);
       var selectedAgent = binding ? binding.agent : config.currentAgent();
       log('requesting commit message from ' + selectedAgent);
       var generated = agent.generateText(promptInfo.prompt, root, selectedAgent, {
@@ -148,10 +149,14 @@ function buildPrompt(root, targetOid, binding) {
   }
 
   var tasks = taskStatus.readUnfinishedTasksForPrompt(root);
+  var language = readCommitLanguage(root);
   var options = {
     changeDescription: 'committed changes',
     diffLabel: 'Committed diff'
   };
+  if (language) {
+    options.language = language;
+  }
   if (tasks.length) {
     return {
       planMode: true,
@@ -642,6 +647,24 @@ function readGitJson(root, relativePath) {
     return null;
   }
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function readCommitLanguage(root) {
+  var filePath = gitFile(root, 'gmc/commit-language');
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    var lang = fs.readFileSync(filePath, 'utf8').trim();
+    if (!lang || lang === 'en') return null;
+    return lang;
+  } catch (error) {
+    return null;
+  }
+}
+
+function removeCommitLanguage(root) {
+  removeFile(gitFile(root, 'gmc/commit-language'));
 }
 
 function writeGitJson(root, relativePath, value) {

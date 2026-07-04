@@ -383,7 +383,7 @@ function handleCommitSelected(req, res, targetRepo) {
   }
 
   readJsonBody(req).then(function (body) {
-    var result = commitSelectedFiles(targetRepo, body.files);
+    var result = commitSelectedFiles(targetRepo, body.files, body.language);
     invalidateStatusCache(targetRepo);
     sendJson(res, result);
   }).catch(function (error) {
@@ -2345,7 +2345,7 @@ function commitDetails(root, oid) {
   };
 }
 
-function commitSelectedFiles(root, selectedFiles) {
+function commitSelectedFiles(root, selectedFiles, language) {
   var repoRoot = git.repoRoot(root);
   if (!Array.isArray(selectedFiles) || !selectedFiles.length) {
     throwHttpError('Select at least one changed file to commit.');
@@ -2400,6 +2400,7 @@ function commitSelectedFiles(root, selectedFiles) {
     });
   } else if (installed.hooks) {
     // Hooks installed: git commit -m gmc triggers the commit-msg hook which generates AI message
+    writeCommitLanguage(repoRoot, language);
     result = childProcess.spawnSync('git', ['commit', '-m', 'gmc', '--'].concat(gitPaths), {
       cwd: repoRoot,
       encoding: 'utf8'
@@ -2412,15 +2413,18 @@ function commitSelectedFiles(root, selectedFiles) {
       diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
     }
     var tasks = taskStatus.readUnfinishedTasksForPrompt(repoRoot);
+    var promptOptions = language && language !== 'en' ? { language: language } : undefined;
     var prompt = tasks.length ? prompts.commitMessagePlanPrompt(
       binding,
       diff,
       git.statusShort(repoRoot),
-      tasks
+      tasks,
+      promptOptions
     ) : prompts.commitMessagePrompt(
       binding,
       diff,
-      git.statusShort(repoRoot)
+      git.statusShort(repoRoot),
+      promptOptions
     );
     var aiMessage;
     try {
@@ -2469,6 +2473,12 @@ function commitSelectedFiles(root, selectedFiles) {
     taskUpdates: appliedTaskUpdates.updates,
     tasks: safeTasks(repoRoot)
   };
+}
+
+function writeCommitLanguage(root, language) {
+  if (language && language !== 'en') {
+    git.writeGitFile(root, 'gmc/commit-language', language);
+  }
 }
 
 function applyTaskUpdatesAfterCommit(root, updates) {
@@ -6542,7 +6552,7 @@ function doCommit(files) {
   fetch('/api/commit-selected?repo=' + encodeURIComponent(targetRepo), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ files: files })
+    body: JSON.stringify({ files: files, language: currentLanguage || 'en' })
   })
     .then(function(res) {
       return res.json().then(function(data) {

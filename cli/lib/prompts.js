@@ -1,5 +1,14 @@
 'use strict';
 
+var LANGUAGE_NAMES = {
+  'zh-CN': 'Chinese (Simplified)',
+  en: 'English',
+  ja: 'Japanese',
+  ko: 'Korean',
+  es: 'Spanish',
+  fr: 'French'
+};
+
 function createdByLine(agent) {
   var name = String(agent || 'codex').toLowerCase();
   if (name === 'claude') {
@@ -67,6 +76,10 @@ function commitMessagePrompt(binding, diff, status, options) {
   if (binding) {
     sections.push('- Include this trailer exactly: Issue: ' + binding.issue);
   }
+  if (options.language && options.language !== 'en') {
+    var langName = LANGUAGE_NAMES[options.language] || options.language;
+    sections.push('- IMPORTANT: Output the commit message in ' + langName + '.');
+  }
   sections.push('- Output only the commit message. Do not use markdown.');
 
   if (binding) {
@@ -111,6 +124,10 @@ function commitMessagePlanPrompt(binding, diff, status, tasks, options) {
   ];
   if (binding) {
     sections.push('- Include this trailer exactly in the message field: Issue: ' + binding.issue);
+  }
+  if (options.language && options.language !== 'en') {
+    var langName = LANGUAGE_NAMES[options.language] || options.language;
+    sections.push('- IMPORTANT: Output the commit message (the "message" field) in ' + langName + '. The "reason" fields should also be in ' + langName + '.');
   }
   sections = sections.concat([
     '',
