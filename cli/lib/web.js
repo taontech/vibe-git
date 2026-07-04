@@ -26,8 +26,10 @@ var AUTH_QUERY_PARAM = 'gmc_auth';
 var AUTH_COOKIE = 'gmc_gitweb_auth';
 var RECENT_REPOS_LIMIT = 20;
 var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
+var STATUS_CACHE_TTL_MS = process.env.GMC_STATUS_CACHE_MS ? Number(process.env.GMC_STATUS_CACHE_MS) : 2000;
 var TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
+var statusCache = {};
 
 function start(root, options) {
   options = options || {};
@@ -317,7 +319,14 @@ function handleRequest(req, res) {
     }
 
     if (parsed.pathname === '/api/status') {
-      sendJson(res, collectStatus(targetRepo));
+      var cached = getCachedStatus(targetRepo);
+      if (cached) {
+        sendJson(res, cached);
+      } else {
+        var statusResult = collectStatus(targetRepo);
+        setCachedStatus(targetRepo, statusResult);
+        sendJson(res, statusResult);
+      }
       return;
     }
 
@@ -374,7 +383,9 @@ function handleCommitSelected(req, res, targetRepo) {
   }
 
   readJsonBody(req).then(function (body) {
-    sendJson(res, commitSelectedFiles(targetRepo, body.files));
+    var result = commitSelectedFiles(targetRepo, body.files);
+    invalidateStatusCache(targetRepo);
+    sendJson(res, result);
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -387,7 +398,9 @@ function handleIgnoreSelected(req, res, targetRepo) {
   }
 
   readJsonBody(req).then(function (body) {
-    sendJson(res, ignoreSelectedFiles(targetRepo, body.files));
+    var result = ignoreSelectedFiles(targetRepo, body.files);
+    invalidateStatusCache(targetRepo);
+    sendJson(res, result);
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -396,7 +409,9 @@ function handleIgnoreSelected(req, res, targetRepo) {
 function handleRestoreSelected(req, res, targetRepo) {
   if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
   readJsonBody(req).then(function (body) {
-    sendJson(res, restoreSelectedFiles(targetRepo, body.files));
+    var result = restoreSelectedFiles(targetRepo, body.files);
+    invalidateStatusCache(targetRepo);
+    sendJson(res, result);
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -410,6 +425,7 @@ function handlePush(req, res, targetRepo) {
     var errorMsg = (result.stderr || result.stdout || result.error && result.error.message || 'git push failed').trim();
     return sendJsonError(res, 400, errorMsg);
   }
+  invalidateStatusCache(targetRepo);
   sendJson(res, { status: 'ok', output: ((result.stdout || '') + (result.stderr || '')).trim() });
 }
 
@@ -421,13 +437,16 @@ function handlePull(req, res, targetRepo) {
     var errorMsg = (result.stderr || result.stdout || result.error && result.error.message || 'git pull failed').trim();
     return sendJsonError(res, 400, errorMsg);
   }
+  invalidateStatusCache(targetRepo);
   sendJson(res, { status: 'ok', output: ((result.stdout || '') + (result.stderr || '')).trim() });
 }
 
 function handleCheckoutBranch(req, res, targetRepo) {
   if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
   readJsonBody(req).then(function (body) {
-    sendJson(res, checkoutBranch(targetRepo, body.branch));
+    var result = checkoutBranch(targetRepo, body.branch);
+    invalidateStatusCache(targetRepo);
+    sendJson(res, result);
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -1353,6 +1372,29 @@ function writeRecentRepositories(repositories) {
   return recent;
 }
 
+function getCachedStatus(repoRoot) {
+  var entry = statusCache[repoRoot];
+  if (!entry) return null;
+  if (Date.now() - entry.at > STATUS_CACHE_TTL_MS) {
+    delete statusCache[repoRoot];
+    return null;
+  }
+  return entry.data;
+}
+
+function setCachedStatus(repoRoot, data) {
+  statusCache[repoRoot] = { at: Date.now(), data: data };
+}
+
+function invalidateStatusCache(repoRoot) {
+  if (repoRoot) {
+    delete statusCache[repoRoot];
+    delete statusCache[git.repoRoot(repoRoot)];
+  } else {
+    statusCache = {};
+  }
+}
+
 function recordRepositoryVisit(root) {
   var repoRoot = git.repoRoot(root);
   var repositories = readRecentRepositories().filter(function (item) {
@@ -1639,18 +1681,81 @@ function isPathInside(parent, child) {
 }
 
 function collectStatus(root) {
+  var t0 = Date.now();
+  var timings = {};
+  var t, statusOutput, worktreeStat, stagedStat, branchList, commitList, contribs, binding, taskList;
+
+  t = Date.now();
   root = git.repoRoot(root);
+  timings.repoRoot = Date.now() - t;
+
+  t = Date.now();
   recordRepositoryVisitIfStale(root);
+  timings.recordVisit = Date.now() - t;
+
+  t = Date.now();
   var branch = git.currentBranch(root) || '(detached)';
+  timings.currentBranch = Date.now() - t;
+
+  t = Date.now();
   var upstream = runGitOptional(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  var status = parseStatusOutput(runGitOptional(root, ['status', '--porcelain=v1', '-b', '-z']));
+  timings.upstream = Date.now() - t;
+
+  t = Date.now();
+  statusOutput = parseStatusOutput(runGitOptional(root, ['status', '--porcelain=v1', '-b', '-z']));
+  timings.status = Date.now() - t;
+
+  t = Date.now();
   var remote = runGitOptional(root, ['remote', 'get-url', 'origin']);
+  timings.remote = Date.now() - t;
+
+  t = Date.now();
   var aheadBehind = upstream ? parseAheadBehind(runGitOptional(root, ['rev-list', '--left-right', '--count', 'HEAD...@{u}'])) : {
     ahead: 0,
     behind: 0
   };
+  timings.aheadBehind = Date.now() - t;
 
+  t = Date.now();
   var installStatus = checkInstallStatus(root);
+  timings.installCheck = Date.now() - t;
+
+  t = Date.now();
+  worktreeStat = runGitOptional(root, ['diff', '--stat']);
+  timings.worktreeDiff = Date.now() - t;
+
+  t = Date.now();
+  stagedStat = runGitOptional(root, ['diff', '--cached', '--stat']);
+  timings.stagedDiff = Date.now() - t;
+
+  t = Date.now();
+  branchList = branches(root);
+  timings.branches = Date.now() - t;
+
+  t = Date.now();
+  commitList = commits(root, 44);
+  timings.commits = Date.now() - t;
+
+  t = Date.now();
+  contribs = contributions(root);
+  timings.contributions = Date.now() - t;
+
+  t = Date.now();
+  binding = safeBinding(root);
+  timings.binding = Date.now() - t;
+
+  t = Date.now();
+  taskList = safeTasks(root);
+  timings.tasks = Date.now() - t;
+
+  timings.total = Date.now() - t0;
+
+  if (process.env.GMC_DEBUG_TIMING) {
+    console.error('[gmc:timing] collectStatus for %s total=%dms', root, timings.total);
+    Object.keys(timings).forEach(function (key) {
+      console.error('[gmc:timing]   %s: %dms', key, timings[key]);
+    });
+  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1665,17 +1770,18 @@ function collectStatus(root) {
       ahead: aheadBehind.ahead,
       behind: aheadBehind.behind
     },
-    status: status,
+    status: statusOutput,
     stats: {
-      worktree: runGitOptional(root, ['diff', '--stat']),
-      staged: runGitOptional(root, ['diff', '--cached', '--stat'])
+      worktree: worktreeStat,
+      staged: stagedStat
     },
-    branches: branches(root),
-    commits: commits(root, 44),
-    contributions: contributions(root),
-    binding: safeBinding(root),
-    tasks: safeTasks(root),
-    install: installStatus
+    branches: branchList,
+    commits: commitList,
+    contributions: contribs,
+    binding: binding,
+    tasks: taskList,
+    install: installStatus,
+    timings: timings
   };
 }
 
