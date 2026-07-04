@@ -155,6 +155,14 @@ function handleRequest(req, res) {
   try {
     var parsed = url.parse(req.url, true);
     reqPath = parsed.pathname;
+
+    if (req.method === 'OPTIONS') {
+      setCorsHeaders(res);
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     if (isExternalAccessBlocked(req)) {
       sendUnauthorized(req, res, parsed, 'External GitWeb access is disabled. Open this page from 127.0.0.1 to enable it.');
       return;
@@ -1147,7 +1155,14 @@ function readJsonBody(req) {
   });
 }
 
+function setCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GMC-Auth');
+}
+
 function sendJson(res, payload, headers) {
+  setCorsHeaders(res);
   res.writeHead(200, Object.assign({
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store'
@@ -1156,6 +1171,7 @@ function sendJson(res, payload, headers) {
 }
 
 function sendJsonError(res, status, message) {
+  setCorsHeaders(res);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store'
@@ -1166,6 +1182,7 @@ function sendJsonError(res, status, message) {
 }
 
 function send(res, status, type, body) {
+  setCorsHeaders(res);
   res.writeHead(status, {
     'Content-Type': type,
     'Cache-Control': 'no-store'
