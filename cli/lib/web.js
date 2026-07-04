@@ -946,7 +946,7 @@ function installHooksAndWeb(repoRoot) {
   });
   // create webloc
   var port = normalizePort(process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
-  var address = 'http://127.0.0.1:' + port + '/?repo=' + encodeURIComponent(repoRoot);
+  var address = 'http://127.0.0.1:' + port + '/?name=' + encodeURIComponent(repoName(repoRoot));
   var linkPath = path.join(repoRoot, 'git.webloc');
   var content = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -2693,7 +2693,7 @@ function createWebloc(root, options) {
   options = options || {};
   var repoRoot = git.repoRoot(root);
   var port = normalizePort(options.port || process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
-  var address = 'http://127.0.0.1:' + port + '/?repo=' + encodeURIComponent(repoRoot);
+  var address = 'http://127.0.0.1:' + port + '/?name=' + encodeURIComponent(repoName(repoRoot));
   var linkPath = path.join(repoRoot, 'git.webloc');
   var content = [
     '<?xml version="1.0" encoding="UTF-8"?>',
