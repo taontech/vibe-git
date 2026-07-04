@@ -1,6 +1,6 @@
 {
   "name": "gmc",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Local GitWeb dashboard and AI-assisted commit messages for Git repositories",
   "main": "bin/gmc.js",
   "keywords": [
