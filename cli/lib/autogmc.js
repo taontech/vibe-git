@@ -300,7 +300,13 @@ function skip(root, targetOid, reason, log) {
 
 function taskSummaries(root, limit) {
   limit = limit || 5;
-  var dir = gitFile(root, TASK_DIR);
+  var gitDirPath;
+  try {
+    gitDirPath = git.gitDir(root);
+  } catch (e) {
+    return [];
+  }
+  var dir = path.join(gitDirPath, TASK_DIR);
   if (!fs.existsSync(dir)) {
     return [];
   }
@@ -311,9 +317,10 @@ function taskSummaries(root, limit) {
     })
     .map(function (fileName) {
       var oid = fileName.replace(/\.json$/, '');
+      var filePath = path.join(dir, fileName);
       var task;
       try {
-        task = readGitJson(root, path.join(TASK_DIR, fileName));
+        task = readGitJsonFile(filePath);
       } catch (error) {
         task = {
           status: 'invalid',
@@ -321,7 +328,7 @@ function taskSummaries(root, limit) {
           error: 'Could not read task file: ' + error.message
         };
       }
-      return summarizeTask(root, oid, task || {});
+      return summarizeTaskFromDir(root, gitDirPath, oid, task || {});
     })
     .sort(function (a, b) {
       return timestamp(b.createdAt || b.startedAt || b.completedAt) - timestamp(a.createdAt || a.startedAt || a.completedAt);
@@ -329,8 +336,16 @@ function taskSummaries(root, limit) {
     .slice(0, limit);
 }
 
-function summarizeTask(root, oid, task) {
+function readGitJsonFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function summarizeTaskFromDir(root, gitDirPath, oid, task) {
   var logPath = task.logPath || path.join(LOG_DIR, oid + '.log');
+  var fullLogPath = path.join(gitDirPath, logPath);
   var status = task.status || 'unknown';
   var now = Date.now();
   var started = timestamp(task.startedAt);
@@ -348,7 +363,7 @@ function summarizeTask(root, oid, task) {
     waitingAt: task.waitingAt || null,
     completedAt: task.completedAt || null,
     age: started || waiting ? formatDuration(now - (started || waiting)) : null,
-    logPath: path.relative(root, gitFile(root, logPath)),
+    logPath: path.relative(root, fullLogPath),
     message: task.message || null,
     error: task.error || null,
     reason: task.reason || null,

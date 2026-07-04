@@ -26,7 +26,7 @@ var AUTH_QUERY_PARAM = 'gmc_auth';
 var AUTH_COOKIE = 'gmc_gitweb_auth';
 var RECENT_REPOS_LIMIT = 20;
 var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
-var STATUS_CACHE_TTL_MS = process.env.GMC_STATUS_CACHE_MS ? Number(process.env.GMC_STATUS_CACHE_MS) : 2000;
+var STATUS_CACHE_TTL_MS = process.env.GMC_STATUS_CACHE_MS ? Number(process.env.GMC_STATUS_CACHE_MS) : 10000;
 var TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
 var statusCache = {};
@@ -150,8 +150,11 @@ function findAvailablePort(port, attempt) {
 }
 
 function handleRequest(req, res) {
+  var reqT0 = Date.now();
+  var reqPath;
   try {
     var parsed = url.parse(req.url, true);
+    reqPath = parsed.pathname;
     if (isExternalAccessBlocked(req)) {
       sendUnauthorized(req, res, parsed, 'External GitWeb access is disabled. Open this page from 127.0.0.1 to enable it.');
       return;
@@ -351,7 +354,10 @@ function handleRequest(req, res) {
     }
 
     if (parsed.pathname === '/api/tasks') {
-      sendJson(res, readRepositoryTasks(targetRepo));
+      var tasksT0 = Date.now();
+      var tasksResult = readRepositoryTasks(targetRepo);
+      tasksResult.timings = { total: Date.now() - tasksT0 };
+      sendJson(res, tasksResult);
       return;
     }
 
@@ -372,7 +378,16 @@ function handleRequest(req, res) {
 
     send(res, 404, 'text/plain; charset=utf-8', 'Not found');
   } catch (error) {
+    logRequestTiming(reqPath, reqT0, error);
     sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function logRequestTiming(pathname, t0, error) {
+  if (!process.env.GMC_DEBUG_TIMING) return;
+  var elapsed = Date.now() - t0;
+  if (elapsed >= 100 || error) {
+    console.error('[gmc:req] %s %s %dms%s', pathname || '?', error ? 'ERROR' : 'OK', elapsed, error ? ' (' + error.message + ')' : '');
   }
 }
 
@@ -4772,6 +4787,11 @@ var LANGUAGE_HTML_LANG = {
 };
 var currentLanguage = normalizeLanguage(localStorage.getItem('gmc_language') || (navigator.language || ''));
 var $ = function(id) { return document.getElementById(id); };
+function getPerfMeasure(name) {
+  var entries = performance.getEntriesByName(name, 'measure');
+  if (entries.length) return entries[entries.length - 1].duration.toFixed(1);
+  return '?';
+}
 var TASK_BOARD_STATUSES = [
   { id: 'todo', label: 'taskStatusTodo', color: '#0284c7' },
   { id: 'doing', label: 'taskStatusDoing', color: '#16a34a' },
@@ -4890,7 +4910,12 @@ function setActiveView(view) {
     button.classList.toggle('active', button.getAttribute('data-view-tab') === view);
   });
   if (view === 'tasks') {
-    loadRepositoryTasks();
+    performance.mark('gmc-task-view-start');
+    loadRepositoryTasks().then(function() {
+      performance.mark('gmc-task-view-end');
+      performance.measure('gmc-task-view-switch', 'gmc-task-view-start', 'gmc-task-view-end');
+      console.debug('[gmc:timing] task view switch: ' + getPerfMeasure('gmc-task-view-switch') + 'ms');
+    });
   } else {
     refreshLayoutSoon();
   }
@@ -4935,16 +4960,22 @@ function loadRepositoryTasks(options) {
   }
   if (state.taskLoading) return Promise.resolve(state.repoTasks);
   if (state.tasksLoaded && !options.force) {
+    var t0 = performance.now();
     renderTaskBoard();
+    console.debug('[gmc:timing] renderTaskBoard(cached): ' + (performance.now() - t0).toFixed(1) + 'ms');
     return Promise.resolve(state.repoTasks);
   }
 
+  performance.mark('gmc-tasks-api-start');
   state.taskLoading = true;
   renderTaskBoard();
   return fetch('/api/tasks?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
     .then(function(res) {
       return res.json().then(function(data) {
         if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        performance.mark('gmc-tasks-api-end');
+        performance.measure('gmc-tasks-api', 'gmc-tasks-api-start', 'gmc-tasks-api-end');
+        console.debug('[gmc:timing] /api/tasks fetch: ' + getPerfMeasure('gmc-tasks-api') + 'ms (server timings: %o)', data.timings);
         return data;
       });
     })
@@ -4954,7 +4985,9 @@ function loadRepositoryTasks(options) {
       var storage = $('taskStoragePath');
       if (storage) storage.textContent = data.directory || '.gmc/tasks';
       setTaskError('');
+      var t0 = performance.now();
       renderTaskBoard();
+      console.debug('[gmc:timing] renderTaskBoard: ' + (performance.now() - t0).toFixed(1) + 'ms');
       return state.repoTasks;
     })
     .catch(function(error) {
@@ -6125,6 +6158,7 @@ function load(options) {
     if (options.force) state.pendingForceLoad = true;
     return Promise.resolve(false);
   }
+  performance.mark('gmc-status-start');
   state.loading = true;
   return fetch('/api/status?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
     .then(function(res) { 
@@ -6132,6 +6166,17 @@ function load(options) {
       return res.json(); 
     })
     .then(function(data) {
+      performance.mark('gmc-status-end');
+      performance.measure('gmc-status', 'gmc-status-start', 'gmc-status-end');
+      var apiTime = getPerfMeasure('gmc-status');
+      console.debug('[gmc:timing] /api/status fetch: ' + apiTime + 'ms (server total: ' + (data.timings && data.timings.total || '?') + 'ms)');
+      if (data.timings) {
+        var heavy = [];
+        Object.keys(data.timings).forEach(function(k) {
+          if (data.timings[k] >= 500) heavy.push(k + ': ' + data.timings[k] + 'ms');
+        });
+        if (heavy.length) console.debug('[gmc:timing] server heavy ops: ' + heavy.join(', '));
+      }
       var signature = statusSignature(data);
       if (!options.force && signature === state.statusSignature) {
         return false;
@@ -6225,6 +6270,7 @@ function processTopology(data) {
 }
 
 function render(data) {
+  var t0 = performance.now();
   if (data.error) {
     updateRepoLink(t('errorPrefix') + data.error, null);
     return;
@@ -6258,6 +6304,8 @@ function render(data) {
   
   clearTimeout(state.graphTimer);
   state.graphTimer = setTimeout(function() { renderGraph(state.commits); }, 50);
+
+  console.debug('[gmc:timing] render(total): ' + (performance.now() - t0).toFixed(1) + 'ms');
 }
 
 function renderInstallBanner() {
