@@ -52,8 +52,19 @@ function start(root, options) {
 function listen(port, attempt) {
   return new Promise(function (resolve, reject) {
     var server = http.createServer(function (req, res) {
+      var timer = setTimeout(function () {
+        if (!res.writableEnded) {
+          res.writeHead(408, { 'Content-Type': 'text/plain; charset=utf-8', 'Connection': 'close' });
+          res.end('Request timeout');
+        }
+      }, 120000);
+      res.on('close', function () { clearTimeout(timer); });
+      res.on('finish', function () { clearTimeout(timer); });
       handleRequest(req, res);
     });
+    server.timeout = 30000;
+    server.keepAliveTimeout = 10000;
+    server.headersTimeout = 15000;
     server.on('error', function (error) {
       if (error.code === 'EADDRINUSE' && attempt < 20) {
         listen(port + 1, attempt + 1).then(resolve, reject);
@@ -326,6 +337,7 @@ function handleRequest(req, res) {
       if (parsed.pathname.startsWith('/api/')) {
         throwHttpError('Missing repo parameter');
       }
+      send(res, 200, 'text/html; charset=utf-8', webHtml(getAuthToken(), req));
       return;
     }
 
