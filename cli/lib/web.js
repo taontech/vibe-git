@@ -1163,6 +1163,7 @@ function setCorsHeaders(res) {
 
 function sendJson(res, payload, headers) {
   setCorsHeaders(res);
+  res.setHeader('Connection', 'close');
   res.writeHead(200, Object.assign({
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store'
@@ -1172,6 +1173,7 @@ function sendJson(res, payload, headers) {
 
 function sendJsonError(res, status, message) {
   setCorsHeaders(res);
+  res.setHeader('Connection', 'close');
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store'
@@ -1183,6 +1185,7 @@ function sendJsonError(res, status, message) {
 
 function send(res, status, type, body) {
   setCorsHeaders(res);
+  res.setHeader('Connection', 'close');
   res.writeHead(status, {
     'Content-Type': type,
     'Cache-Control': 'no-store'
@@ -3743,13 +3746,20 @@ var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
 var AUTH_QUERY_PARAM = ${JSON.stringify(AUTH_QUERY_PARAM)};
 (function() {
   var nativeFetch = window.fetch.bind(window);
+  var FETCH_TIMEOUT_MS = 30000;
   window.fetch = function(input, init) {
     init = init || {};
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, FETCH_TIMEOUT_MS);
+    if (init.signal) {
+      init.signal.addEventListener('abort', function() { controller.abort(); });
+    }
+    init.signal = controller.signal;
     var headers = new Headers(init.headers || {});
     var fetchUrl = new URL(typeof input === 'string' ? input : input.url, window.location.href);
     if (GMC_AUTH_TOKEN && fetchUrl.origin === window.location.origin) headers.set('X-GMC-Auth', GMC_AUTH_TOKEN);
     init.headers = headers;
-    return nativeFetch(input, init);
+    return nativeFetch(input, init).finally(function() { clearTimeout(timer); });
   };
 })();
 var urlParams = new URLSearchParams(window.location.search);
@@ -7754,13 +7764,20 @@ mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 (function() {
   var nativeFetch = window.fetch.bind(window);
+  var FETCH_TIMEOUT_MS = 30000;
   window.fetch = function(input, init) {
     init = init || {};
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, FETCH_TIMEOUT_MS);
+    if (init.signal) {
+      init.signal.addEventListener('abort', function() { controller.abort(); });
+    }
+    init.signal = controller.signal;
     var headers = new Headers(init.headers || {});
     var fetchUrl = new URL(typeof input === 'string' ? input : input.url, window.location.href);
     if (GMC_AUTH_TOKEN && fetchUrl.origin === window.location.origin) headers.set('X-GMC-Auth', GMC_AUTH_TOKEN);
     init.headers = headers;
-    return nativeFetch(input, init);
+    return nativeFetch(input, init).finally(function() { clearTimeout(timer); });
   };
 })();
 var urlParams = new URLSearchParams(window.location.search);
