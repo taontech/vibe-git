@@ -258,6 +258,10 @@ function handleRequest(req, res) {
         handleQrCode(req, res);
         return;
       }
+      if (parsed.pathname === '/api/agent') {
+        handleSetAgent(req, res);
+        return;
+      }
       if (parsed.pathname === '/api/tasks/create') {
         handleCreateTask(req, res, parsed.query.repo);
         return;
@@ -318,6 +322,17 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/security') {
       sendJson(res, publicSecuritySettings(null, req));
+      return;
+    }
+
+    if (parsed.pathname === '/api/agent') {
+      var currentAgent = 'codex';
+      try {
+        currentAgent = config.currentAgent();
+      } catch (ignore) {
+        // ignore
+      }
+      sendJson(res, { agent: currentAgent });
       return;
     }
 
@@ -899,6 +914,23 @@ function handleQrCode(req, res) {
     });
   }).then(function (svg) {
     sendJson(res, { svg: svg });
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleSetAgent(req, res) {
+  readJsonBody(req).then(function (body) {
+    var newAgent = String(body.agent || '').trim().toLowerCase();
+    if (!newAgent) {
+      return sendJsonError(res, 400, 'Missing agent parameter.');
+    }
+    try {
+      var selectedAgent = config.setAgent(newAgent);
+      sendJson(res, { agent: selectedAgent });
+    } catch (error) {
+      sendJsonError(res, 400, error.message);
+    }
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -3005,6 +3037,13 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; }
 .settings-warning { display: none; margin-top: 12px; padding: 10px 12px; border: 1px solid #fed7aa; border-radius: 7px; background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.5; }
 .settings-warning.visible { display: block; }
+.radio-group { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.radio-label { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; font-size: 13px; color: #334155; transition: border-color .15s, background .15s; }
+.radio-label:hover { border-color: var(--accent); background: #eff6ff; }
+.radio-label input[type="radio"] { display: none; }
+.radio-label:has(input:checked) { border-color: var(--accent); background: #eff6ff; color: var(--accent); font-weight: 600; }
+.radio-indicator { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); background: #fff; flex-shrink: 0; }
+.radio-label input:checked + .radio-indicator { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px #fff; }
 .commit-button { background: var(--accent); border-color: var(--accent); color: #fff; }
 .commit-button:hover:not(:disabled) { color: #fff; background: #1d4ed8; }
 .ignore-button { color: var(--rose); }
@@ -3423,9 +3462,9 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             </button>
           </nav>
           <div class="actions">
-            <button id="openAccessSettings" class="settings-button" type="button" title="打开访问设置" data-i18n-title="accessSettings" data-i18n-aria-label="accessSettings">
+            <button id="openSettings" class="settings-button" type="button" title="打开设置" data-i18n-title="settings" data-i18n-aria-label="settings">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.18.63.77 1 1.43 1H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1Z"></path></svg>
-              <span data-i18n="accessSettings">访问设置</span>
+              <span data-i18n="settings">设置</span>
             </button>
             <div class="language-wrap">
               <button id="openLanguageMenu" class="language-button" type="button" title="Language" data-i18n-title="language">
@@ -3647,16 +3686,17 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           <div class="task-board-loading" data-i18n="loadingTasks">正在加载任务...</div>
         </div>
       </section>
-      <section id="accessSettingsPage" class="settings-page" hidden>
+      <section id="settingsPage" class="settings-page" hidden>
         <div class="settings-hero">
           <div>
-            <h2 data-i18n="accessSettings">访问设置</h2>
-            <p data-i18n="accessSettingsIntro">管理局域网访问、刷新访问 token，并生成当前页面的扫码入口。移动设备扫码后会自动带上访问凭证，不需要手动输入长 token。</p>
+            <h2 data-i18n="settings">设置</h2>
+            <p data-i18n="settingsIntro">管理 GitWeb 的访问控制、AI agent 偏好等全局设置。</p>
           </div>
-          <button id="closeAccessSettings" class="copy-button" type="button" data-i18n="back">Back</button>
+          <button id="closeSettings" class="copy-button" type="button" data-i18n="back">Back</button>
         </div>
         <div class="settings-grid">
           <div class="settings-card">
+            <h3 data-i18n="accessSettings">访问设置</h3>
             <div class="settings-row">
               <div class="settings-row-main">
                 <strong data-i18n="allowExternalAccess">允许外部访问</strong>
@@ -3688,6 +3728,14 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
                 <button id="copyAccessUrl" class="copy-button" type="button" data-i18n="copyUrl">Copy URL</button>
               </div>
               <div id="qrStatus" class="meta"></div>
+            </div>
+          </div>
+          <div class="settings-card">
+            <h3 data-i18n="agentSettings">Agent 设置</h3>
+            <p data-i18n="agentSettingsHelp">选择用于生成 commit message 的 AI agent。</p>
+            <div class="agent-selector" id="agentSelector">
+              <div id="agentOptions" class="radio-group"></div>
+              <div id="agentStatus" class="meta"></div>
             </div>
           </div>
         </div>
@@ -3779,7 +3827,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, agent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -3788,6 +3836,8 @@ var I18N = {
     closeSidebar: '关闭侧边栏',
     toggleSidebar: '切换侧边栏',
     loading: '加载中...',
+    settings: '设置',
+    settingsIntro: '管理 GitWeb 的访问控制、AI agent 偏好等全局设置。',
     accessSettings: '访问设置',
     installBanner: '⚠️ GMC Hooks 尚未安装。安装 Git hooks 后可以自动生成 commit message，git commit 可在任意位置使用。',
     installHooks: '安装 Hooks 和 Webloc',
@@ -3958,7 +4008,11 @@ var I18N = {
     conflictResolveFailed: 'AI 合并失败：',
     conflictResolved: 'AI 合并完成！文件已暂存。',
     conflictAcceptFailed: '合并方案写入失败：',
-    editSaveAndAccept: '保存并接受'
+    editSaveAndAccept: '保存并接受',
+    agentSettings: 'Agent 设置',
+    agentSettingsHelp: '选择用于生成 commit message 的 AI agent。',
+    agentSettingSaved: 'Agent 设置已保存',
+    agentSettingSaveFailed: 'Agent 设置保存失败：'
   },
   en: {
     language: 'Language',
@@ -3967,6 +4021,8 @@ var I18N = {
     closeSidebar: 'Close Sidebar',
     toggleSidebar: 'Toggle Sidebar',
     loading: 'Loading...',
+    settings: 'Settings',
+    settingsIntro: 'Manage GitWeb access control, AI agent preferences, and other global settings.',
     accessSettings: 'Access Settings',
     installBanner: '⚠️ GMC Hooks is not installed. Installing Git hooks can automatically generate commit messages, and git commit is available anywhere.',
     installHooks: 'Install Hooks and Webloc',
@@ -4137,7 +4193,11 @@ var I18N = {
     conflictResolveFailed: 'AI resolution failed: ',
     conflictResolved: 'AI resolved! File staged.',
     conflictAcceptFailed: 'Failed to apply resolution: ',
-    editSaveAndAccept: 'Save & Accept'
+    editSaveAndAccept: 'Save & Accept',
+    agentSettings: 'Agent Settings',
+    agentSettingsHelp: 'Select the AI agent used for commit message generation.',
+    agentSettingSaved: 'Agent setting saved',
+    agentSettingSaveFailed: 'Failed to save agent setting: '
   }
 };
 I18N.ja = Object.assign({}, I18N.en, {
@@ -4147,6 +4207,8 @@ I18N.ja = Object.assign({}, I18N.en, {
   closeSidebar: 'サイドバーを閉じる',
   toggleSidebar: 'サイドバーを切り替え',
   loading: '読み込み中...',
+  settings: '設定',
+  settingsIntro: 'GitWeb のアクセス制御、AI エージェントの設定など全般設定を管理します。',
   accessSettings: 'アクセス設定',
   installBanner: '⚠️ GMC Hooks がインストールされていません。Git hooks をインストールすると commit message を自動生成でき、git commit をどこからでも使えます。',
   installHooks: 'Hooks と Webloc をインストール',
@@ -4304,7 +4366,11 @@ I18N.ja = Object.assign({}, I18N.en, {
   editTask: '編集',
   saveTask: '保存',
   savingTask: '保存中...',
-  taskSaveFailed: 'タスクの保存に失敗しました: '
+  taskSaveFailed: 'タスクの保存に失敗しました: ',
+  agentSettings: 'Agent 設定',
+  agentSettingsHelp: 'コミットメッセージ生成に使用する AI エージェントを選択します。',
+  agentSettingSaved: 'Agent 設定を保存しました',
+  agentSettingSaveFailed: 'Agent 設定の保存に失敗しました: '
 });
 I18N.ko = Object.assign({}, I18N.en, {
   language: '언어',
@@ -4313,6 +4379,8 @@ I18N.ko = Object.assign({}, I18N.en, {
   closeSidebar: '사이드바 닫기',
   toggleSidebar: '사이드바 전환',
   loading: '불러오는 중...',
+  settings: '설정',
+  settingsIntro: 'GitWeb 접근 제어, AI 에이전트 설정 등 전역 설정을 관리합니다.',
   accessSettings: '접근 설정',
   installBanner: '⚠️ GMC Hooks가 설치되어 있지 않습니다. Git hooks를 설치하면 commit message를 자동으로 생성할 수 있고 git commit을 어디서나 사용할 수 있습니다.',
   installHooks: 'Hooks 및 Webloc 설치',
@@ -4470,7 +4538,11 @@ I18N.ko = Object.assign({}, I18N.en, {
   editTask: '편집',
   saveTask: '저장',
   savingTask: '저장 중...',
-  taskSaveFailed: '작업 저장 실패: '
+  taskSaveFailed: '작업 저장 실패: ',
+  agentSettings: 'Agent 설정',
+  agentSettingsHelp: '커밋 메시지 생성에 사용할 AI 에이전트를 선택합니다.',
+  agentSettingSaved: 'Agent 설정이 저장되었습니다',
+  agentSettingSaveFailed: 'Agent 설정 저장 실패: '
 });
 I18N.es = Object.assign({}, I18N.en, {
   language: 'Idioma',
@@ -4479,6 +4551,8 @@ I18N.es = Object.assign({}, I18N.en, {
   closeSidebar: 'Cerrar barra lateral',
   toggleSidebar: 'Alternar barra lateral',
   loading: 'Cargando...',
+  settings: 'Ajustes',
+  settingsIntro: 'Gestiona el control de acceso de GitWeb, preferencias del agente de IA y otros ajustes globales.',
   accessSettings: 'Ajustes de acceso',
   installBanner: '⚠️ GMC Hooks no está instalado. Instalar Git hooks permite generar commit messages automáticamente y usar git commit desde cualquier lugar.',
   installHooks: 'Instalar Hooks y Webloc',
@@ -4636,7 +4710,11 @@ I18N.es = Object.assign({}, I18N.en, {
   editTask: 'Editar',
   saveTask: 'Guardar',
   savingTask: 'Guardando...',
-  taskSaveFailed: 'Error al guardar tarea: '
+  taskSaveFailed: 'Error al guardar tarea: ',
+  agentSettings: 'Ajustes del agente',
+  agentSettingsHelp: 'Selecciona el agente de IA para generar los commit messages.',
+  agentSettingSaved: 'Ajuste del agente guardado',
+  agentSettingSaveFailed: 'Error al guardar el ajuste del agente: '
 });
 I18N.fr = Object.assign({}, I18N.en, {
   language: 'Langue',
@@ -4645,6 +4723,8 @@ I18N.fr = Object.assign({}, I18N.en, {
   closeSidebar: 'Fermer la barre latérale',
   toggleSidebar: 'Afficher/masquer la barre latérale',
   loading: 'Chargement...',
+  settings: 'Paramètres',
+  settingsIntro: 'Gérez le contrôle d’accès GitWeb, les préférences d’agent IA et d’autres paramètres globaux.',
   accessSettings: 'Paramètres d’accès',
   installBanner: '⚠️ GMC Hooks n’est pas installé. Installer les Git hooks permet de générer automatiquement les commit messages et d’utiliser git commit partout.',
   installHooks: 'Installer Hooks et Webloc',
@@ -4802,7 +4882,11 @@ I18N.fr = Object.assign({}, I18N.en, {
   editTask: 'Modifier',
   saveTask: 'Enregistrer',
   savingTask: 'Enregistrement...',
-  taskSaveFailed: 'Échec d’enregistrement de la tâche : '
+  taskSaveFailed: 'Échec d’enregistrement de la tâche : ',
+  agentSettings: 'Paramètres de l’agent',
+  agentSettingsHelp: 'Sélectionnez l’agent IA utilisé pour la génération des commit messages.',
+  agentSettingSaved: 'Paramètre de l’agent enregistré',
+  agentSettingSaveFailed: 'Échec d’enregistrement du paramètre de l’agent : '
 });
 var LANGUAGE_ALIASES = {
   zh: 'zh-CN',
@@ -4939,7 +5023,7 @@ function setActiveView(view) {
   state.activeView = view;
   var gitPage = $('gitPage');
   var taskPage = $('taskPage');
-  var accessPage = $('accessSettingsPage');
+  var accessPage = $('settingsPage');
   var tabs = document.querySelector('.view-tabs');
   if (accessPage) accessPage.hidden = true;
   if (tabs) tabs.hidden = false;
@@ -5790,8 +5874,8 @@ function initSecurityControls() {
     updateExternalAccess(external.checked);
   });
   rotate.addEventListener('click', showTokenConfirmModal);
-  $('openAccessSettings').addEventListener('click', openAccessSettings);
-  $('closeAccessSettings').addEventListener('click', closeAccessSettings);
+  $('openSettings').addEventListener('click', openSettings);
+  $('closeSettings').addEventListener('click', closeSettings);
   $('copyAccessUrl').addEventListener('click', copyAccessUrl);
   $('cancelRotateToken').addEventListener('click', hideTokenConfirmModal);
   $('confirmRotateToken').addEventListener('click', rotateToken);
@@ -5814,22 +5898,23 @@ function initSecurityControls() {
   loadSecuritySettings();
 }
 
-function openAccessSettings() {
+function openSettings() {
   state.settingsOpen = true;
   state.previousViewBeforeSettings = state.activeView || 'git';
   var tabs = document.querySelector('.view-tabs');
   if (tabs) tabs.hidden = true;
   if ($('gitPage')) $('gitPage').hidden = true;
   if ($('taskPage')) $('taskPage').hidden = true;
-  $('accessSettingsPage').hidden = false;
+  $('settingsPage').hidden = false;
   renderSecurityControls();
   renderAccessQr();
+  loadAgentSettings();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function closeAccessSettings() {
+function closeSettings() {
   state.settingsOpen = false;
-  $('accessSettingsPage').hidden = true;
+  $('settingsPage').hidden = true;
   setActiveView(state.previousViewBeforeSettings || 'git');
 }
 
@@ -6049,6 +6134,79 @@ function rotateToken() {
         button.textContent = t('refreshToken');
       }
       if (confirmButton) confirmButton.disabled = false;
+    });
+}
+
+var AGENTS = ['codex', 'claude', 'antigravity', 'opencode'];
+
+function loadAgentSettings() {
+  fetch('/api/agent', { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      state.agent = data.agent || 'codex';
+      renderAgentOptions();
+    })
+    .catch(function() {
+      state.agent = 'codex';
+      renderAgentOptions();
+    });
+}
+
+function renderAgentOptions() {
+  var container = $('agentOptions');
+  if (!container) return;
+  var currentAgent = state.agent || 'codex';
+  var html = '';
+  AGENTS.forEach(function(name) {
+    var checked = name === currentAgent ? ' checked' : '';
+    html += '<label class="radio-label"><input type="radio" name="gmc-agent" value="' + name + '"' + checked + '>' +
+      '<span class="radio-indicator"></span><span class="radio-text">' + name + '</span></label>';
+  });
+  container.innerHTML = html;
+
+  var radios = container.querySelectorAll('input[type="radio"]');
+  radios.forEach(function(radio) {
+    radio.addEventListener('change', function() {
+      if (this.checked) {
+        updateAgentSetting(this.value);
+      }
+    });
+  });
+}
+
+function updateAgentSetting(agent) {
+  var status = $('agentStatus');
+  if (status) status.textContent = t('working');
+  var inputs = document.querySelectorAll('input[name="gmc-agent"]');
+  if (inputs) {
+    inputs.forEach(function(input) { input.disabled = true; });
+  }
+  fetch('/api/agent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent: agent })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.agent = data.agent || agent;
+      if (status) status.textContent = t('agentSettingSaved');
+    })
+    .catch(function(error) {
+      if (status) status.textContent = t('agentSettingSaveFailed') + error.message;
+      renderAgentOptions();
+    })
+    .finally(function() {
+      if (inputs) {
+        inputs.forEach(function(input) { input.disabled = false; });
+      }
     });
 }
 
