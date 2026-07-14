@@ -3016,7 +3016,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .settings-page #rotateToken { opacity: 1; transform: none; pointer-events: auto; max-width: none; padding-left: 12px; padding-right: 12px; border-width: 1px; }
 .settings-page { display: grid; gap: 16px; }
 .settings-page[hidden] { display: none; }
-.settings-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 2px; }
+.settings-hero { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-bottom: 2px; }
 .settings-hero h2 { margin: 0; color: var(--text); font-size: 22px; line-height: 1.15; letter-spacing: 0; text-transform: none; }
 .settings-hero p { margin: 6px 0 0; color: var(--muted); max-width: 720px; line-height: 1.6; }
 .settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 16px; align-items: start; }
@@ -3037,6 +3037,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; }
 .settings-warning { display: none; margin-top: 12px; padding: 10px 12px; border: 1px solid #fed7aa; border-radius: 7px; background: #fff7ed; color: #9a3412; font-size: 12px; line-height: 1.5; }
 .settings-warning.visible { display: block; }
+.settings-subsection { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.settings-subsection h4 { margin: 0 0 6px; font-size: 14px; }
 .radio-group { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
 .radio-label { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; font-size: 13px; color: #334155; transition: border-color .15s, background .15s; }
 .radio-label:hover { border-color: var(--accent); background: #eff6ff; }
@@ -3384,7 +3386,6 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   .repo-entry { grid-template-columns: 22px minmax(0, 1fr); }
   .repo-entry-meta { display: none; }
   .code-view { font-size: 12px; }
-  .settings-hero { flex-direction: column; }
   .settings-row { align-items: flex-start; flex-direction: column; }
   .settings-actions { justify-content: flex-start; }
   .qr-box { width: min(244px, 100%); height: auto; aspect-ratio: 1; }
@@ -3688,11 +3689,11 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       </section>
       <section id="settingsPage" class="settings-page" hidden>
         <div class="settings-hero">
+          <button id="closeSettings" class="copy-button" type="button" data-i18n="back">Back</button>
           <div>
             <h2 data-i18n="settings">设置</h2>
             <p data-i18n="settingsIntro">管理 GitWeb 的访问控制、AI agent 偏好等全局设置。</p>
           </div>
-          <button id="closeSettings" class="copy-button" type="button" data-i18n="back">Back</button>
         </div>
         <div class="settings-grid">
           <div class="settings-card">
@@ -3717,17 +3718,17 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             </div>
             <div id="settingsHostOnlyWarning" class="settings-warning" data-i18n="hostOnlyWarning">当前页面不是从主机本机打开的，访问设置只能查看，不能修改。</div>
             <div id="settingAccessAddress" class="access-address"></div>
-          </div>
-          <div class="settings-card">
-            <h3 data-i18n="scanCurrentPage">扫码访问当前页面</h3>
-            <p data-i18n="qrHelp">二维码内容是当前页面 URL，并自动附带访问 token。建议只给可信设备扫码。</p>
-            <div class="qr-shell">
-              <div id="accessQrCode" class="qr-box"><div class="qr-placeholder" data-i18n="qrEnableExternal">开启外部访问后生成二维码</div></div>
-              <textarea id="accessUrlValue" class="access-url" readonly></textarea>
-              <div class="settings-actions">
-                <button id="copyAccessUrl" class="copy-button" type="button" data-i18n="copyUrl">Copy URL</button>
+            <div class="settings-subsection">
+              <h4 data-i18n="scanCurrentPage">扫码访问当前页面</h4>
+              <p data-i18n="qrHelp">二维码内容是当前页面 URL，并自动附带访问 token。建议只给可信设备扫码。</p>
+              <div class="qr-shell">
+                <div id="accessQrCode" class="qr-box"><div class="qr-placeholder" data-i18n="qrEnableExternal">开启外部访问后生成二维码</div></div>
+                <textarea id="accessUrlValue" class="access-url" readonly></textarea>
+                <div class="settings-actions">
+                  <button id="copyAccessUrl" class="copy-button" type="button" data-i18n="copyUrl">Copy URL</button>
+                </div>
+                <div id="qrStatus" class="meta"></div>
               </div>
-              <div id="qrStatus" class="meta"></div>
             </div>
           </div>
           <div class="settings-card">
