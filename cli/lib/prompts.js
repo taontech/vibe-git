@@ -54,23 +54,11 @@ function issuePrompt(issue) {
 }
 
 function taskPrompt(task) {
-  return [
-    'Start development work on repository task ' + task.id + '.',
-    '',
-    'Task title:',
-    task.title || task.id,
-    '',
-    'Task details:',
-    task.content || '(empty)',
-    '',
-    'Repository instructions:',
-    '- Implement this task now and keep changes scoped to it.',
-    '- Inspect the repository and follow its AGENTS.md and existing project patterns.',
-    '- Verify the implementation with the most relevant available checks.',
-    '- Do not create a commit unless explicitly requested.',
-    '- If the task is ambiguous or blocked, stop and ask concise questions.',
-    '- When finished, summarize changed files, verification, and important decisions.'
-  ].join('\n');
+  var taskPath = task.path || '.gmc/tasks/' + task.id + '.md';
+  return 'Start development work on repository task ' + task.id + '. ' +
+    'Read ' + taskPath + ' as the complete task specification, then implement it. ' +
+    'Follow the repository instructions and existing patterns, verify the result, ' +
+    'do not commit unless explicitly requested, and summarize the completed work.';
 }
 
 function commitMessagePrompt(binding, diff, status, options) {

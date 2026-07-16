@@ -44,7 +44,7 @@ function interactiveInvocation(selectedAgent, cwd, prompt) {
     return { command: 'agy', args: args };
   }
   if (selectedAgent === 'opencode') {
-    if (prompt) args.push(prompt);
+    if (prompt) args = ['--prompt', prompt];
     return { command: 'opencode', args: args };
   }
 
