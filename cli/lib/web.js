@@ -799,7 +799,9 @@ function handleCreateTask(req, res, targetRepo) {
 function handleUpdateTask(req, res, targetRepo) {
   if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
   readJsonBody(req).then(function (body) {
-    sendJson(res, updateRepositoryTask(targetRepo, body));
+    sendJson(res, updateRepositoryTask(targetRepo, body, {
+      allowAgentLaunch: isLoopbackRequest(req)
+    }));
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -1136,8 +1138,8 @@ function openTerminalAppAtPath(repoRoot, command) {
   };
 }
 
-function openAgentAtRepository(root, agent) {
-  console.log('openAgentAtRepository called: root=%s agent=%s', root, agent);
+function openAgentAtRepository(root, selectedAgent, prompt) {
+  console.log('openAgentAtRepository called: root=%s agent=%s', root, selectedAgent);
   var repoRoot = git.repoRoot(root);
   console.log('repoRoot resolved: %s', repoRoot);
   if (process.platform !== 'darwin') {
@@ -1147,23 +1149,16 @@ function openAgentAtRepository(root, agent) {
     throwHttpError('Repository path does not exist: ' + repoRoot);
   }
 
-  var command = 'cd ' + shellQuote(repoRoot);
-  switch (agent) {
-    case 'opencode':
-      command += ' && opencode';
-      break;
-    case 'claude':
-      command += ' && claude';
-      break;
-    case 'codex':
-      command += ' && codex';
-      break;
-    case 'antigravity':
-      command += ' && agy';
-      break;
-    default:
-      throwHttpError('Unsupported agent: ' + agent);
+  var invocation;
+  try {
+    invocation = agent.interactiveInvocation(selectedAgent, repoRoot, prompt);
+  } catch (error) {
+    throwHttpError(error.message);
   }
+  var command = 'cd ' + shellQuote(repoRoot) + ' && ' + shellQuote(invocation.command);
+  invocation.args.forEach(function (arg) {
+    command += ' ' + shellQuote(arg);
+  });
 
   if (hasMacApplication('iTerm')) {
     try {
@@ -1591,9 +1586,10 @@ function createRepositoryTask(root, input) {
   };
 }
 
-function updateRepositoryTask(root, input) {
+function updateRepositoryTask(root, input, options) {
   var repoRoot = git.repoRoot(root);
   input = input || {};
+  options = options || {};
   var id = normalizeTaskId(input.id);
   if (!id) throwHttpError('Task id is required');
   var filePath = path.join(repositoryTasksDir(repoRoot), id + '.md');
@@ -1603,6 +1599,7 @@ function updateRepositoryTask(root, input) {
 
   var task = readRepositoryTaskFile(repoRoot, filePath);
   if (!task) throwHttpError('Task not found: ' + id);
+  var previousStatus = task.status;
   if (Object.prototype.hasOwnProperty.call(input, 'title')) {
     var title = String(input.title || '').trim();
     if (!title) throwHttpError('Task title is required');
@@ -1617,11 +1614,25 @@ function updateRepositoryTask(root, input) {
   if (Object.prototype.hasOwnProperty.call(input, 'status')) {
     task.status = normalizeTaskStatus(input.status);
   }
+  var shouldLaunchAgent = previousStatus === 'todo' && task.status === 'doing';
+  var agentLaunch = null;
+  if (shouldLaunchAgent) {
+    if (!options.allowAgentLaunch) {
+      var localOnlyError = new Error('Starting an Agent is only available from 127.0.0.1.');
+      localOnlyError.httpStatus = 403;
+      throw localOnlyError;
+    }
+    var selectedAgent = config.currentAgent();
+    agentLaunch = openAgentAtRepository(repoRoot, selectedAgent, prompts.taskPrompt(task));
+    agentLaunch.agent = selectedAgent;
+    agentLaunch.taskId = task.id;
+  }
   task.updated = new Date().toISOString();
   writeRepositoryTask(repoRoot, task);
   return {
     task: task,
-    tasks: readRepositoryTasks(repoRoot).tasks
+    tasks: readRepositoryTasks(repoRoot).tasks,
+    agentLaunch: agentLaunch
   };
 }
 
@@ -3968,7 +3979,7 @@ var I18N = {
     gitView: 'Git',
     taskView: 'Task',
     taskBoardTitle: '仓库任务看板',
-    taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。这里先保持轻量，只管理标题、内容和状态。',
+    taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。把待办任务移到进行中时，当前选定的 Agent 会自动开始开发。',
     tasksCount: '个任务',
     taskStorage: '存储',
     refreshTasks: '刷新',
@@ -4153,7 +4164,7 @@ var I18N = {
     gitView: 'Git',
     taskView: 'Tasks',
     taskBoardTitle: 'Repository Task Board',
-    taskBoardIntro: 'Tasks are stored in .gmc/tasks inside this repository and travel with the code. This first version stays lightweight: title, content, and status.',
+    taskBoardIntro: 'Tasks are stored in .gmc/tasks inside this repository and travel with the code. Moving a todo task to Doing automatically starts development with the selected Agent.',
     tasksCount: 'tasks',
     taskStorage: 'Storage',
     refreshTasks: 'Refresh',
@@ -4334,7 +4345,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   restoredSuffix: ' 件。',
   taskView: 'タスク',
   taskBoardTitle: 'リポジトリタスクボード',
-  taskBoardIntro: 'タスクはこのリポジトリの .gmc/tasks に保存され、コードと一緒にコミットおよび pull されます。まずは軽量に、タイトル、内容、状態だけを管理します。',
+  taskBoardIntro: 'タスクはこのリポジトリの .gmc/tasks に保存され、コードと一緒にコミットおよび pull されます。未着手のタスクを進行中に移すと、選択中の Agent が自動的に開発を開始します。',
   tasksCount: '件のタスク',
   taskStorage: '保存先',
   refreshTasks: '更新',
@@ -4506,7 +4517,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   restoredSuffix: '개.',
   taskView: '작업',
   taskBoardTitle: '저장소 작업 보드',
-  taskBoardIntro: '작업은 이 저장소의 .gmc/tasks에 저장되며 코드와 함께 커밋 및 pull됩니다. 이 첫 버전은 제목, 내용, 상태만 가볍게 관리합니다.',
+  taskBoardIntro: '작업은 이 저장소의 .gmc/tasks에 저장되며 코드와 함께 커밋 및 pull됩니다. 할 일 작업을 진행 중으로 옮기면 선택한 Agent가 자동으로 개발을 시작합니다.',
   tasksCount: '개 작업',
   taskStorage: '저장 위치',
   refreshTasks: '새로고침',
@@ -4678,7 +4689,7 @@ I18N.es = Object.assign({}, I18N.en, {
   restoredSuffix: ' archivo(s).',
   taskView: 'Tareas',
   taskBoardTitle: 'Tablero de tareas del repositorio',
-  taskBoardIntro: 'Las tareas se guardan en .gmc/tasks dentro de este repositorio y viajan con el código. Esta primera versión es ligera: título, contenido y estado.',
+  taskBoardIntro: 'Las tareas se guardan en .gmc/tasks dentro de este repositorio y viajan con el código. Al mover una tarea pendiente a En curso, el Agent seleccionado inicia el desarrollo automáticamente.',
   tasksCount: 'tareas',
   taskStorage: 'Almacenamiento',
   refreshTasks: 'Actualizar',
@@ -4850,7 +4861,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   restoredSuffix: ' fichier(s).',
   taskView: 'Tâches',
   taskBoardTitle: 'Tableau des tâches du dépôt',
-  taskBoardIntro: 'Les tâches sont stockées dans .gmc/tasks dans ce dépôt et voyagent avec le code. Cette première version reste légère : titre, contenu et statut.',
+  taskBoardIntro: 'Les tâches sont stockées dans .gmc/tasks dans ce dépôt et voyagent avec le code. Déplacer une tâche À faire vers En cours lance automatiquement le développement avec l’Agent sélectionné.',
   tasksCount: 'tâches',
   taskStorage: 'Stockage',
   refreshTasks: 'Actualiser',

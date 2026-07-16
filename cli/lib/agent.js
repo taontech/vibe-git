@@ -26,6 +26,31 @@ function spawnInherited(command, args, cwd) {
   }
 }
 
+function interactiveInvocation(selectedAgent, cwd, prompt) {
+  var args = [];
+  selectedAgent = selectedAgent || 'codex';
+
+  if (selectedAgent === 'codex') {
+    args = ['--cd', cwd];
+    if (prompt) args.push(prompt);
+    return { command: 'codex', args: args };
+  }
+  if (selectedAgent === 'claude') {
+    if (prompt) args.push(prompt);
+    return { command: 'claude', args: args };
+  }
+  if (selectedAgent === 'antigravity') {
+    if (prompt) args = ['--prompt-interactive', prompt];
+    return { command: 'agy', args: args };
+  }
+  if (selectedAgent === 'opencode') {
+    if (prompt) args.push(prompt);
+    return { command: 'opencode', args: args };
+  }
+
+  throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex, claude, antigravity or opencode.');
+}
+
 function launchAgent(options) {
   var agent = options.agent || 'codex';
   var cwd = options.cwd || process.cwd();
@@ -50,7 +75,8 @@ function launchAgent(options) {
         throw new Error('codex exited with status ' + result.status);
       }
     } else {
-      spawnInherited('codex', ['--cd', cwd, prompt], cwd);
+      var codexInvocation = interactiveInvocation(agent, cwd, prompt);
+      spawnInherited(codexInvocation.command, codexInvocation.args, cwd);
     }
     return;
   }
@@ -59,19 +85,21 @@ function launchAgent(options) {
     if (options.execMode) {
       spawnInherited('claude', ['-p', prompt], cwd);
     } else {
-      spawnInherited('claude', [prompt], cwd);
+      var claudeInvocation = interactiveInvocation(agent, cwd, prompt);
+      spawnInherited(claudeInvocation.command, claudeInvocation.args, cwd);
     }
     return;
   }
 
   if (agent === 'antigravity') {
-    // agy supports --prompt-interactive (or -i) to start a coding session
-    spawnInherited('agy', ['--prompt-interactive', prompt], cwd);
+    var antigravityInvocation = interactiveInvocation(agent, cwd, prompt);
+    spawnInherited(antigravityInvocation.command, antigravityInvocation.args, cwd);
     return;
   }
 
   if (agent === 'opencode') {
-    spawnInherited('opencode', [prompt], cwd);
+    var opencodeInvocation = interactiveInvocation(agent, cwd, prompt);
+    spawnInherited(opencodeInvocation.command, opencodeInvocation.args, cwd);
     return;
   }
 
@@ -277,6 +305,7 @@ function cleanAgentOutput(message) {
 
 module.exports = {
   launchAgent: launchAgent,
+  interactiveInvocation: interactiveInvocation,
   generateText: generateText,
   generateCommitMessage: generateCommitMessage,
   codexTimeoutMs: codexTimeoutMs

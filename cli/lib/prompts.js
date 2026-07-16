@@ -53,6 +53,26 @@ function issuePrompt(issue) {
   ].join('\n');
 }
 
+function taskPrompt(task) {
+  return [
+    'Start development work on repository task ' + task.id + '.',
+    '',
+    'Task title:',
+    task.title || task.id,
+    '',
+    'Task details:',
+    task.content || '(empty)',
+    '',
+    'Repository instructions:',
+    '- Implement this task now and keep changes scoped to it.',
+    '- Inspect the repository and follow its AGENTS.md and existing project patterns.',
+    '- Verify the implementation with the most relevant available checks.',
+    '- Do not create a commit unless explicitly requested.',
+    '- If the task is ambiguous or blocked, stop and ask concise questions.',
+    '- When finished, summarize changed files, verification, and important decisions.'
+  ].join('\n');
+}
+
 function commitMessagePrompt(binding, diff, status, options) {
   options = options || {};
   var changeDescription = options.changeDescription || 'staged changes';
@@ -200,6 +220,7 @@ function mergeConflictPrompt(options) {
 
 module.exports = {
   issuePrompt: issuePrompt,
+  taskPrompt: taskPrompt,
   commitMessagePrompt: commitMessagePrompt,
   commitMessagePlanPrompt: commitMessagePlanPrompt,
   mergeConflictPrompt: mergeConflictPrompt,
