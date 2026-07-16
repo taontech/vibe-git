@@ -3505,10 +3505,10 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
       <h2 data-i18n="recentRepos">Recent Repos</h2>
       <div style="display:flex;gap:6px;align-items:center;">
         <button id="addRepoBtn" class="sidebar-toggle" title="Add Repository" style="display:none;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path><path d="M8 13h8"></path><path d="m13 10 3 3-3 3"></path></svg>
         </button>
         <button id="createRepoBtn" class="sidebar-toggle" title="Create Empty Repository" style="display:none;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="6" r="2"></circle><circle cx="5" cy="18" r="2"></circle><circle cx="12" cy="12" r="2"></circle><path d="M5 8v8"></path><path d="M7 6h1a4 4 0 0 1 4 4"></path><path d="M18 3v6"></path><path d="M15 6h6"></path></svg>
         </button>
         <button id="sidebarClose" class="sidebar-toggle" title="Close Sidebar" data-i18n-title="closeSidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
