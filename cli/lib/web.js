@@ -198,6 +198,14 @@ function handleRequest(req, res) {
         handleCommitSelected(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/stage-selected') {
+        handleStageSelected(req, res, parsed.query.repo);
+        return;
+      }
+      if (parsed.pathname === '/api/unstage-selected') {
+        handleUnstageSelected(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/ignore-selected') {
         handleIgnoreSelected(req, res, parsed.query.repo);
         return;
@@ -454,6 +462,28 @@ function handleCommitSelected(req, res, targetRepo) {
 
   readJsonBody(req).then(function (body) {
     var result = commitSelectedFiles(targetRepo, body.files, body.language);
+    invalidateStatusCache(targetRepo);
+    sendJson(res, result);
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleStageSelected(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    var result = stageSelectedFiles(targetRepo, body.files);
+    invalidateStatusCache(targetRepo);
+    sendJson(res, result);
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleUnstageSelected(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    var result = unstageSelectedFiles(targetRepo, body.files);
     invalidateStatusCache(targetRepo);
     sendJson(res, result);
   }).catch(function (error) {
@@ -2532,17 +2562,16 @@ function commitDetails(root, oid) {
 function commitSelectedFiles(root, selectedFiles, language) {
   var repoRoot = git.repoRoot(root);
   if (!Array.isArray(selectedFiles) || !selectedFiles.length) {
-    throwHttpError('Select at least one changed file to commit.');
+    throwHttpError('Select at least one staged file to commit.');
   }
 
   var changedFiles = parseStatusOutput(runGitOptional(repoRoot, ['status', '--porcelain=v1', '-b', '-z'])).files;
   var allowed = {};
   changedFiles.forEach(function (file) {
-    allowed[file.path] = file;
+    if (file.index !== ' ' && file.index !== '?') allowed[file.path] = file;
   });
 
   var files = [];
-  var gitPaths = [];
   selectedFiles.forEach(function (filePath) {
     var cleanPath = String(filePath || '').trim();
     if (!cleanPath || path.isAbsolute(cleanPath) || cleanPath.indexOf('\0') >= 0 || !allowed[cleanPath]) {
@@ -2550,93 +2579,99 @@ function commitSelectedFiles(root, selectedFiles, language) {
     }
     if (files.indexOf(cleanPath) < 0) {
       files.push(cleanPath);
-      if (allowed[cleanPath].originalPath && gitPaths.indexOf(allowed[cleanPath].originalPath) < 0) {
-        gitPaths.push(allowed[cleanPath].originalPath);
-      }
-      if (gitPaths.indexOf(cleanPath) < 0) {
-        gitPaths.push(cleanPath);
-      }
     }
   });
 
-  git.runGit(['add', '-A', '--'].concat(gitPaths), { cwd: repoRoot });
-  var stagedCheck = git.runGit(['diff', '--cached', '--quiet', '--'].concat(gitPaths), {
-    cwd: repoRoot,
-    allowFailure: true
+  var selected = {};
+  files.forEach(function (filePath) { selected[filePath] = true; });
+  var unselectedPaths = [];
+  changedFiles.forEach(function (file) {
+    if (file.index !== ' ' && file.index !== '?' && !selected[file.path]) {
+      appendStatusGitPaths(unselectedPaths, file);
+    }
   });
-  if (stagedCheck.status === 0) {
-    throwHttpError('Selected files have no staged changes.');
-  }
 
   var mergeConflictModule = require('./merge-conflict');
   var isMergeInProgress = mergeConflictModule.inMerge(repoRoot);
+  if (isMergeInProgress && unselectedPaths.length) {
+    throwHttpError('All staged files must be selected to complete a merge commit.');
+  }
 
   var installed = checkInstallStatus(repoRoot);
   var result;
   var taskUpdates = [];
+  var savedIndexTree = null;
 
-  // During a merge, partial commit (-- <files>) is forbidden.
-  // Use a full git commit --no-edit to complete the merge.
-  if (isMergeInProgress) {
-    result = childProcess.spawnSync('git', ['commit', '--no-edit'], {
-      cwd: repoRoot,
-      encoding: 'utf8'
-    });
-  } else if (installed.hooks) {
-    // Hooks installed: git commit -m gmc triggers the commit-msg hook which generates AI message
-    writeCommitLanguage(repoRoot, language);
-    result = childProcess.spawnSync('git', ['commit', '-m', 'gmc', '--'].concat(gitPaths), {
-      cwd: repoRoot,
-      encoding: 'utf8'
-    });
-  } else {
-    // No hooks: generate AI commit message directly
-    var binding = safeBinding(repoRoot);
-    var diff = git.stagedDiff(repoRoot);
-    if (diff.length > DIFF_LIMIT) {
-      diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
-    }
-    var tasks = taskStatus.readUnfinishedTasksForPrompt(repoRoot);
-    var promptOptions = language && language !== 'en' ? { language: language } : undefined;
-    var prompt = tasks.length ? prompts.commitMessagePlanPrompt(
-      binding,
-      diff,
-      git.statusShort(repoRoot),
-      tasks,
-      promptOptions
-    ) : prompts.commitMessagePrompt(
-      binding,
-      diff,
-      git.statusShort(repoRoot),
-      promptOptions
-    );
-    var aiMessage;
-    try {
-      var selectedAgent = config.currentCommitAgent();
-      var generated = agent.generateText(prompt, repoRoot, selectedAgent, {
-        outputPrefix: tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
-        description: tasks.length ? 'commit plan generation' : 'commit message generation'
+  if (unselectedPaths.length) {
+    savedIndexTree = writeIndexTree(repoRoot);
+  }
+
+  try {
+    if (unselectedPaths.length) resetIndexPaths(repoRoot, unselectedPaths);
+    // During a merge, partial commit is forbidden. Complete the merge as a whole.
+    if (isMergeInProgress) {
+      result = childProcess.spawnSync('git', ['commit', '--no-edit'], {
+        cwd: repoRoot,
+        encoding: 'utf8'
       });
-      if (tasks.length) {
-        var plan = taskStatus.parseCommitPlan(generated);
-        generated = plan.message;
-        taskUpdates = plan.taskUpdates;
+    } else if (installed.hooks) {
+      // Hooks installed: git commit -m gmc triggers the commit-msg hook which generates AI message.
+      writeCommitLanguage(repoRoot, language);
+      result = childProcess.spawnSync('git', ['commit', '-m', 'gmc'], {
+        cwd: repoRoot,
+        encoding: 'utf8'
+      });
+    } else {
+      // No hooks: generate AI commit message directly from the selected staged changes.
+      var binding = safeBinding(repoRoot);
+      var diff = git.stagedDiff(repoRoot);
+      if (diff.length > DIFF_LIMIT) {
+        diff = diff.slice(0, DIFF_LIMIT) + '\n\n[Diff truncated by gmc]\n';
       }
-      aiMessage = prompts.appendCreatedBy(
-        generated,
-        selectedAgent
+      var tasks = taskStatus.readUnfinishedTasksForPrompt(repoRoot);
+      var promptOptions = language && language !== 'en' ? { language: language } : undefined;
+      var prompt = tasks.length ? prompts.commitMessagePlanPrompt(
+        binding,
+        diff,
+        git.statusShort(repoRoot),
+        tasks,
+        promptOptions
+      ) : prompts.commitMessagePrompt(
+        binding,
+        diff,
+        git.statusShort(repoRoot),
+        promptOptions
       );
-      aiMessage = commitMessage.prepare(aiMessage, binding);
-    } catch (aiError) {
-      var err = new Error('AI commit message generation failed: ' + aiError.message);
-      err.httpStatus = 500;
-      throw err;
+      var aiMessage;
+      try {
+        var selectedAgent = config.currentCommitAgent();
+        var generated = agent.generateText(prompt, repoRoot, selectedAgent, {
+          outputPrefix: tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
+          description: tasks.length ? 'commit plan generation' : 'commit message generation'
+        });
+        if (tasks.length) {
+          var plan = taskStatus.parseCommitPlan(generated);
+          generated = plan.message;
+          taskUpdates = plan.taskUpdates;
+        }
+        aiMessage = prompts.appendCreatedBy(
+          generated,
+          selectedAgent
+        );
+        aiMessage = commitMessage.prepare(aiMessage, binding);
+      } catch (aiError) {
+        var err = new Error('AI commit message generation failed: ' + aiError.message);
+        err.httpStatus = 500;
+        throw err;
+      }
+      var messageFile = git.writeGitFile(repoRoot, 'GMC_WEB_COMMIT_EDITMSG', aiMessage);
+      result = childProcess.spawnSync('git', ['commit', '-F', messageFile], {
+        cwd: repoRoot,
+        encoding: 'utf8'
+      });
     }
-    var messageFile = git.writeGitFile(repoRoot, 'GMC_WEB_COMMIT_EDITMSG', aiMessage);
-    result = childProcess.spawnSync('git', ['commit', '-F', messageFile, '--'].concat(gitPaths), {
-      cwd: repoRoot,
-      encoding: 'utf8'
-    });
+  } finally {
+    if (savedIndexTree) restoreIndexTree(repoRoot, savedIndexTree);
   }
 
   if (result.error) {
@@ -2657,6 +2692,85 @@ function commitSelectedFiles(root, selectedFiles, language) {
     taskUpdates: appliedTaskUpdates.updates,
     tasks: safeTasks(repoRoot)
   };
+}
+
+function stageSelectedFiles(root, selectedFiles) {
+  var repoRoot = git.repoRoot(root);
+  var selection = validateStatusSelection(repoRoot, selectedFiles, function (file) {
+    return file.worktree !== ' ';
+  }, 'modified file to stage');
+  var result = childProcess.spawnSync('git', ['add', '-A', '--'].concat(selection.gitPaths), {
+    cwd: repoRoot,
+    encoding: 'utf8'
+  });
+  if (result.error || result.status !== 0) {
+    throwHttpError('Failed to stage files: ' + ((result.stderr || result.stdout || '').trim()));
+  }
+  return { status: 'ok', staged: selection.files };
+}
+
+function unstageSelectedFiles(root, selectedFiles) {
+  var repoRoot = git.repoRoot(root);
+  var selection = validateStatusSelection(repoRoot, selectedFiles, function (file) {
+    return file.index !== ' ' && file.index !== '?';
+  }, 'staged file to unstage');
+  resetIndexPaths(repoRoot, selection.gitPaths);
+  return { status: 'ok', unstaged: selection.files };
+}
+
+function validateStatusSelection(repoRoot, selectedFiles, predicate, description) {
+  if (!Array.isArray(selectedFiles) || !selectedFiles.length) {
+    throwHttpError('Select at least one ' + description + '.');
+  }
+  var changedFiles = parseStatusOutput(runGitOptional(repoRoot, ['status', '--porcelain=v1', '-b', '-z'])).files;
+  var allowed = {};
+  changedFiles.forEach(function (file) {
+    if (predicate(file)) allowed[file.path] = file;
+  });
+  var files = [];
+  var gitPaths = [];
+  selectedFiles.forEach(function (filePath) {
+    var cleanPath = String(filePath || '').trim();
+    if (!cleanPath || path.isAbsolute(cleanPath) || cleanPath.indexOf('\0') >= 0 || !allowed[cleanPath]) {
+      throwHttpError('Invalid file selection: ' + cleanPath);
+    }
+    if (files.indexOf(cleanPath) < 0) {
+      files.push(cleanPath);
+      appendStatusGitPaths(gitPaths, allowed[cleanPath]);
+    }
+  });
+  return { files: files, gitPaths: gitPaths };
+}
+
+function appendStatusGitPaths(gitPaths, file) {
+  if (file.originalPath && gitPaths.indexOf(file.originalPath) < 0) gitPaths.push(file.originalPath);
+  if (gitPaths.indexOf(file.path) < 0) gitPaths.push(file.path);
+}
+
+function resetIndexPaths(repoRoot, gitPaths) {
+  var hasHead = !!runGitOptional(repoRoot, ['rev-parse', '--verify', 'HEAD']);
+  var args = hasHead
+    ? ['restore', '--staged', '--'].concat(gitPaths)
+    : ['rm', '--cached', '-r', '-f', '--ignore-unmatch', '--'].concat(gitPaths);
+  var result = childProcess.spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    throwHttpError('Failed to unstage files: ' + ((result.stderr || result.stdout || '').trim()));
+  }
+}
+
+function writeIndexTree(repoRoot) {
+  var result = childProcess.spawnSync('git', ['write-tree'], { cwd: repoRoot, encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    throwHttpError('Failed to prepare selected staged files: ' + ((result.stderr || result.stdout || '').trim()));
+  }
+  return String(result.stdout || '').trim();
+}
+
+function restoreIndexTree(repoRoot, tree) {
+  var result = childProcess.spawnSync('git', ['read-tree', tree], { cwd: repoRoot, encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    throwHttpError('Failed to restore the staged files: ' + ((result.stderr || result.stdout || '').trim()));
+  }
 }
 
 function writeCommitLanguage(root, language) {
@@ -2729,29 +2843,21 @@ function ignoreSelectedFiles(root, selectedFiles) {
 
 function restoreSelectedFiles(root, selectedFiles) {
   var repoRoot = git.repoRoot(root);
-  if (!Array.isArray(selectedFiles) || !selectedFiles.length) {
-    throwHttpError('Select at least one file to restore.');
-  }
-
-  var changedFiles = parseStatusOutput(runGitOptional(repoRoot, ['status', '--porcelain=v1', '-b', '-z'])).files;
-  var allowed = {};
-  changedFiles.forEach(function (file) { allowed[file.path] = file; });
-
+  var selection = validateStatusSelection(repoRoot, selectedFiles, function (file) {
+    return file.worktree !== ' ';
+  }, 'modified file to restore');
   var tracked = [];
   var untracked = [];
-
-  selectedFiles.forEach(function (filePath) {
-    var cleanPath = String(filePath || '').trim();
-    var file = allowed[cleanPath];
-    if (!cleanPath || path.isAbsolute(cleanPath) || cleanPath.indexOf('\0') >= 0 || !file) {
-      throwHttpError('Invalid or unchanged file selection: ' + cleanPath);
-    }
-    if (file.code === '??') untracked.push(cleanPath);
-    else tracked.push(cleanPath);
+  var changedFiles = parseStatusOutput(runGitOptional(repoRoot, ['status', '--porcelain=v1', '-b', '-z'])).files;
+  var byPath = {};
+  changedFiles.forEach(function (file) { byPath[file.path] = file; });
+  selection.files.forEach(function (filePath) {
+    if (byPath[filePath].code === '??') untracked.push(filePath);
+    else appendStatusGitPaths(tracked, byPath[filePath]);
   });
 
   if (tracked.length) {
-    var restoreRes = childProcess.spawnSync('git', ['restore', '--staged', '--worktree', '--'].concat(tracked), { cwd: repoRoot, encoding: 'utf8' });
+    var restoreRes = childProcess.spawnSync('git', ['restore', '--worktree', '--'].concat(tracked), { cwd: repoRoot, encoding: 'utf8' });
     if (restoreRes.error || restoreRes.status !== 0) {
       throwHttpError('Failed to restore files: ' + ((restoreRes.stderr || restoreRes.stdout || '').trim()));
     }
@@ -2764,7 +2870,7 @@ function restoreSelectedFiles(root, selectedFiles) {
     }
   }
 
-  return { status: 'ok', restored: tracked.concat(untracked) };
+  return { status: 'ok', restored: selection.files };
 }
 
 function gitignorePatternForPath(filePath) {
@@ -3266,6 +3372,9 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .ai-status-loader circle { opacity: .22; }
 .ai-status-sparkles { position: absolute; right: -1px; top: -3px; width: 11px; height: 11px; color: #0f9f6e; animation: aiPulse 1.35s ease-in-out infinite; filter: drop-shadow(0 1px 2px rgba(15, 159, 110, .18)); }
 .side { display: grid; gap: 16px; }
+.file-section { display: grid; gap: 8px; }
+.file-section + .file-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.file-section-title { margin: 0; color: var(--text); font-size: 13px; font-weight: 750; }
 .file-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .file-toolbar label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .file-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
@@ -3948,7 +4057,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -4042,9 +4151,23 @@ var I18N = {
     terminalLocalOnly: '仅从 127.0.0.1 访问时可以打开终端。',
     openTerminalFailed: '打开终端失败：',
     cleanWorkingTree: '工作区干净。',
+    modifiedFiles: '已修改',
+    stagedFiles: '暂存区',
+    noModifiedFiles: '没有未暂存的修改。',
+    noStagedFiles: '暂存区为空。',
     all: '全部',
     restore: '还原',
     ignore: '忽略',
+    stage: '暂存',
+    staging: '暂存中...',
+    unstage: '移除暂存',
+    unstaging: '移除中...',
+    stagingSelected: '正在暂存选中的文件...',
+    unstagingSelected: '正在移除选中文件的暂存状态...',
+    stagedPrefix: '已暂存 ',
+    stagedSuffix: ' 个文件。',
+    unstagedPrefix: '已移除 ',
+    unstagedSuffix: ' 个文件的暂存状态。',
     selected: '已选择',
     committing: '提交中...',
     ignoring: '忽略中...',
@@ -4231,9 +4354,23 @@ var I18N = {
     terminalLocalOnly: 'Terminal opening is available only from 127.0.0.1.',
     openTerminalFailed: 'Open in Terminal failed: ',
     cleanWorkingTree: 'Clean working tree.',
+    modifiedFiles: 'Modified',
+    stagedFiles: 'Staged',
+    noModifiedFiles: 'No unstaged changes.',
+    noStagedFiles: 'No staged changes.',
     all: 'All',
     restore: 'Restore',
     ignore: 'Ignore',
+    stage: 'Stage',
+    staging: 'Staging...',
+    unstage: 'Unstage',
+    unstaging: 'Unstaging...',
+    stagingSelected: 'Staging selected files...',
+    unstagingSelected: 'Unstaging selected files...',
+    stagedPrefix: 'Staged ',
+    stagedSuffix: ' file(s).',
+    unstagedPrefix: 'Unstaged ',
+    unstagedSuffix: ' file(s).',
     selected: 'selected',
     committing: 'Committing...',
     ignoring: 'Ignoring...',
@@ -4417,9 +4554,23 @@ I18N.ja = Object.assign({}, I18N.en, {
   terminalLocalOnly: 'ターミナルを開く操作は 127.0.0.1 からのアクセス時のみ利用できます。',
   openTerminalFailed: 'ターミナルを開けませんでした: ',
   cleanWorkingTree: '作業ツリーはクリーンです。',
+  modifiedFiles: '変更済み',
+  stagedFiles: 'ステージ済み',
+  noModifiedFiles: '未ステージの変更はありません。',
+  noStagedFiles: 'ステージ済みの変更はありません。',
   all: 'すべて',
   restore: '復元',
   ignore: '無視',
+  stage: 'ステージ',
+  staging: 'ステージ中...',
+  unstage: 'ステージ解除',
+  unstaging: '解除中...',
+  stagingSelected: '選択したファイルをステージしています...',
+  unstagingSelected: '選択したファイルのステージを解除しています...',
+  stagedPrefix: '',
+  stagedSuffix: ' 件をステージしました。',
+  unstagedPrefix: '',
+  unstagedSuffix: ' 件のステージを解除しました。',
   selected: '選択済み',
   committing: 'コミット中...',
   ignoring: '無視中...',
@@ -4593,9 +4744,23 @@ I18N.ko = Object.assign({}, I18N.en, {
   terminalLocalOnly: '터미널 열기는 127.0.0.1에서 접속한 경우에만 사용할 수 있습니다.',
   openTerminalFailed: '터미널 열기 실패: ',
   cleanWorkingTree: '작업 트리가 깨끗합니다.',
+  modifiedFiles: '수정됨',
+  stagedFiles: '스테이지됨',
+  noModifiedFiles: '스테이지되지 않은 변경 사항이 없습니다.',
+  noStagedFiles: '스테이지된 변경 사항이 없습니다.',
   all: '전체',
   restore: '복원',
   ignore: '무시',
+  stage: '스테이지',
+  staging: '스테이지 중...',
+  unstage: '스테이지 해제',
+  unstaging: '해제 중...',
+  stagingSelected: '선택한 파일을 스테이지하는 중...',
+  unstagingSelected: '선택한 파일의 스테이지를 해제하는 중...',
+  stagedPrefix: '',
+  stagedSuffix: '개 파일을 스테이지했습니다.',
+  unstagedPrefix: '',
+  unstagedSuffix: '개 파일의 스테이지를 해제했습니다.',
   selected: '선택됨',
   committing: '커밋 중...',
   ignoring: '무시 중...',
@@ -4769,9 +4934,23 @@ I18N.es = Object.assign({}, I18N.en, {
   terminalLocalOnly: 'Abrir Terminal solo está disponible desde 127.0.0.1.',
   openTerminalFailed: 'Error al abrir Terminal: ',
   cleanWorkingTree: 'Árbol de trabajo limpio.',
+  modifiedFiles: 'Modificados',
+  stagedFiles: 'Preparados',
+  noModifiedFiles: 'No hay cambios sin preparar.',
+  noStagedFiles: 'No hay cambios preparados.',
   all: 'Todo',
   restore: 'Restaurar',
   ignore: 'Ignorar',
+  stage: 'Preparar',
+  staging: 'Preparando...',
+  unstage: 'Quitar de preparados',
+  unstaging: 'Quitando...',
+  stagingSelected: 'Preparando archivos seleccionados...',
+  unstagingSelected: 'Quitando archivos seleccionados de preparados...',
+  stagedPrefix: 'Se prepararon ',
+  stagedSuffix: ' archivo(s).',
+  unstagedPrefix: 'Se quitaron ',
+  unstagedSuffix: ' archivo(s) de preparados.',
   selected: 'seleccionado',
   committing: 'Haciendo commit...',
   ignoring: 'Ignorando...',
@@ -4945,9 +5124,23 @@ I18N.fr = Object.assign({}, I18N.en, {
   terminalLocalOnly: 'L’ouverture du Terminal n’est disponible que depuis 127.0.0.1.',
   openTerminalFailed: 'Échec d’ouverture du Terminal : ',
   cleanWorkingTree: 'Arbre de travail propre.',
+  modifiedFiles: 'Modifiés',
+  stagedFiles: 'Indexés',
+  noModifiedFiles: 'Aucune modification non indexée.',
+  noStagedFiles: 'Aucune modification indexée.',
   all: 'Tout',
   restore: 'Restaurer',
   ignore: 'Ignorer',
+  stage: 'Indexer',
+  staging: 'Indexation...',
+  unstage: 'Désindexer',
+  unstaging: 'Désindexation...',
+  stagingSelected: 'Indexation des fichiers sélectionnés...',
+  unstagingSelected: 'Désindexation des fichiers sélectionnés...',
+  stagedPrefix: '',
+  stagedSuffix: ' fichier(s) indexé(s).',
+  unstagedPrefix: '',
+  unstagedSuffix: ' fichier(s) désindexé(s).',
   selected: 'sélectionné',
   committing: 'Commit en cours...',
   ignoring: 'Ignore en cours...',
@@ -6809,75 +7002,84 @@ function executeAction(url, loadingMsg, button) {
 
 function renderFiles(files) {
   files = files || [];
-  state.files = files || [];
-  var nextSelected = {};
+  state.files = files;
+  var modified = files.filter(function (file) { return file.worktree !== ' '; });
+  var staged = files.filter(function (file) { return file.index !== ' ' && file.index !== '?'; });
+  var nextModified = {};
+  var nextStaged = {};
   files.forEach(function(f) {
-    if (state.selected[f.path]) {
-      nextSelected[f.path] = true;
-    }
+    if (f.worktree !== ' ' && state.selectedModified[f.path]) nextModified[f.path] = true;
+    if (f.index !== ' ' && f.index !== '?' && state.selectedStaged[f.path]) nextStaged[f.path] = true;
   });
-  state.selected = nextSelected;
+  state.selectedModified = nextModified;
+  state.selectedStaged = nextStaged;
 
   if (!files.length) {
-    $('files').innerHTML = '<div class="meta">' + escapeHtml(t('cleanWorkingTree')) + '</div>';
+    $('files').innerHTML = '<div class="meta">' + escapeHtml(t('cleanWorkingTree')) + '</div><div id="commitStatus" class="commit-status"></div>';
     updateCommitControls();
     return;
   }
 
   $('files').innerHTML = [
-    '<div class="file-toolbar">',
-      '<label><input id="selectAllFiles" type="checkbox"> ' + escapeHtml(t('all')) + '</label>',
-      '<div class="file-actions">',
-        '<button id="restoreSelected" class="ignore-button" style="color:var(--amber);border-color:var(--line)" type="button">' + escapeHtml(t('restore')) + '</button>',
-        '<button id="ignoreSelected" class="ignore-button" type="button">' + escapeHtml(t('ignore')) + '</button>',
-        '<button id="commitSelected" class="commit-button" type="button">' + escapeHtml(t('commitSelected')) + '</button>',
-      '</div>',
-    '</div>',
-    '<div class="files-list">',
-      files.map(function(f) {
-        var checked = state.selected[f.path] ? ' checked' : '';
-        var displayPath = f.displayPath || f.path;
-        return '<div class="file-row" title="' + escapeHtml(displayPath) + '">' +
-          '<input class="file-check" type="checkbox" value="' + escapeHtml(f.path) + '"' + checked + '>' +
-          '<span class="code">' + escapeHtml(f.code) + '</span>' +
-          '<button class="file-name file-diff-link" type="button" data-diff-path="' + escapeHtml(f.path) + '">' + escapeHtml(displayPath) + '</button>' +
-        '</div>';
-      }).join(''),
-    '</div>',
+    renderFileSection('modified', modified, state.selectedModified),
+    renderFileSection('staged', staged, state.selectedStaged),
     '<div id="commitStatus" class="commit-status"></div>'
   ].join('');
-  bindFileControls(files);
+  bindFileControls();
 }
 
-function bindFileControls(files) {
-  var all = $('selectAllFiles');
-  var button = $('commitSelected');
-  var ignoreButton = $('ignoreSelected');
-  var boxes = Array.prototype.slice.call(document.querySelectorAll('.file-check'));
+function renderFileSection(kind, files, selection) {
+  var isModified = kind === 'modified';
+  var title = isModified ? t('modifiedFiles') : t('stagedFiles');
+  var empty = isModified ? t('noModifiedFiles') : t('noStagedFiles');
+  var allId = isModified ? 'selectAllModified' : 'selectAllStaged';
+  var checkClass = isModified ? 'modified-file-check' : 'staged-file-check';
+  var actions = isModified
+    ? '<button id="restoreSelected" class="ignore-button" style="color:var(--amber);border-color:var(--line)" type="button">' + escapeHtml(t('restore')) + '</button>' +
+      '<button id="ignoreSelected" class="ignore-button" type="button">' + escapeHtml(t('ignore')) + '</button>' +
+      '<button id="stageSelected" class="commit-button" type="button">' + escapeHtml(t('stage')) + '</button>'
+    : '<button id="unstageSelected" class="ignore-button" type="button">' + escapeHtml(t('unstage')) + '</button>' +
+      '<button id="commitSelected" class="commit-button" type="button">' + escapeHtml(t('commitSelected')) + '</button>';
+  return '<section class="file-section file-section-' + kind + '">' +
+    '<h3 class="file-section-title">' + escapeHtml(title) + ' <span class="meta">(' + files.length + ')</span></h3>' +
+    (files.length ? '<div class="file-toolbar">' +
+      '<label><input id="' + allId + '" type="checkbox"> ' + escapeHtml(t('all')) + '</label>' +
+      '<div class="file-actions">' + actions + '</div>' +
+    '</div><div class="files-list">' + files.map(function(f) {
+      var checked = selection[f.path] ? ' checked' : '';
+      var displayPath = f.displayPath || f.path;
+      return '<div class="file-row" title="' + escapeHtml(displayPath) + '">' +
+        '<input class="file-check ' + checkClass + '" type="checkbox" value="' + escapeHtml(f.path) + '"' + checked + '>' +
+        '<span class="code">' + escapeHtml(f.code) + '</span>' +
+        '<button class="file-name file-diff-link" type="button" data-diff-path="' + escapeHtml(f.path) + '">' + escapeHtml(displayPath) + '</button>' +
+      '</div>';
+    }).join('') + '</div>' : '<div class="meta">' + escapeHtml(empty) + '</div>') +
+  '</section>';
+}
 
-  boxes.forEach(function(box) {
+function bindFileControls() {
+  var modifiedBoxes = Array.prototype.slice.call(document.querySelectorAll('.modified-file-check'));
+  var stagedBoxes = Array.prototype.slice.call(document.querySelectorAll('.staged-file-check'));
+
+  modifiedBoxes.forEach(function(box) {
     box.addEventListener('change', function() {
-      state.selected[box.value] = box.checked;
+      state.selectedModified[box.value] = box.checked;
       updateCommitControls();
     });
   });
-
-  if (all) {
-    all.addEventListener('change', function() {
-      boxes.forEach(function(box) {
-        box.checked = all.checked;
-        state.selected[box.value] = all.checked;
-      });
+  stagedBoxes.forEach(function(box) {
+    box.addEventListener('change', function() {
+      state.selectedStaged[box.value] = box.checked;
       updateCommitControls();
     });
-  }
+  });
+  bindSelectAll('selectAllModified', modifiedBoxes, state.selectedModified);
+  bindSelectAll('selectAllStaged', stagedBoxes, state.selectedStaged);
 
-  if (button) {
-    button.addEventListener('click', commitSelectedFiles);
-  }
-  if (ignoreButton) {
-    ignoreButton.addEventListener('click', ignoreSelectedFiles);
-  }
+  if ($('commitSelected')) $('commitSelected').addEventListener('click', commitSelectedFiles);
+  if ($('ignoreSelected')) $('ignoreSelected').addEventListener('click', ignoreSelectedFiles);
+  if ($('stageSelected')) $('stageSelected').addEventListener('click', stageSelectedFilesAction);
+  if ($('unstageSelected')) $('unstageSelected').addEventListener('click', unstageSelectedFilesAction);
   var restoreButton = $('restoreSelected');
   if (restoreButton) {
     restoreButton.addEventListener('click', restoreSelectedFilesAction);
@@ -6893,31 +7095,64 @@ function bindFileControls(files) {
   updateCommitControls();
 }
 
+function bindSelectAll(id, boxes, selection) {
+  var all = $(id);
+  if (!all) return;
+  all.addEventListener('change', function() {
+    boxes.forEach(function(box) {
+      box.checked = all.checked;
+      selection[box.value] = all.checked;
+    });
+    updateCommitControls();
+  });
+}
+
 function updateCommitControls() {
-  var selected = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
+  var modified = selectedPaths(state.selectedModified);
+  var staged = selectedPaths(state.selectedStaged);
+  var busy = state.committing || state.ignoring || state.restoring || state.staging || state.unstaging;
   if ($('selectedCount')) {
-    $('selectedCount').textContent = selected.length + ' ' + t('selected');
+    $('selectedCount').textContent = (modified.length + staged.length) + ' ' + t('selected');
   }
   var button = $('commitSelected');
   if (button) {
-    button.disabled = state.committing || selected.length === 0;
+    button.disabled = busy || staged.length === 0;
     button.textContent = state.committing ? t('committing') : t('commitSelected');
   }
   var ignoreButton = $('ignoreSelected');
   if (ignoreButton) {
-    ignoreButton.disabled = state.ignoring || state.committing || state.restoring || selected.length === 0;
+    ignoreButton.disabled = busy || modified.length === 0;
     ignoreButton.textContent = state.ignoring ? t('ignoring') : t('ignore');
   }
   var restoreButton = $('restoreSelected');
   if (restoreButton) {
-    restoreButton.disabled = state.ignoring || state.committing || state.restoring || selected.length === 0;
+    restoreButton.disabled = busy || modified.length === 0;
     restoreButton.textContent = state.restoring ? t('restoring') : t('restore');
   }
-  var all = $('selectAllFiles');
-  var boxes = Array.prototype.slice.call(document.querySelectorAll('.file-check'));
+  var stageButton = $('stageSelected');
+  if (stageButton) {
+    stageButton.disabled = busy || modified.length === 0;
+    stageButton.textContent = state.staging ? t('staging') : t('stage');
+  }
+  var unstageButton = $('unstageSelected');
+  if (unstageButton) {
+    unstageButton.disabled = busy || staged.length === 0;
+    unstageButton.textContent = state.unstaging ? t('unstaging') : t('unstage');
+  }
+  updateSelectAll('selectAllModified', '.modified-file-check', modified.length);
+  updateSelectAll('selectAllStaged', '.staged-file-check', staged.length);
+}
+
+function selectedPaths(selection) {
+  return Object.keys(selection).filter(function(filePath) { return selection[filePath]; });
+}
+
+function updateSelectAll(id, selector, selectedCount) {
+  var all = $(id);
+  var boxes = Array.prototype.slice.call(document.querySelectorAll(selector));
   if (all && boxes.length) {
-    all.checked = selected.length === boxes.length;
-    all.indeterminate = selected.length > 0 && selected.length < boxes.length;
+    all.checked = selectedCount === boxes.length;
+    all.indeterminate = selectedCount > 0 && selectedCount < boxes.length;
   }
 }
 
@@ -6929,7 +7164,7 @@ function setCommitStatus(message, isError) {
 }
 
 function commitSelectedFiles() {
-  var files = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
+  var files = selectedPaths(state.selectedStaged);
   if (!files.length || state.committing) return;
 
   if (!state.install.hooks) {
@@ -6979,7 +7214,7 @@ function doCommit(files) {
       });
     })
     .then(function(data) {
-      state.selected = {};
+      state.selectedStaged = {};
       setCommitStatus(firstLine(data.output) || t('committedSelected'), false);
       load({ force: true });
     })
@@ -6993,7 +7228,7 @@ function doCommit(files) {
 }
 
 function ignoreSelectedFiles() {
-  var files = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
+  var files = selectedPaths(state.selectedModified);
   if (!files.length || state.ignoring) return;
   state.ignoring = true;
   setCommitStatus(t('ignoringSelected'), false);
@@ -7013,7 +7248,7 @@ function ignoreSelectedFiles() {
       });
     })
     .then(function(data) {
-      state.selected = {};
+      state.selectedModified = {};
       setCommitStatus((data.added || []).length + t('ignoreRulesAddedSuffix'), false);
       load({ force: true });
     })
@@ -7027,7 +7262,7 @@ function ignoreSelectedFiles() {
 }
 
 function restoreSelectedFilesAction() {
-  var files = Object.keys(state.selected).filter(function(filePath) { return state.selected[filePath]; });
+  var files = selectedPaths(state.selectedModified);
   if (!files.length || state.restoring) return;
   if (!confirm(t('restoreConfirmPrefix') + files.length + t('restoreConfirmSuffix'))) return;
   state.restoring = true;
@@ -7046,7 +7281,7 @@ function restoreSelectedFilesAction() {
       });
     })
     .then(function(data) {
-      state.selected = {};
+      state.selectedModified = {};
       setCommitStatus(t('restoredPrefix') + (data.restored || []).length + t('restoredSuffix'), false);
       load({ force: true });
     })
@@ -7055,6 +7290,50 @@ function restoreSelectedFilesAction() {
     })
     .finally(function() {
       state.restoring = false;
+      updateCommitControls();
+    });
+}
+
+function stageSelectedFilesAction() {
+  runFileSelectionAction('staging', state.selectedModified, '/api/stage-selected', t('stagingSelected'), function(data) {
+    state.selectedModified = {};
+    return t('stagedPrefix') + (data.staged || []).length + t('stagedSuffix');
+  });
+}
+
+function unstageSelectedFilesAction() {
+  runFileSelectionAction('unstaging', state.selectedStaged, '/api/unstage-selected', t('unstagingSelected'), function(data) {
+    state.selectedStaged = {};
+    return t('unstagedPrefix') + (data.unstaged || []).length + t('unstagedSuffix');
+  });
+}
+
+function runFileSelectionAction(flag, selection, endpoint, statusMessage, successMessage) {
+  var files = selectedPaths(selection);
+  if (!files.length || state[flag]) return;
+  state[flag] = true;
+  setCommitStatus(statusMessage, false);
+  updateCommitControls();
+  fetch(endpoint + '?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files: files })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+        return data;
+      });
+    })
+    .then(function(data) {
+      setCommitStatus(successMessage(data), false);
+      load({ force: true });
+    })
+    .catch(function(error) {
+      setCommitStatus(error.message, true);
+    })
+    .finally(function() {
+      state[flag] = false;
       updateCommitControls();
     });
 }
