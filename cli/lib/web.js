@@ -331,12 +331,28 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/agent') {
       var currentAgent = 'codex';
+      var currentCommitAgent = 'codex';
+      var currentTaskAgent = 'codex';
       try {
         currentAgent = config.currentAgent();
       } catch (ignore) {
         // ignore
       }
-      sendJson(res, { agent: currentAgent });
+      try {
+        currentCommitAgent = config.currentCommitAgent();
+      } catch (ignoreCommitAgent) {
+        currentCommitAgent = currentAgent;
+      }
+      try {
+        currentTaskAgent = config.currentTaskAgent();
+      } catch (ignoreTaskAgent) {
+        currentTaskAgent = currentAgent;
+      }
+      sendJson(res, {
+        agent: currentAgent,
+        commitAgent: currentCommitAgent,
+        taskAgent: currentTaskAgent
+      });
       return;
     }
 
@@ -996,12 +1012,22 @@ function handleQrCode(req, res) {
 function handleSetAgent(req, res) {
   readJsonBody(req).then(function (body) {
     var newAgent = String(body.agent || '').trim().toLowerCase();
+    var scope = String(body.scope || '').trim().toLowerCase();
     if (!newAgent) {
       return sendJsonError(res, 400, 'Missing agent parameter.');
     }
     try {
-      var selectedAgent = config.setAgent(newAgent);
-      sendJson(res, { agent: selectedAgent });
+      var selectedAgent;
+      if (scope === 'commit') {
+        selectedAgent = config.setCommitAgent(newAgent);
+      } else if (scope === 'task') {
+        selectedAgent = config.setTaskAgent(newAgent);
+      } else if (!scope) {
+        selectedAgent = config.setAgent(newAgent);
+      } else {
+        return sendJsonError(res, 400, 'Unsupported agent setting scope: ' + scope);
+      }
+      sendJson(res, { agent: selectedAgent, scope: scope || 'default' });
     } catch (error) {
       sendJsonError(res, 400, error.message);
     }
@@ -1690,7 +1716,7 @@ function updateRepositoryTask(root, input, options) {
       localOnlyError.httpStatus = 403;
       throw localOnlyError;
     }
-    var selectedAgent = config.currentAgent();
+    var selectedAgent = config.currentTaskAgent();
     agentLaunch = openAgentAtRepository(repoRoot, selectedAgent, prompts.taskPrompt(task));
     agentLaunch.agent = selectedAgent;
     agentLaunch.taskId = task.id;
@@ -2586,7 +2612,7 @@ function commitSelectedFiles(root, selectedFiles, language) {
     );
     var aiMessage;
     try {
-      var selectedAgent = binding ? binding.agent : config.currentAgent();
+      var selectedAgent = config.currentCommitAgent();
       var generated = agent.generateText(prompt, repoRoot, selectedAgent, {
         outputPrefix: tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
         description: tasks.length ? 'commit plan generation' : 'commit message generation'
@@ -3118,6 +3144,10 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .settings-warning.visible { display: block; }
 .settings-subsection { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
 .settings-subsection h4 { margin: 0 0 6px; font-size: 14px; }
+.agent-selector { margin-top: 16px; }
+.agent-selector + .agent-selector { padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.agent-selector h4 { margin: 0; font-size: 14px; }
+.agent-selector p { margin: 4px 0 10px; font-size: 12px; }
 .radio-group { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
 .radio-label { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; font-size: 13px; color: #334155; transition: border-color .15s, background .15s; }
 .radio-label:hover { border-color: var(--accent); background: #eff6ff; }
@@ -3815,10 +3845,18 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </div>
           <div class="settings-card">
             <h3 data-i18n="agentSettings">Agent 设置</h3>
-            <p data-i18n="agentSettingsHelp">选择用于生成 commit message 的 AI agent。</p>
-            <div class="agent-selector" id="agentSelector">
-              <div id="agentOptions" class="radio-group"></div>
-              <div id="agentStatus" class="meta"></div>
+            <p data-i18n="agentSettingsHelp">分别选择生成 commit message 和执行任务时使用的 AI agent。</p>
+            <div class="agent-selector" id="commitAgentSelector">
+              <h4 data-i18n="commitAgentSetting">Commit agent</h4>
+              <p data-i18n="commitAgentSettingHelp">用于生成 commit message。</p>
+              <div id="commitAgentOptions" class="radio-group"></div>
+              <div id="commitAgentStatus" class="meta"></div>
+            </div>
+            <div class="agent-selector" id="taskAgentSelector">
+              <h4 data-i18n="taskAgentSetting">Task agent</h4>
+              <p data-i18n="taskAgentSettingHelp">用于任务进入进行中状态时启动开发。</p>
+              <div id="taskAgentOptions" class="radio-group"></div>
+              <div id="taskAgentStatus" class="meta"></div>
             </div>
           </div>
         </div>
@@ -3910,7 +3948,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, agent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selected: {}, committing: false, ignoring: false, restoring: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -4050,7 +4088,7 @@ var I18N = {
     gitView: 'Git',
     taskView: 'Task',
     taskBoardTitle: '仓库任务看板',
-    taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。把待办任务移到进行中时，当前选定的 Agent 会自动开始开发。',
+    taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。把待办任务移到进行中时，当前选定的 Task Agent 会自动开始开发。',
     tasksCount: '个任务',
     taskStorage: '存储',
     refreshTasks: '刷新',
@@ -4093,7 +4131,11 @@ var I18N = {
     conflictAcceptFailed: '合并方案写入失败：',
     editSaveAndAccept: '保存并接受',
     agentSettings: 'Agent 设置',
-    agentSettingsHelp: '选择用于生成 commit message 的 AI agent。',
+    agentSettingsHelp: '分别选择生成 commit message 和执行任务时使用的 AI agent。',
+    commitAgentSetting: 'Commit message Agent',
+    commitAgentSettingHelp: '用于生成 commit message。',
+    taskAgentSetting: 'Task Agent',
+    taskAgentSettingHelp: '用于任务进入进行中状态时启动开发。',
     agentSettingSaved: 'Agent 设置已保存',
     agentSettingSaveFailed: 'Agent 设置保存失败：'
   },
@@ -4235,7 +4277,7 @@ var I18N = {
     gitView: 'Git',
     taskView: 'Tasks',
     taskBoardTitle: 'Repository Task Board',
-    taskBoardIntro: 'Tasks are stored in .gmc/tasks inside this repository and travel with the code. Moving a todo task to Doing automatically starts development with the selected Agent.',
+    taskBoardIntro: 'Tasks are stored in .gmc/tasks inside this repository and travel with the code. Moving a todo task to Doing automatically starts development with the selected Task Agent.',
     tasksCount: 'tasks',
     taskStorage: 'Storage',
     refreshTasks: 'Refresh',
@@ -4278,7 +4320,11 @@ var I18N = {
     conflictAcceptFailed: 'Failed to apply resolution: ',
     editSaveAndAccept: 'Save & Accept',
     agentSettings: 'Agent Settings',
-    agentSettingsHelp: 'Select the AI agent used for commit message generation.',
+    agentSettingsHelp: 'Choose separate AI agents for commit message generation and task development.',
+    commitAgentSetting: 'Commit message agent',
+    commitAgentSettingHelp: 'Used to generate commit messages.',
+    taskAgentSetting: 'Task agent',
+    taskAgentSettingHelp: 'Used to start development when a task moves to Doing.',
     agentSettingSaved: 'Agent setting saved',
     agentSettingSaveFailed: 'Failed to save agent setting: '
   }
@@ -4416,7 +4462,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   restoredSuffix: ' 件。',
   taskView: 'タスク',
   taskBoardTitle: 'リポジトリタスクボード',
-  taskBoardIntro: 'タスクはこのリポジトリの .gmc/tasks に保存され、コードと一緒にコミットおよび pull されます。未着手のタスクを進行中に移すと、選択中の Agent が自動的に開発を開始します。',
+  taskBoardIntro: 'タスクはこのリポジトリの .gmc/tasks に保存され、コードと一緒にコミットおよび pull されます。未着手のタスクを進行中に移すと、選択中のタスク Agent が自動的に開発を開始します。',
   tasksCount: '件のタスク',
   taskStorage: '保存先',
   refreshTasks: '更新',
@@ -4451,7 +4497,11 @@ I18N.ja = Object.assign({}, I18N.en, {
   savingTask: '保存中...',
   taskSaveFailed: 'タスクの保存に失敗しました: ',
   agentSettings: 'Agent 設定',
-  agentSettingsHelp: 'コミットメッセージ生成に使用する AI エージェントを選択します。',
+  agentSettingsHelp: 'コミットメッセージ生成とタスク開発に使用する AI エージェントを個別に選択します。',
+  commitAgentSetting: 'コミットメッセージ Agent',
+  commitAgentSettingHelp: 'コミットメッセージの生成に使用します。',
+  taskAgentSetting: 'タスク Agent',
+  taskAgentSettingHelp: 'タスクが進行中になったときに開発を開始するために使用します。',
   agentSettingSaved: 'Agent 設定を保存しました',
   agentSettingSaveFailed: 'Agent 設定の保存に失敗しました: '
 });
@@ -4588,7 +4638,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   restoredSuffix: '개.',
   taskView: '작업',
   taskBoardTitle: '저장소 작업 보드',
-  taskBoardIntro: '작업은 이 저장소의 .gmc/tasks에 저장되며 코드와 함께 커밋 및 pull됩니다. 할 일 작업을 진행 중으로 옮기면 선택한 Agent가 자동으로 개발을 시작합니다.',
+  taskBoardIntro: '작업은 이 저장소의 .gmc/tasks에 저장되며 코드와 함께 커밋 및 pull됩니다. 할 일 작업을 진행 중으로 옮기면 선택한 작업 Agent가 자동으로 개발을 시작합니다.',
   tasksCount: '개 작업',
   taskStorage: '저장 위치',
   refreshTasks: '새로고침',
@@ -4623,7 +4673,11 @@ I18N.ko = Object.assign({}, I18N.en, {
   savingTask: '저장 중...',
   taskSaveFailed: '작업 저장 실패: ',
   agentSettings: 'Agent 설정',
-  agentSettingsHelp: '커밋 메시지 생성에 사용할 AI 에이전트를 선택합니다.',
+  agentSettingsHelp: '커밋 메시지 생성과 작업 개발에 사용할 AI 에이전트를 각각 선택합니다.',
+  commitAgentSetting: '커밋 메시지 Agent',
+  commitAgentSettingHelp: '커밋 메시지를 생성할 때 사용합니다.',
+  taskAgentSetting: '작업 Agent',
+  taskAgentSettingHelp: '작업이 진행 중으로 이동할 때 개발을 시작하는 데 사용합니다.',
   agentSettingSaved: 'Agent 설정이 저장되었습니다',
   agentSettingSaveFailed: 'Agent 설정 저장 실패: '
 });
@@ -4760,7 +4814,7 @@ I18N.es = Object.assign({}, I18N.en, {
   restoredSuffix: ' archivo(s).',
   taskView: 'Tareas',
   taskBoardTitle: 'Tablero de tareas del repositorio',
-  taskBoardIntro: 'Las tareas se guardan en .gmc/tasks dentro de este repositorio y viajan con el código. Al mover una tarea pendiente a En curso, el Agent seleccionado inicia el desarrollo automáticamente.',
+  taskBoardIntro: 'Las tareas se guardan en .gmc/tasks dentro de este repositorio y viajan con el código. Al mover una tarea pendiente a En curso, el agente de tareas seleccionado inicia el desarrollo automáticamente.',
   tasksCount: 'tareas',
   taskStorage: 'Almacenamiento',
   refreshTasks: 'Actualizar',
@@ -4795,7 +4849,11 @@ I18N.es = Object.assign({}, I18N.en, {
   savingTask: 'Guardando...',
   taskSaveFailed: 'Error al guardar tarea: ',
   agentSettings: 'Ajustes del agente',
-  agentSettingsHelp: 'Selecciona el agente de IA para generar los commit messages.',
+  agentSettingsHelp: 'Elige agentes de IA distintos para generar commit messages y desarrollar tareas.',
+  commitAgentSetting: 'Agente de commit messages',
+  commitAgentSettingHelp: 'Se usa para generar commit messages.',
+  taskAgentSetting: 'Agente de tareas',
+  taskAgentSettingHelp: 'Se usa para iniciar el desarrollo cuando una tarea pasa a En curso.',
   agentSettingSaved: 'Ajuste del agente guardado',
   agentSettingSaveFailed: 'Error al guardar el ajuste del agente: '
 });
@@ -4932,7 +4990,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   restoredSuffix: ' fichier(s).',
   taskView: 'Tâches',
   taskBoardTitle: 'Tableau des tâches du dépôt',
-  taskBoardIntro: 'Les tâches sont stockées dans .gmc/tasks dans ce dépôt et voyagent avec le code. Déplacer une tâche À faire vers En cours lance automatiquement le développement avec l’Agent sélectionné.',
+  taskBoardIntro: 'Les tâches sont stockées dans .gmc/tasks dans ce dépôt et voyagent avec le code. Déplacer une tâche À faire vers En cours lance automatiquement le développement avec l’Agent de tâche sélectionné.',
   tasksCount: 'tâches',
   taskStorage: 'Stockage',
   refreshTasks: 'Actualiser',
@@ -4967,7 +5025,11 @@ I18N.fr = Object.assign({}, I18N.en, {
   savingTask: 'Enregistrement...',
   taskSaveFailed: 'Échec d’enregistrement de la tâche : ',
   agentSettings: 'Paramètres de l’agent',
-  agentSettingsHelp: 'Sélectionnez l’agent IA utilisé pour la génération des commit messages.',
+  agentSettingsHelp: 'Choisissez des agents IA distincts pour les commit messages et le développement des tâches.',
+  commitAgentSetting: 'Agent de commit message',
+  commitAgentSettingHelp: 'Utilisé pour générer les commit messages.',
+  taskAgentSetting: 'Agent de tâche',
+  taskAgentSettingHelp: 'Utilisé pour démarrer le développement lorsqu’une tâche passe en cours.',
   agentSettingSaved: 'Paramètre de l’agent enregistré',
   agentSettingSaveFailed: 'Échec d’enregistrement du paramètre de l’agent : '
 });
@@ -6249,23 +6311,29 @@ function loadAgentSettings() {
       return res.json();
     })
     .then(function(data) {
-      state.agent = data.agent || 'codex';
-      renderAgentOptions();
+      state.commitAgent = data.commitAgent || data.agent || 'codex';
+      state.taskAgent = data.taskAgent || data.agent || 'codex';
+      renderAgentOptions('commit');
+      renderAgentOptions('task');
     })
     .catch(function() {
-      state.agent = 'codex';
-      renderAgentOptions();
+      state.commitAgent = 'codex';
+      state.taskAgent = 'codex';
+      renderAgentOptions('commit');
+      renderAgentOptions('task');
     });
 }
 
-function renderAgentOptions() {
-  var container = $('agentOptions');
+function renderAgentOptions(scope) {
+  var stateKey = scope + 'Agent';
+  var container = $(scope + 'AgentOptions');
   if (!container) return;
-  var currentAgent = state.agent || 'codex';
+  var currentAgent = state[stateKey] || 'codex';
+  var inputName = 'gmc-' + scope + '-agent';
   var html = '';
   AGENTS.forEach(function(name) {
     var checked = name === currentAgent ? ' checked' : '';
-    html += '<label class="radio-label"><input type="radio" name="gmc-agent" value="' + name + '"' + checked + '>' +
+    html += '<label class="radio-label"><input type="radio" name="' + inputName + '" value="' + name + '"' + checked + '>' +
       '<span class="radio-indicator"></span><span class="radio-text">' + name + '</span></label>';
   });
   container.innerHTML = html;
@@ -6274,23 +6342,23 @@ function renderAgentOptions() {
   radios.forEach(function(radio) {
     radio.addEventListener('change', function() {
       if (this.checked) {
-        updateAgentSetting(this.value);
+        updateAgentSetting(scope, this.value);
       }
     });
   });
 }
 
-function updateAgentSetting(agent) {
-  var status = $('agentStatus');
+function updateAgentSetting(scope, agent) {
+  var status = $(scope + 'AgentStatus');
   if (status) status.textContent = t('working');
-  var inputs = document.querySelectorAll('input[name="gmc-agent"]');
+  var inputs = document.querySelectorAll('input[name="gmc-' + scope + '-agent"]');
   if (inputs) {
     inputs.forEach(function(input) { input.disabled = true; });
   }
   fetch('/api/agent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent: agent })
+    body: JSON.stringify({ scope: scope, agent: agent })
   })
     .then(function(res) {
       return res.json().then(function(data) {
@@ -6299,12 +6367,12 @@ function updateAgentSetting(agent) {
       });
     })
     .then(function(data) {
-      state.agent = data.agent || agent;
+      state[scope + 'Agent'] = data.agent || agent;
       if (status) status.textContent = t('agentSettingSaved');
     })
     .catch(function(error) {
       if (status) status.textContent = t('agentSettingSaveFailed') + error.message;
-      renderAgentOptions();
+      renderAgentOptions(scope);
     })
     .finally(function() {
       if (inputs) {

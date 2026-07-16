@@ -43,11 +43,43 @@ function currentAgent() {
 }
 
 function setAgent(agent) {
+  return setAgentSetting(agent, 'gmc.agent', 'agent');
+}
+
+function currentCommitAgent() {
+  return currentAgentSetting('gmc.commitAgent', 'commitAgent');
+}
+
+function setCommitAgent(agent) {
+  return setAgentSetting(agent, 'gmc.commitAgent', 'commitAgent');
+}
+
+function currentTaskAgent() {
+  return currentAgentSetting('gmc.taskAgent', 'taskAgent');
+}
+
+function setTaskAgent(agent) {
+  return setAgentSetting(agent, 'gmc.taskAgent', 'taskAgent');
+}
+
+function currentAgentSetting(gitKey, metadataKey) {
+  var globalGitAgent = git.getGlobalConfig(gitKey);
+  if (globalGitAgent) {
+    return normalizeAgent(globalGitAgent);
+  }
+  var metadata = readConfig();
+  if (metadata[metadataKey]) {
+    return normalizeAgent(metadata[metadataKey]);
+  }
+  return currentAgent();
+}
+
+function setAgentSetting(agent, gitKey, metadataKey) {
   var selectedAgent = normalizeAgent(agent);
-  git.setGlobalConfig('gmc.agent', selectedAgent);
+  git.setGlobalConfig(gitKey, selectedAgent);
   try {
     var metadata = readConfig();
-    metadata.agent = selectedAgent;
+    metadata[metadataKey] = selectedAgent;
     writeConfig(metadata);
   } catch (error) {
     // Ignore filesystem write errors since git config --global succeeded
@@ -109,6 +141,10 @@ module.exports = {
   readBinding: readBinding,
   currentAgent: currentAgent,
   setAgent: setAgent,
+  currentCommitAgent: currentCommitAgent,
+  setCommitAgent: setCommitAgent,
+  currentTaskAgent: currentTaskAgent,
+  setTaskAgent: setTaskAgent,
   normalizeAgent: normalizeAgent,
   configPath: function() {
     return CONFIG_FILE;

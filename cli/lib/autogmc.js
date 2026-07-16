@@ -100,7 +100,7 @@ function worker(targetOid) {
       var binding = config.readBinding(root);
       var promptInfo = buildPrompt(root, targetOid, binding);
       removeCommitLanguage(root);
-      var selectedAgent = binding ? binding.agent : config.currentAgent();
+      var selectedAgent = config.currentCommitAgent();
       log('requesting commit message from ' + selectedAgent);
       var generated = agent.generateText(promptInfo.prompt, root, selectedAgent, {
         outputPrefix: promptInfo.planMode ? 'gmc-commit-plan' : 'gmc-commit-message',

@@ -610,7 +610,7 @@ function generateCommitMessage(root, flags, options) {
     };
   }
 
-  var selectedAgent = binding ? binding.agent : config.currentAgent();
+  var selectedAgent = config.currentCommitAgent();
   var raw = agent.generateText(prompt, root, selectedAgent, {
     outputPrefix: tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
     description: tasks.length ? 'commit plan generation' : 'commit message generation'
