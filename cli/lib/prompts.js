@@ -58,7 +58,8 @@ function taskPrompt(task) {
   return 'Start development work on repository task ' + task.id + '. ' +
     'Read ' + taskPath + ' as the complete task specification, then implement it. ' +
     'Follow the repository instructions and existing patterns, verify the result, ' +
-    'do not commit unless explicitly requested, and summarize the completed work.';
+    'do not commit unless explicitly requested, and summarize the completed work.' +
+    'Modify the task status to "done" after the task is completed.';
 }
 
 function commitMessagePrompt(binding, diff, status, options) {
