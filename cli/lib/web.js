@@ -27,9 +27,12 @@ var AUTH_COOKIE = 'gmc_gitweb_auth';
 var RECENT_REPOS_LIMIT = 20;
 var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
 var STATUS_CACHE_TTL_MS = process.env.GMC_STATUS_CACHE_MS ? Number(process.env.GMC_STATUS_CACHE_MS) : 10000;
+var TASK_EVENT_DEBOUNCE_MS = 100;
+var TASK_EVENT_HEARTBEAT_MS = 15000;
 var TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
 var statusCache = {};
+var taskEventChannels = Object.create(null);
 
 function start(root, options) {
   options = options || {};
@@ -53,7 +56,7 @@ function listen(port, attempt) {
   return new Promise(function (resolve, reject) {
     var server = http.createServer(function (req, res) {
       var timer = setTimeout(function () {
-        if (!res.writableEnded) {
+        if (!res.writableEnded && !res.gmcLongLived) {
           res.writeHead(408, { 'Content-Type': 'text/plain; charset=utf-8', 'Connection': 'close' });
           res.end('Request timeout');
         }
@@ -391,6 +394,11 @@ function handleRequest(req, res) {
         setCachedStatus(targetRepo, statusResult);
         sendJson(res, statusResult);
       }
+      return;
+    }
+
+    if (parsed.pathname === '/api/events') {
+      handleTaskEvents(req, res, targetRepo);
       return;
     }
 
@@ -1615,6 +1623,141 @@ function repoName(repoPath) {
 
 function normalizeRepoName(name) {
   return String(name || '').trim().toLowerCase();
+}
+
+function handleTaskEvents(req, res, root) {
+  var repoRoot = git.repoRoot(root);
+  var channel = getTaskEventChannel(repoRoot);
+  var closed = false;
+
+  res.gmcLongLived = true;
+  setCorsHeaders(res);
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-store',
+    'Connection': 'keep-alive'
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  if (res.socket && typeof res.socket.setKeepAlive === 'function') {
+    res.socket.setKeepAlive(true, TASK_EVENT_HEARTBEAT_MS);
+  }
+
+  channel.clients.push(res);
+  startTaskEventChannel(channel);
+  writeTaskEvent(res, 'ready', { type: 'ready', repo: repoRoot });
+
+  function close() {
+    if (closed) return;
+    closed = true;
+    removeTaskEventClient(channel, res);
+  }
+
+  req.on('close', close);
+  res.on('close', close);
+}
+
+function getTaskEventChannel(repoRoot) {
+  var key = path.resolve(repoRoot);
+  if (!taskEventChannels[key]) {
+    taskEventChannels[key] = {
+      key: key,
+      repoRoot: key,
+      clients: [],
+      watcher: null,
+      debounceTimer: null,
+      retryTimer: null,
+      heartbeatTimer: null
+    };
+  }
+  return taskEventChannels[key];
+}
+
+function startTaskEventChannel(channel) {
+  attachTaskEventWatcher(channel);
+  if (!channel.heartbeatTimer) {
+    channel.heartbeatTimer = setInterval(function () {
+      channel.clients.slice().forEach(function (client) {
+        if (!client.destroyed && !client.writableEnded) {
+          client.write(': keep-alive\n\n');
+        }
+      });
+    }, TASK_EVENT_HEARTBEAT_MS);
+    if (channel.heartbeatTimer.unref) channel.heartbeatTimer.unref();
+  }
+}
+
+function attachTaskEventWatcher(channel) {
+  if (!channel.clients.length || channel.watcher) return;
+
+  var tasksDir = repositoryTasksDir(channel.repoRoot);
+  var gmcDir = path.dirname(tasksDir);
+  var watchDir = fs.existsSync(tasksDir) ? tasksDir : (fs.existsSync(gmcDir) ? gmcDir : channel.repoRoot);
+  var expectedName = watchDir === tasksDir ? '' : (watchDir === gmcDir ? path.basename(tasksDir) : path.basename(gmcDir));
+
+  try {
+    channel.watcher = fs.watch(watchDir, { persistent: false }, function (eventType, filename) {
+      var changedName = filename == null ? '' : String(filename);
+      if (expectedName && changedName && changedName !== expectedName) return;
+      scheduleTaskEvent(channel);
+      if (expectedName || eventType === 'rename') restartTaskEventWatcher(channel);
+    });
+    channel.watcher.on('error', function () {
+      restartTaskEventWatcher(channel);
+    });
+  } catch (error) {
+    scheduleTaskEventWatcherRetry(channel);
+  }
+}
+
+function restartTaskEventWatcher(channel) {
+  if (channel.watcher) {
+    channel.watcher.close();
+    channel.watcher = null;
+  }
+  scheduleTaskEventWatcherRetry(channel);
+}
+
+function scheduleTaskEventWatcherRetry(channel) {
+  if (channel.retryTimer || !channel.clients.length) return;
+  channel.retryTimer = setTimeout(function () {
+    channel.retryTimer = null;
+    attachTaskEventWatcher(channel);
+  }, TASK_EVENT_DEBOUNCE_MS);
+  if (channel.retryTimer.unref) channel.retryTimer.unref();
+}
+
+function scheduleTaskEvent(channel) {
+  clearTimeout(channel.debounceTimer);
+  channel.debounceTimer = setTimeout(function () {
+    channel.debounceTimer = null;
+    broadcastTaskEvent(channel);
+  }, TASK_EVENT_DEBOUNCE_MS);
+  if (channel.debounceTimer.unref) channel.debounceTimer.unref();
+}
+
+function broadcastTaskEvent(channel) {
+  channel.clients.slice().forEach(function (client) {
+    if (!client.destroyed && !client.writableEnded) {
+      writeTaskEvent(client, 'tasks-changed', { type: 'tasks-changed', repo: channel.repoRoot });
+    }
+  });
+}
+
+function writeTaskEvent(res, eventName, payload) {
+  res.write('event: ' + eventName + '\n');
+  res.write('data: ' + JSON.stringify(payload) + '\n\n');
+}
+
+function removeTaskEventClient(channel, res) {
+  var index = channel.clients.indexOf(res);
+  if (index >= 0) channel.clients.splice(index, 1);
+  if (channel.clients.length) return;
+
+  if (channel.watcher) channel.watcher.close();
+  clearTimeout(channel.debounceTimer);
+  clearTimeout(channel.retryTimer);
+  clearInterval(channel.heartbeatTimer);
+  delete taskEventChannels[channel.key];
 }
 
 function readRepositoryTasks(root) {
@@ -4019,7 +4162,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -5381,7 +5524,10 @@ function loadRepositoryTasks(options) {
     renderTaskBoard();
     return Promise.resolve([]);
   }
-  if (state.taskLoading) return Promise.resolve(state.repoTasks);
+  if (state.taskLoading) {
+    if (options.force) state.pendingTaskReload = true;
+    return Promise.resolve(state.repoTasks);
+  }
   if (state.tasksLoaded && !options.force) {
     var t0 = performance.now();
     renderTaskBoard();
@@ -5410,6 +5556,11 @@ function loadRepositoryTasks(options) {
       setTaskError('');
       var t0 = performance.now();
       renderTaskBoard();
+      if (state.activeTaskId && !state.taskDetailEditing) {
+        var activeTask = findRepoTask(state.activeTaskId);
+        if (activeTask) renderTaskDetail(activeTask);
+        else hideTaskDetail();
+      }
       console.debug('[gmc:timing] renderTaskBoard: ' + (performance.now() - t0).toFixed(1) + 'ms');
       return state.repoTasks;
     })
@@ -5421,7 +5572,20 @@ function loadRepositoryTasks(options) {
     .finally(function() {
       state.taskLoading = false;
       renderTaskBoard();
+      if (state.pendingTaskReload) {
+        state.pendingTaskReload = false;
+        return loadRepositoryTasks({ force: true });
+      }
     });
+}
+
+function connectTaskEvents() {
+  if (!targetRepo || typeof window.EventSource !== 'function') return;
+  if (state.taskEvents) state.taskEvents.close();
+  state.taskEvents = new EventSource('/api/events?repo=' + encodeURIComponent(targetRepo));
+  state.taskEvents.addEventListener('tasks-changed', function () {
+    loadRepositoryTasks({ force: true });
+  });
 }
 
 function createTaskFromForm() {
@@ -6594,6 +6758,7 @@ if (!targetRepo) {
 } else {
   updateRepoLink(targetRepo, targetRepo);
   initSidebar();
+  connectTaskEvents();
   load();
 }
 
@@ -6626,6 +6791,9 @@ bindCommitDetailEvents();
 window.addEventListener('resize', function() {
   if (state.commits.length) renderGraph(state.commits);
   if (state.contributions) renderCalendar(state.contributions);
+});
+window.addEventListener('beforeunload', function() {
+  if (state.taskEvents) state.taskEvents.close();
 });
 document.addEventListener('visibilitychange', function() {
   if (!document.hidden && state.auto && targetRepo && !isDetailPageOpen()) {
