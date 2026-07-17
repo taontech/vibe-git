@@ -250,12 +250,10 @@ function handleRequest(req, res) {
         handleRemoveRepository(req, res);
         return;
       }
-      if (parsed.pathname === '/api/select-repository') {
-        handleSelectRepository(req, res);
-        return;
-      }
-      if (parsed.pathname === '/api/create-repository') {
-        handleCreateRepository(req, res);
+      if (parsed.pathname === '/api/add-repository' ||
+          parsed.pathname === '/api/select-repository' ||
+          parsed.pathname === '/api/create-repository') {
+        handleAddRepository(req, res);
         return;
       }
       if (parsed.pathname === '/api/security/external-access') {
@@ -640,23 +638,23 @@ function handleMergeConflictDetail(req, res, targetRepo) {
   }
 }
 
-function handleSelectRepository(req, res) {
+function handleAddRepository(req, res) {
   if (!isLoopbackRequest(req)) {
     return sendJsonError(res, 403, 'Adding repositories is only available from 127.0.0.1.');
   }
   try {
-    sendJson(res, selectRepository());
+    sendJson(res, addRepository());
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
 }
 
-function selectRepository() {
+function addRepository() {
   if (process.platform !== 'darwin') {
-    throwHttpError('Selecting repositories via system dialog is only supported on macOS.');
+    throwHttpError('Adding repositories via system dialog is only supported on macOS.');
   }
 
-  var script = 'POSIX path of (choose folder with prompt "选择 Git 仓库目录")';
+  var script = 'POSIX path of (choose folder with prompt "选择要导入或创建 Git 仓库的文件夹")';
   var result = childProcess.spawnSync('osascript', ['-e', script], { encoding: 'utf8' });
   if (result.error || result.status !== 0) {
     return { status: 'cancelled' };
@@ -673,16 +671,30 @@ function selectRepository() {
     throwHttpError('Selected path is not a directory.');
   }
 
-  // Resolve and verify git repo
-  var repoRoot = git.repoRoot(posixPath);
-  if (!repoRoot) {
-    throwHttpError('Selected directory is not a Git repository.');
+  var repoRoot = null;
+  try {
+    repoRoot = git.repoRoot(posixPath);
+  } catch (error) {
+    // The selected directory is not inside a Git working tree yet.
   }
 
-  // Install hooks and webloc
-  installHooksAndWeb(repoRoot);
+  if (!repoRoot) {
+    if (!confirmRepositoryInitialization(posixPath)) {
+      return { status: 'cancelled' };
+    }
 
-  // Add to recent repos
+    var initResult = childProcess.spawnSync('git', ['init'], {
+      cwd: posixPath,
+      encoding: 'utf8'
+    });
+    if (initResult.error || initResult.status !== 0) {
+      var initMsg = (initResult.stderr || initResult.stdout || initResult.error && initResult.error.message || 'git init failed').trim();
+      throwHttpError(initMsg || 'Failed to initialize git repository.');
+    }
+    repoRoot = git.repoRoot(posixPath);
+  }
+
+  installHooksAndWeb(repoRoot);
   recordRepositoryVisit(repoRoot);
 
   return {
@@ -692,72 +704,22 @@ function selectRepository() {
   };
 }
 
-function handleCreateRepository(req, res) {
-  if (!isLoopbackRequest(req)) {
-    return sendJsonError(res, 403, 'Creating repositories is only available from 127.0.0.1.');
-  }
-  try {
-    sendJson(res, createRepository());
-  } catch (error) {
-    sendJsonError(res, error.httpStatus || 500, error.message);
-  }
-}
-
-function createRepository() {
-  if (process.platform !== 'darwin') {
-    throwHttpError('Creating repositories via system dialog is only supported on macOS.');
-  }
-
-  var parentScript = 'POSIX path of (choose folder with prompt "选择一个位置来创建新仓库")';
-  var parentResult = childProcess.spawnSync('osascript', ['-e', parentScript], { encoding: 'utf8' });
-  if (parentResult.error || parentResult.status !== 0) {
-    return { status: 'cancelled' };
-  }
-
-  var parentPath = (parentResult.stdout || '').trim().replace(/[\r\n]+$/, '');
-  if (!parentPath || !fs.existsSync(parentPath)) {
-    throwHttpError('Selected path does not exist: ' + parentPath);
-  }
-  if (!fs.statSync(parentPath).isDirectory()) {
-    throwHttpError('Selected path is not a directory.');
-  }
-
-  var nameScript = 'text returned of (display dialog "请输入仓库名称：" default answer "new-repo" with title "新建仓库" with icon note)';
-  var nameResult = childProcess.spawnSync('osascript', ['-e', nameScript], { encoding: 'utf8' });
-  if (nameResult.error || nameResult.status !== 0) {
-    return { status: 'cancelled' };
-  }
-
-  var inputName = (nameResult.stdout || '').trim().replace(/[\r\n]+$/, '');
-  if (!inputName) {
-    throwHttpError('Repository name is required.');
-  }
-
-  var safeName = inputName.replace(/[^a-zA-Z0-9\u4e00-\u9fff\uff00-\uffef._-]/g, '_');
-  var repoPath = path.join(parentPath, safeName);
-  if (fs.existsSync(repoPath)) {
-    throwHttpError('Path already exists: ' + repoPath);
-  }
-
-  fs.mkdirSync(repoPath, { recursive: true });
-  var initResult = childProcess.spawnSync('git', ['init'], {
-    cwd: repoPath,
-    encoding: 'utf8'
+function confirmRepositoryInitialization(repoPath) {
+  var script = [
+    'on run argv',
+    'set selectedPath to item 1 of argv',
+    'display dialog "所选文件夹不是 Git 仓库：" & return & selectedPath & return & return & "是否在此创建 Git 仓库？" with title "创建 Git 仓库" buttons {"取消", "创建"} default button "创建" cancel button "取消" with icon caution',
+    'return button returned of result',
+    'end run'
+  ];
+  var args = [];
+  script.forEach(function (line) {
+    args.push('-e', line);
   });
-  if (initResult.error || initResult.status !== 0) {
-    var initMsg = (initResult.stderr || initResult.stdout || initResult.error && initResult.error.message || 'git init failed').trim();
-    try { fs.rmdirSync(repoPath, { recursive: true }); } catch (e) { /* ignore */ }
-    throwHttpError(initMsg || 'Failed to initialize git repository.');
-  }
+  args.push('--', repoPath);
 
-  installHooksAndWeb(repoPath);
-  recordRepositoryVisit(repoPath);
-
-  return {
-    status: 'ok',
-    path: repoPath,
-    name: repoName(repoPath)
-  };
+  var result = childProcess.spawnSync('osascript', args, { encoding: 'utf8' });
+  return !result.error && result.status === 0;
 }
 
 function handleOpenRepository(req, res, targetRepo) {
@@ -3622,6 +3584,8 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 }
 .sidebar-toggle:hover { background: rgba(0,0,0,0.05); color: var(--text); }
 .sidebar-toggle svg { width: 20px; height: 20px; }
+#addRepoBtn { gap: 2px; font-weight: 800; }
+.repo-add-plus { font-size: 19px; line-height: 1; }
 #sidebarToggle { margin-left: -12px; margin-right: 8px; }
 #sidebarClose { margin-right: -8px; display: none; }
 
@@ -3643,11 +3607,9 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
     <div class="sidebar-header">
       <h2 data-i18n="recentRepos">Recent Repos</h2>
       <div style="display:flex;gap:6px;align-items:center;">
-        <button id="addRepoBtn" class="sidebar-toggle" title="Add Repository" style="display:none;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path><path d="M8 13h8"></path><path d="m13 10 3 3-3 3"></path></svg>
-        </button>
-        <button id="createRepoBtn" class="sidebar-toggle" title="Create Empty Repository" style="display:none;">
+        <button id="addRepoBtn" class="sidebar-toggle" type="button" title="Add or Create Git Repository" aria-label="Add or Create Git Repository" style="display:none;">
           <svg width="800px" height="800px" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"><path d="M251.172 116.594L139.4 4.828c-6.433-6.437-16.873-6.437-23.314 0l-23.21 23.21 29.443 29.443c6.842-2.312 14.688-.761 20.142 4.693 5.48 5.489 7.02 13.402 4.652 20.266l28.375 28.376c6.865-2.365 14.786-.835 20.269 4.657 7.663 7.66 7.663 20.075 0 27.74-7.665 7.666-20.08 7.666-27.749 0-5.764-5.77-7.188-14.235-4.27-21.336l-26.462-26.462-.003 69.637a19.82 19.82 0 0 1 5.188 3.71c7.663 7.66 7.663 20.076 0 27.747-7.665 7.662-20.086 7.662-27.74 0-7.663-7.671-7.663-20.086 0-27.746a19.654 19.654 0 0 1 6.421-4.281V94.196a19.378 19.378 0 0 1-6.421-4.281c-5.806-5.798-7.202-14.317-4.227-21.446L81.47 39.442l-76.64 76.635c-6.44 6.443-6.44 16.884 0 23.322l111.774 111.768c6.435 6.438 16.873 6.438 23.316 0l111.251-111.249c6.438-6.44 6.438-16.887 0-23.324" fill="#DE4C36"/></svg>
+          <span class="repo-add-plus" aria-hidden="true">+</span>
         </button>
         <button id="sidebarClose" class="sidebar-toggle" title="Close Sidebar" data-i18n-title="closeSidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -6179,10 +6141,10 @@ function initSidebar() {
   if (addBtn) {
     if (canOpenRepositoryLocally()) {
       addBtn.style.display = '';
-      addBtn.title = 'Add Git Repository';
+      addBtn.title = 'Add or Create Git Repository';
       addBtn.addEventListener('click', function() {
         addBtn.disabled = true;
-        fetch('/api/select-repository', { method: 'POST' })
+        fetch('/api/add-repository', { method: 'POST' })
           .then(function(res) { return res.json(); })
           .then(function(data) {
             if (data.status === 'cancelled') return;
@@ -6195,25 +6157,6 @@ function initSidebar() {
     }
   }
 
-  var createBtn = $('createRepoBtn');
-  if (createBtn) {
-    if (canOpenRepositoryLocally()) {
-      createBtn.style.display = '';
-      createBtn.title = 'Create Empty Git Repository';
-      createBtn.addEventListener('click', function() {
-        createBtn.disabled = true;
-        fetch('/api/create-repository', { method: 'POST' })
-          .then(function(res) { return res.json(); })
-          .then(function(data) {
-            if (data.status === 'cancelled') return;
-            if (data.error) { alert(data.error); return; }
-            if (data.path) window.location.href = '?repo=' + encodeURIComponent(data.path);
-          })
-          .catch(function(err) { alert('Failed: ' + err.message); })
-          .finally(function() { createBtn.disabled = false; });
-      });
-    }
-  }
 }
 
 function initSecurityControls() {
