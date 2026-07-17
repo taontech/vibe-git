@@ -467,7 +467,7 @@ function handleCommitSelected(req, res, targetRepo) {
   }
 
   readJsonBody(req).then(function (body) {
-    var result = commitSelectedFiles(targetRepo, body.files, body.language);
+    var result = commitSelectedFiles(targetRepo, body.files, body.language, body.source);
     invalidateStatusCache(targetRepo);
     sendJson(res, result);
   }).catch(function (error) {
@@ -2664,7 +2664,36 @@ function commitDetails(root, oid) {
   };
 }
 
-function commitSelectedFiles(root, selectedFiles, language) {
+function commitSelectedFiles(root, selectedFiles, language, source) {
+  if (source === 'modified') {
+    return commitSelectedModifiedFiles(root, selectedFiles, language);
+  }
+  if (source && source !== 'staged') {
+    throwHttpError('Invalid commit source: ' + source);
+  }
+  return commitSelectedStagedFiles(root, selectedFiles, language);
+}
+
+function commitSelectedModifiedFiles(root, selectedFiles, language) {
+  var repoRoot = git.repoRoot(root);
+  var selection = validateStatusSelection(repoRoot, selectedFiles, function (file) {
+    return file.worktree !== ' ';
+  }, 'modified file to commit');
+  var originalHead = runGitOptional(repoRoot, ['rev-parse', '--verify', 'HEAD']);
+  var originalIndexTree = writeIndexTree(repoRoot);
+
+  try {
+    stageSelectedFiles(repoRoot, selection.files);
+    return commitSelectedStagedFiles(repoRoot, selection.files, language);
+  } catch (error) {
+    if (runGitOptional(repoRoot, ['rev-parse', '--verify', 'HEAD']) === originalHead) {
+      restoreIndexTree(repoRoot, originalIndexTree);
+    }
+    throw error;
+  }
+}
+
+function commitSelectedStagedFiles(root, selectedFiles, language) {
   var repoRoot = git.repoRoot(root);
   if (!Array.isArray(selectedFiles) || !selectedFiles.length) {
     throwHttpError('Select at least one staged file to commit.');
@@ -7148,7 +7177,8 @@ function renderFileSection(kind, files, selection) {
   var actions = isModified
     ? '<button id="restoreSelected" class="ignore-button" style="color:var(--amber);border-color:var(--line)" type="button">' + escapeHtml(t('restore')) + '</button>' +
       '<button id="ignoreSelected" class="ignore-button" type="button">' + escapeHtml(t('ignore')) + '</button>' +
-      '<button id="stageSelected" class="commit-button" type="button">' + escapeHtml(t('stage')) + '</button>'
+      '<button id="stageSelected" class="commit-button" type="button">' + escapeHtml(t('stage')) + '</button>' +
+      '<button id="commitModified" class="commit-button" type="button">' + escapeHtml(t('commitSelected')) + '</button>'
     : '<button id="unstageSelected" class="ignore-button" type="button">' + escapeHtml(t('unstage')) + '</button>' +
       '<button id="commitSelected" class="commit-button" type="button">' + escapeHtml(t('commitSelected')) + '</button>';
   return '<section class="file-section file-section-' + kind + '">' +
@@ -7187,7 +7217,8 @@ function bindFileControls() {
   bindSelectAll('selectAllModified', modifiedBoxes, state.selectedModified);
   bindSelectAll('selectAllStaged', stagedBoxes, state.selectedStaged);
 
-  if ($('commitSelected')) $('commitSelected').addEventListener('click', commitSelectedFiles);
+  if ($('commitModified')) $('commitModified').addEventListener('click', function() { commitSelectedFiles('modified'); });
+  if ($('commitSelected')) $('commitSelected').addEventListener('click', function() { commitSelectedFiles('staged'); });
   if ($('ignoreSelected')) $('ignoreSelected').addEventListener('click', ignoreSelectedFiles);
   if ($('stageSelected')) $('stageSelected').addEventListener('click', stageSelectedFilesAction);
   if ($('unstageSelected')) $('unstageSelected').addEventListener('click', unstageSelectedFilesAction);
@@ -7229,6 +7260,11 @@ function updateCommitControls() {
   if (button) {
     button.disabled = busy || staged.length === 0;
     button.textContent = state.committing ? t('committing') : t('commitSelected');
+  }
+  var modifiedCommitButton = $('commitModified');
+  if (modifiedCommitButton) {
+    modifiedCommitButton.disabled = busy || modified.length === 0;
+    modifiedCommitButton.textContent = state.committing ? t('committing') : t('commitSelected');
   }
   var ignoreButton = $('ignoreSelected');
   if (ignoreButton) {
@@ -7274,8 +7310,9 @@ function setCommitStatus(message, isError) {
   target.className = 'commit-status' + (isError ? ' error' : '');
 }
 
-function commitSelectedFiles() {
-  var files = selectedPaths(state.selectedStaged);
+function commitSelectedFiles(source) {
+  var selection = source === 'modified' ? state.selectedModified : state.selectedStaged;
+  var files = selectedPaths(selection);
   if (!files.length || state.committing) return;
 
   if (!state.install.hooks) {
@@ -7291,7 +7328,7 @@ function commitSelectedFiles() {
           state.install = data.install || { hooks: true, webloc: true };
           renderInstallBanner();
           if (btn) { btn.textContent = t('installed'); }
-          doCommit(files);
+          doCommit(files, source);
         })
         .catch(function(err) {
           if (btn) { btn.disabled = false; btn.textContent = t('installFailed'); }
@@ -7302,10 +7339,10 @@ function commitSelectedFiles() {
     // User declined install, proceed with direct AI commit
   }
 
-  doCommit(files);
+  doCommit(files, source);
 }
 
-function doCommit(files) {
+function doCommit(files, source) {
   state.committing = true;
   var statusMsg = state.install.hooks ? t('commitWithHooksStatus') : t('commitWithAiStatus');
   setCommitStatus(statusMsg, false);
@@ -7314,7 +7351,7 @@ function doCommit(files) {
   fetch('/api/commit-selected?repo=' + encodeURIComponent(targetRepo), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ files: files, language: currentLanguage || 'en' })
+    body: JSON.stringify({ files: files, language: currentLanguage || 'en', source: source })
   })
     .then(function(res) {
       return res.json().then(function(data) {
@@ -7325,7 +7362,8 @@ function doCommit(files) {
       });
     })
     .then(function(data) {
-      state.selectedStaged = {};
+      if (source === 'modified') state.selectedModified = {};
+      else state.selectedStaged = {};
       setCommitStatus(firstLine(data.output) || t('committedSelected'), false);
       load({ force: true });
     })
