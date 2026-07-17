@@ -272,7 +272,7 @@ function handleRequest(req, res) {
         return;
       }
       if (parsed.pathname === '/api/agent') {
-        handleSetAgent(req, res);
+        handleSetAgent(req, res, parsed.query.repo);
         return;
       }
       if (parsed.pathname === '/api/tasks/create') {
@@ -342,6 +342,7 @@ function handleRequest(req, res) {
       var currentAgent = 'codex';
       var currentCommitAgent = 'codex';
       var currentTaskAgent = 'codex';
+      var currentRepositoryTaskAgent = null;
       try {
         currentAgent = config.currentAgent();
       } catch (ignore) {
@@ -357,10 +358,18 @@ function handleRequest(req, res) {
       } catch (ignoreTaskAgent) {
         currentTaskAgent = currentAgent;
       }
+      if (parsed.query.repo) {
+        try {
+          currentRepositoryTaskAgent = config.currentRepositoryTaskAgent(parsed.query.repo);
+        } catch (ignoreRepositoryTaskAgent) {
+          currentRepositoryTaskAgent = currentTaskAgent;
+        }
+      }
       sendJson(res, {
         agent: currentAgent,
         commitAgent: currentCommitAgent,
-        taskAgent: currentTaskAgent
+        taskAgent: currentTaskAgent,
+        repositoryTaskAgent: currentRepositoryTaskAgent
       });
       return;
     }
@@ -1009,7 +1018,7 @@ function handleQrCode(req, res) {
   });
 }
 
-function handleSetAgent(req, res) {
+function handleSetAgent(req, res, targetRepo) {
   readJsonBody(req).then(function (body) {
     var newAgent = String(body.agent || '').trim().toLowerCase();
     var scope = String(body.scope || '').trim().toLowerCase();
@@ -1022,6 +1031,11 @@ function handleSetAgent(req, res) {
         selectedAgent = config.setCommitAgent(newAgent);
       } else if (scope === 'task') {
         selectedAgent = config.setTaskAgent(newAgent);
+      } else if (scope === 'repository-task') {
+        if (!targetRepo) {
+          return sendJsonError(res, 400, 'Missing repo parameter.');
+        }
+        selectedAgent = config.setRepositoryTaskAgent(newAgent, targetRepo);
       } else if (!scope) {
         selectedAgent = config.setAgent(newAgent);
       } else {
@@ -1851,7 +1865,7 @@ function updateRepositoryTask(root, input, options) {
       localOnlyError.httpStatus = 403;
       throw localOnlyError;
     }
-    var selectedAgent = config.currentTaskAgent();
+    var selectedAgent = config.currentRepositoryTaskAgent(repoRoot);
     agentLaunch = openAgentAtRepository(repoRoot, selectedAgent, prompts.taskPrompt(task));
     agentLaunch.agent = selectedAgent;
     agentLaunch.taskId = task.id;
@@ -3412,7 +3426,15 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .task-hero-main { position: relative; z-index: 1; min-width: 0; }
 .task-hero h2 { margin: 0; color: var(--text); font-size: 24px; line-height: 1.1; text-transform: none; letter-spacing: 0; }
 .task-hero p { margin: 7px 0 0; max-width: 720px; color: var(--muted); line-height: 1.58; }
-.task-actions { position: relative; z-index: 1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.task-actions { position: relative; z-index: 1; display: grid; gap: 10px; justify-items: end; }
+.task-action-buttons { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.task-repo-agent { display: grid; gap: 5px; justify-items: end; }
+.task-repo-agent[hidden] { display: none; }
+.task-repo-agent-label { color: #475569; font-size: 12px; font-weight: 750; }
+.task-repo-agent .radio-group { gap: 6px; margin: 0; justify-content: flex-end; }
+.task-repo-agent .radio-label { padding: 5px 8px; background: rgba(255,255,255,.76); font-size: 12px; }
+.task-repo-agent .radio-indicator { width: 12px; height: 12px; }
+.task-repo-agent .meta { min-height: 17px; }
 .task-primary { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 13px; border: 1px solid transparent; border-radius: 7px; color: #fff; background: linear-gradient(135deg, var(--accent), #0f9f6e); cursor: pointer; font-weight: 780; box-shadow: 0 12px 26px rgba(6,141,109,.22); transition: transform .16s, box-shadow .16s; }
 .task-primary:hover { transform: translateY(-1px); box-shadow: 0 16px 34px rgba(6,141,109,.25); }
 .task-primary svg { width: 16px; height: 16px; }
@@ -3436,6 +3458,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .task-column-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .task-column-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; color: var(--text); }
 .task-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--task-color, var(--accent)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--task-color, var(--accent)) 14%, transparent); }
+.task-dot.breathing { animation: taskDotBreathing 1.8s ease-in-out infinite; }
 .task-count { display: grid; place-items: center; min-width: 26px; height: 24px; padding: 0 7px; border-radius: 999px; background: #f1f5f9; color: #475569; font-weight: 800; font-size: 12px; }
 .task-column-body { display: grid; gap: 10px; min-height: 220px; align-content: start; align-items: start; grid-auto-rows: 132px; }
 .task-empty { display: grid; place-items: center; min-height: 116px; border: 1px dashed #cbd5e1; border-radius: 8px; color: #94a3b8; font-size: 12px; text-align: center; padding: 14px; background: rgba(248,250,252,.68); }
@@ -3684,8 +3707,12 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .calendar-cell[data-level="4"] { background: #216e39; }
 @keyframes spin { 100% { transform: rotate(360deg); } }
 @keyframes aiPulse { 0%, 100% { opacity: .52; transform: scale(.86); } 50% { opacity: 1; transform: scale(1.08); } }
+@keyframes taskDotBreathing {
+  0%, 100% { transform: scale(.92); box-shadow: 0 0 0 3px color-mix(in srgb, var(--task-color, var(--accent)) 12%, transparent); }
+  50% { transform: scale(1.08); box-shadow: 0 0 0 7px color-mix(in srgb, var(--task-color, var(--accent)) 24%, transparent); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ai-status-loader, .ai-status-sparkles { animation: none; }
+  .ai-status-loader, .ai-status-sparkles, .task-dot.breathing { animation: none; }
 }
 @media (max-width: 1280px) { 
   .grid, .summary-panel { grid-template-columns: 1fr; } 
@@ -3719,7 +3746,9 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
   .topbar-tools .actions { grid-column: 2; justify-self: end; }
   .view-tab { justify-content: center; }
   .task-hero { flex-direction: column; }
-  .task-actions { width: 100%; justify-content: flex-start; }
+  .task-actions { width: 100%; justify-items: start; }
+  .task-action-buttons, .task-repo-agent .radio-group { justify-content: flex-start; }
+  .task-repo-agent { justify-items: start; }
   .task-form-grid { grid-template-columns: 1fr; }
   .task-board { grid-template-columns: 1fr; }
   .commit { grid-template-columns: 1fr; } 
@@ -4014,11 +4043,18 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
             </div>
           </div>
           <div class="task-actions">
-            <button id="refreshTasks" class="copy-button" type="button" data-i18n="refreshTasks">刷新</button>
-            <button id="openTaskComposer" class="task-primary" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
-              <span data-i18n="newTask">新建任务</span>
-            </button>
+            <div id="repositoryTaskAgentSelector" class="task-repo-agent">
+              <span class="task-repo-agent-label" data-i18n="repositoryTaskAgentSetting">当前仓库 Task Agent</span>
+              <div id="repositoryTaskAgentOptions" class="radio-group"></div>
+              <div id="repositoryTaskAgentStatus" class="meta"></div>
+            </div>
+            <div class="task-action-buttons">
+              <button id="refreshTasks" class="copy-button" type="button" data-i18n="refreshTasks">刷新</button>
+              <button id="openTaskComposer" class="task-primary" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+                <span data-i18n="newTask">新建任务</span>
+              </button>
+            </div>
           </div>
         </div>
         <div id="taskError" class="task-error"></div>
@@ -4191,7 +4227,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -4393,6 +4429,7 @@ var I18N = {
     commitAgentSettingHelp: '用于生成 commit message。',
     taskAgentSetting: 'Task Agent',
     taskAgentSettingHelp: '用于任务进入进行中状态时启动开发。',
+    repositoryTaskAgentSetting: '当前仓库 Task Agent',
     agentSettingSaved: 'Agent 设置已保存',
     agentSettingSaveFailed: 'Agent 设置保存失败：'
   },
@@ -4596,6 +4633,7 @@ var I18N = {
     commitAgentSettingHelp: 'Used to generate commit messages.',
     taskAgentSetting: 'Task agent',
     taskAgentSettingHelp: 'Used to start development when a task moves to Doing.',
+    repositoryTaskAgentSetting: 'Repository task agent',
     agentSettingSaved: 'Agent setting saved',
     agentSettingSaveFailed: 'Failed to save agent setting: '
   }
@@ -5506,7 +5544,7 @@ function setActiveView(view) {
   });
   if (view === 'tasks') {
     performance.mark('gmc-task-view-start');
-    loadRepositoryTasks().then(function() {
+    Promise.all([loadRepositoryTasks(), loadRepositoryTaskAgent()]).then(function() {
       performance.mark('gmc-task-view-end');
       performance.measure('gmc-task-view-switch', 'gmc-task-view-start', 'gmc-task-view-end');
       console.debug('[gmc:timing] task view switch: ' + getPerfMeasure('gmc-task-view-switch') + 'ms');
@@ -5752,12 +5790,13 @@ function renderTaskBoard() {
 
   board.innerHTML = TASK_BOARD_STATUSES.map(function(column) {
     var tasks = (state.repoTasks || []).filter(function(task) { return task.status === column.id; });
+    var dotClass = column.id === 'doing' && tasks.length ? 'task-dot breathing' : 'task-dot';
     var cards = tasks.length ? tasks.map(function(task) {
       return taskCardHtml(task, column);
     }).join('') : '<div class="task-empty">' + escapeHtml(t('noTasksInColumn')) + '</div>';
     return '<section class="task-column" data-task-status="' + escapeHtml(column.id) + '" style="--task-color:' + escapeHtml(column.color) + '">' +
       '<div class="task-column-head">' +
-        '<div class="task-column-title"><span class="task-dot"></span><span>' + escapeHtml(t(column.label)) + '</span></div>' +
+        '<div class="task-column-title"><span class="' + dotClass + '"></span><span>' + escapeHtml(t(column.label)) + '</span></div>' +
         '<div class="task-count">' + tasks.length + '</div>' +
       '</div>' +
       '<div class="task-column-body">' + cards + '</div>' +
@@ -6653,6 +6692,30 @@ function loadAgentSettings() {
     });
 }
 
+function loadRepositoryTaskAgent() {
+  var selector = $('repositoryTaskAgentSelector');
+  if (selector) selector.hidden = !targetRepo;
+  if (!targetRepo) {
+    return Promise.resolve(null);
+  }
+  return fetch('/api/agent?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      state.repositoryTaskAgent = data.repositoryTaskAgent || data.taskAgent || data.agent || 'codex';
+      renderAgentOptions('repositoryTask');
+      return state.repositoryTaskAgent;
+    })
+    .catch(function(error) {
+      var status = $('repositoryTaskAgentStatus');
+      if (status) status.textContent = t('agentSettingSaveFailed') + error.message;
+      renderAgentOptions('repositoryTask');
+      return null;
+    });
+}
+
 function renderAgentOptions(scope) {
   var stateKey = scope + 'Agent';
   var container = $(scope + 'AgentOptions');
@@ -6679,15 +6742,21 @@ function renderAgentOptions(scope) {
 
 function updateAgentSetting(scope, agent) {
   var status = $(scope + 'AgentStatus');
+  var apiScope = scope;
+  var endpoint = '/api/agent';
+  if (scope === 'repositoryTask') {
+    apiScope = 'repository-task';
+    endpoint += '?repo=' + encodeURIComponent(targetRepo);
+  }
   if (status) status.textContent = t('working');
   var inputs = document.querySelectorAll('input[name="gmc-' + scope + '-agent"]');
   if (inputs) {
     inputs.forEach(function(input) { input.disabled = true; });
   }
-  fetch('/api/agent', {
+  fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: scope, agent: agent })
+    body: JSON.stringify({ scope: apiScope, agent: agent })
   })
     .then(function(res) {
       return res.json().then(function(data) {

@@ -62,6 +62,20 @@ function setTaskAgent(agent) {
   return setAgentSetting(agent, 'gmc.taskAgent', 'taskAgent');
 }
 
+function currentRepositoryTaskAgent(cwd) {
+  var repositoryAgent = git.getConfig('gmc.taskAgent', cwd);
+  if (repositoryAgent) {
+    return normalizeAgent(repositoryAgent);
+  }
+  return currentTaskAgent();
+}
+
+function setRepositoryTaskAgent(agent, cwd) {
+  var selectedAgent = normalizeAgent(agent);
+  git.setConfig('gmc.taskAgent', selectedAgent, cwd);
+  return selectedAgent;
+}
+
 function currentAgentSetting(gitKey, metadataKey) {
   var globalGitAgent = git.getGlobalConfig(gitKey);
   if (globalGitAgent) {
@@ -145,6 +159,8 @@ module.exports = {
   setCommitAgent: setCommitAgent,
   currentTaskAgent: currentTaskAgent,
   setTaskAgent: setTaskAgent,
+  currentRepositoryTaskAgent: currentRepositoryTaskAgent,
+  setRepositoryTaskAgent: setRepositoryTaskAgent,
   normalizeAgent: normalizeAgent,
   configPath: function() {
     return CONFIG_FILE;
