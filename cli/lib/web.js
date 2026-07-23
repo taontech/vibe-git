@@ -3293,7 +3293,7 @@ html[data-theme="dark"] {
   --text: #f8fafc;
   --muted: #94a3b8;
   --line: #334155;
-  --line-soft: #1e293b;
+  --line-soft: #273549;
   --accent: #38bdf8;
   --accent-soft: rgba(56, 189, 248, 0.15);
   --green: #34d399;
