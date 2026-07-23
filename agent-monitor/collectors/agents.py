@@ -35,7 +35,7 @@ AGENT_DEFINITIONS = [
     {
         "id": "claude-code",
         "name": "Claude Code",
-        "keywords": ["claude-code", "claude mcp", "/claude"],
+        "keywords": ["claude", "claude-code"],
         "exclude_keywords": ["Claude.app"],
     },
     {
@@ -93,6 +93,7 @@ CODEX_SESSION_ACTIVE_SECONDS = 12 * 60 * 60
 CODEX_SESSION_TAIL_BYTES = 2 * 1024 * 1024
 CODEX_CLI_ORIGINATORS = {"codex_cli_rs", "codex-tui"}
 CODEX_APP_ORIGINATORS = {"Codex Desktop"}
+AGENT_INTERACTION_TAIL_BYTES = 2 * 1024 * 1024
 
 _codex_interaction_cache: dict[str, tuple[float, bool]] = {}
 
@@ -149,8 +150,11 @@ def _find_agent_processes(keywords: list[str], exclude_keywords: list[str] | Non
         matched = False
         for kw in keywords:
             kw_lower = kw.lower()
-            if kw_lower == "agy":
-                if any(p.lower() == "agy" or p.lower().endswith("/agy") for p in cmdline_parts):
+            if kw_lower in ("agy", "claude", "claude-code"):
+                if any(
+                    p.lower() == kw_lower or p.lower().endswith("/" + kw_lower)
+                    for p in cmdline_parts
+                ):
                     matched = True
                     break
             else:
@@ -167,48 +171,183 @@ def _find_agent_processes(keywords: list[str], exclude_keywords: list[str] | Non
     return found
 
 
+def _read_recent_lines(path: Path) -> list[str]:
+    try:
+        with path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - AGENT_INTERACTION_TAIL_BYTES))
+            if size > AGENT_INTERACTION_TAIL_BYTES:
+                f.readline()
+            return f.read().decode("utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+
+
+def _path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _antigravity_log_needs_interaction(path: Path, pids: set[int]) -> bool:
+    pid_strings = {str(value) for value in pids}
+    tool_surface = -1
+    tool_response = -1
+    question_surface = -1
+    question_response = -1
+
+    for idx, line in enumerate(_read_recent_lines(path)):
+        parts = line.split(maxsplit=3)
+        if len(parts) < 4 or parts[2] not in pid_strings:
+            continue
+
+        if "Surfacing tool confirmation" in line:
+            tool_surface = idx
+        elif (
+            "Responding to tool confirmation" in line
+            or "Tool confirmation for conversation" in line
+        ):
+            tool_response = idx
+        elif "Surfacing ask_question" in line:
+            question_surface = idx
+        elif "Forwarding user message to conversation" in line:
+            question_response = idx
+
+    return tool_surface > tool_response or question_surface > question_response
+
+
+def _antigravity_log_paths(pid: int) -> tuple[list[Path], set[int]]:
+    paths = []
+    pids = {pid}
+    started_at = 0.0
+    try:
+        process = psutil.Process(pid)
+        started_at = process.create_time()
+        processes = [process]
+        processes.extend(process.children(recursive=True))
+        for candidate in processes:
+            pids.add(candidate.pid)
+            for opened in candidate.open_files():
+                path = Path(opened.path)
+                if path.suffix == ".log" and path.name.startswith("cli-"):
+                    paths.append(path)
+    except (
+        psutil.NoSuchProcess,
+        psutil.AccessDenied,
+        PermissionError,
+        OSError,
+        SystemError,
+    ):
+        pass
+
+    log_dir = Path.home() / ".gemini" / "antigravity-cli" / "log"
+    try:
+        for path in log_dir.glob("cli-*.log"):
+            if path.stat().st_mtime >= started_at - 5:
+                paths.append(path)
+    except OSError:
+        pass
+
+    unique_paths = sorted(
+        set(paths),
+        key=_path_mtime,
+        reverse=True,
+    )
+    return unique_paths, pids
+
+
 def _is_antigravity_paused(pid: int) -> bool:
-    import os
-    import psutil
+    paths, pids = _antigravity_log_paths(pid)
+    return any(_antigravity_log_needs_interaction(path, pids) for path in paths)
 
-    # Default fallback path
-    log_path = os.path.expanduser("~/.gemini/antigravity-cli/cli.log")
 
-    # Try to find the exact log file currently opened by this process
+def _claude_session_needs_interaction(path: Path) -> bool:
+    pending_questions = set()
+    for line in _read_recent_lines(path):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        if message.get("role") == "assistant":
+            for item in content:
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "tool_use"
+                    and item.get("name") == "AskUserQuestion"
+                ):
+                    pending_questions.add(item.get("id") or event.get("uuid"))
+        elif message.get("role") == "user":
+            resolved = False
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "tool_result":
+                    continue
+                pending_questions.discard(item.get("tool_use_id"))
+                resolved = True
+            if pending_questions and content and not resolved:
+                pending_questions.clear()
+
+    return bool(pending_questions)
+
+
+def _claude_session_paths(pid: int) -> list[Path]:
+    paths = []
+    started_at = 0.0
+    project_dir = None
     try:
-        p = psutil.Process(pid)
-        for f in p.open_files():
-            if f.path.endswith(".log") and "cli-" in os.path.basename(f.path):
-                log_path = f.path
-                break
-    except Exception:
+        process = psutil.Process(pid)
+        started_at = process.create_time()
+        for opened in process.open_files():
+            path = Path(opened.path)
+            if path.suffix == ".jsonl" and ".claude/projects" in path.as_posix():
+                paths.append(path)
+        cwd = process.cwd()
+        project_dir = (
+            Path.home()
+            / ".claude"
+            / "projects"
+            / cwd.replace(os.sep, "-")
+        )
+    except (
+        psutil.NoSuchProcess,
+        psutil.AccessDenied,
+        PermissionError,
+        OSError,
+        SystemError,
+    ):
         pass
 
-    if not os.path.exists(log_path):
-        return False
-
+    projects_root = Path.home() / ".claude" / "projects"
+    search_root = project_dir if project_dir and project_dir.is_dir() else projects_root
     try:
-        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-
-        pid_str = str(pid)
-        pid_lines = []
-        for line in lines[-5000:]:
-            if pid_str in line:
-                pid_lines.append(line)
-
-        last_surface_idx = -1
-        last_response_idx = -1
-        for idx, line in enumerate(pid_lines):
-            if "Surfacing tool confirmation" in line:
-                last_surface_idx = idx
-            elif "Responding to tool confirmation" in line or "Tool confirmation for conversation" in line:
-                last_response_idx = idx
-
-        return last_surface_idx > last_response_idx
-    except Exception:
+        pattern = "*.jsonl" if search_root == project_dir else "*/*.jsonl"
+        for path in search_root.glob(pattern):
+            if path.stat().st_mtime >= started_at - 5:
+                paths.append(path)
+    except OSError:
         pass
-    return False
+
+    return sorted(
+        set(paths),
+        key=_path_mtime,
+        reverse=True,
+    )
+
+
+def _is_claude_code_paused(pid: int) -> bool:
+    return any(
+        _claude_session_needs_interaction(path)
+        for path in _claude_session_paths(pid)
+    )
 
 
 def _is_opencode_paused(pid: int) -> bool:
@@ -517,6 +656,8 @@ def collect_agent_status(agent_id: Optional[str] = None) -> list[AgentStatus]:
 
         for s in snapshots:
             if defn["id"] == "antigravity" and _is_antigravity_paused(s.pid):
+                s.status = "paused"
+            elif defn["id"] == "claude-code" and _is_claude_code_paused(s.pid):
                 s.status = "paused"
             elif defn["id"] == "opencode" and _is_opencode_paused(s.pid):
                 s.status = "paused"

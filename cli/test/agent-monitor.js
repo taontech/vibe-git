@@ -184,6 +184,7 @@ async function testForegroundWebCleanup(tempDir, fakeServerPath, useSignal) {
     await waitForWeb(webPort, testDir, child);
     await waitForHealthy(monitorPort);
     await assertPausedAgentMonitor(webPort, testDir);
+    await assertAgentMonitorWebSocket(webPort, testDir);
     if (useSignal) {
       child.kill('SIGTERM');
     } else {
@@ -253,6 +254,7 @@ async function testBackgroundWebLifecycle(tempDir, fakeServerPath) {
 function fakeServerSource() {
   return [
     "'use strict';",
+    "var crypto = require('crypto');",
     "var fs = require('fs');",
     "var http = require('http');",
     "var args = process.argv.slice(2);",
@@ -281,6 +283,34 @@ function fakeServerSource() {
     "  }",
     "  res.writeHead(404);",
     "  res.end();",
+    "});",
+    "server.on('upgrade', function (req, socket) {",
+    "  if (req.url !== '/ws/status') { socket.destroy(); return; }",
+    "  var key = req.headers['sec-websocket-key'] || '';",
+    "  var accept = crypto.createHash('sha1')",
+    "    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')",
+    "    .digest('base64');",
+    "  var payload = Buffer.from(JSON.stringify({ version: 1, agents: [{",
+    "    agent_id: 'codex-cli',",
+    "    display_name: 'Codex CLI',",
+    "    status: 'paused',",
+    "    process_count: 1,",
+    "    total_cpu_percent: 0.5,",
+    "    total_memory_mb: 42,",
+    "    max_uptime_seconds: 120",
+    "  }] }));",
+    "  var header = Buffer.alloc(payload.length < 126 ? 2 : 4);",
+    "  header[0] = 0x81;",
+    "  if (payload.length < 126) {",
+    "    header[1] = payload.length;",
+    "  } else {",
+    "    header[1] = 126;",
+    "    header.writeUInt16BE(payload.length, 2);",
+    "  }",
+    "  socket.write('HTTP/1.1 101 Switching Protocols\\r\\n' +",
+    "    'Upgrade: websocket\\r\\nConnection: Upgrade\\r\\n' +",
+    "    'Sec-WebSocket-Accept: ' + accept + '\\r\\n\\r\\n');",
+    "  socket.write(Buffer.concat([header, payload]));",
     "});",
     "server.listen(port, '127.0.0.1');",
     "function stop() { server.close(function () { process.exit(0); }); }",
@@ -435,6 +465,51 @@ async function assertPausedAgentMonitor(port, testDir) {
   assert.strictEqual(body.available, true, response.body);
   assert.strictEqual(body.agents.length, 1, response.body);
   assert.strictEqual(body.agents[0].status, 'paused', response.body);
+}
+
+async function assertAgentMonitorWebSocket(port, testDir) {
+  var tokenPath = path.join(testDir, 'home', '.config', 'gmc', 'gitweb-token');
+  var token = fs.readFileSync(tokenPath, 'utf8').trim();
+  var response = await requestWebSocket(port, token);
+  assert.ok(response.indexOf('HTTP/1.1 101 Switching Protocols') >= 0, response);
+  assert.ok(response.indexOf('"status":"paused"') >= 0, response);
+}
+
+function requestWebSocket(port, token) {
+  return new Promise(function (resolve) {
+    var settled = false;
+    var chunks = [];
+    var timer;
+    var socket = net.connect(port, '127.0.0.1', function () {
+      socket.write([
+        'GET /api/agent-monitor/ws HTTP/1.1',
+        'Host: 127.0.0.1:' + port,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Key: Z21jLWFnZW50LW1vbml0b3I=',
+        'Sec-WebSocket-Version: 13',
+        'X-GMC-Auth: ' + token,
+        '',
+        ''
+      ].join('\r\n'));
+    });
+    function finish() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      var response = Buffer.concat(chunks).toString('utf8');
+      socket.destroy();
+      resolve(response);
+    }
+    socket.on('data', function (chunk) {
+      chunks.push(chunk);
+      var response = Buffer.concat(chunks).toString('utf8');
+      if (response.indexOf('"status":"paused"') >= 0) finish();
+    });
+    socket.on('error', finish);
+    socket.on('close', finish);
+    timer = setTimeout(finish, 1500);
+  });
 }
 
 function request(port, method, requestPath, token) {

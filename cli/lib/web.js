@@ -4,6 +4,7 @@ var childProcess = require('child_process');
 var crypto = require('crypto');
 var fs = require('fs');
 var http = require('http');
+var net = require('net');
 var os = require('os');
 var path = require('path');
 var url = require('url');
@@ -75,6 +76,7 @@ function listen(port, attempt) {
       res.on('finish', function () { clearTimeout(timer); });
       handleRequest(req, res);
     });
+    server.on('upgrade', handleAgentMonitorUpgrade);
     server.timeout = 30000;
     server.keepAliveTimeout = 10000;
     server.headersTimeout = 15000;
@@ -524,6 +526,88 @@ function handleAgentMonitor(req, res) {
   });
 }
 
+function handleAgentMonitorUpgrade(req, socket, head) {
+  var parsed;
+  try {
+    parsed = url.parse(req.url, true);
+  } catch (error) {
+    sendWebSocketUpgradeError(socket, 400, 'Bad Request');
+    return;
+  }
+  if (parsed.pathname !== '/api/agent-monitor/ws') {
+    sendWebSocketUpgradeError(socket, 404, 'Not Found');
+    return;
+  }
+  if (isExternalAccessBlocked(req)) {
+    sendWebSocketUpgradeError(socket, 403, 'Forbidden');
+    return;
+  }
+  if (requiresAuth(req, parsed) && !isAuthorizedRequest(req)) {
+    sendWebSocketUpgradeError(socket, 401, 'Unauthorized');
+    return;
+  }
+
+  var monitor = resolveAgentMonitorConfig();
+  if (!monitor.enabled || monitor.healthy === false) {
+    sendWebSocketUpgradeError(socket, 503, 'Service Unavailable');
+    return;
+  }
+
+  var connected = false;
+  var upstream = net.connect(monitor.port, monitor.hostname);
+  upstream.setTimeout(AGENT_MONITOR_TIMEOUT_MS, function () {
+    upstream.destroy();
+    if (!connected) sendWebSocketUpgradeError(socket, 504, 'Gateway Timeout');
+  });
+  upstream.on('connect', function () {
+    connected = true;
+    upstream.setTimeout(0);
+    upstream.write(agentMonitorWebSocketRequest(req, monitor));
+    if (head && head.length) upstream.write(head);
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+  });
+  upstream.on('error', function () {
+    if (!connected) sendWebSocketUpgradeError(socket, 502, 'Bad Gateway');
+    else socket.destroy();
+  });
+  socket.on('error', function () {
+    upstream.destroy();
+  });
+  socket.on('close', function () {
+    upstream.destroy();
+  });
+}
+
+function agentMonitorWebSocketRequest(req, monitor) {
+  var lines = [
+    'GET ' + monitor.websocketPath + ' HTTP/1.1',
+    'Host: ' + formatUrlHost(monitor.hostname) + ':' + monitor.port,
+    'Upgrade: websocket',
+    'Connection: Upgrade'
+  ];
+  [
+    'sec-websocket-key',
+    'sec-websocket-version',
+    'sec-websocket-protocol',
+    'sec-websocket-extensions',
+    'origin',
+    'user-agent'
+  ].forEach(function (name) {
+    if (req.headers[name]) lines.push(name + ': ' + req.headers[name]);
+  });
+  return lines.join('\r\n') + '\r\n\r\n';
+}
+
+function sendWebSocketUpgradeError(socket, statusCode, statusText) {
+  if (!socket || socket.destroyed || socket.writableEnded) return;
+  socket.end(
+    'HTTP/1.1 ' + statusCode + ' ' + statusText + '\r\n' +
+    'Connection: close\r\n' +
+    'Content-Length: 0\r\n\r\n'
+  );
+}
+
 function resolveAgentMonitorConfig() {
   var runtime = agentMonitorRuntime || {};
   var runtimeStatus = String(runtime.status || '').toLowerCase();
@@ -563,7 +647,7 @@ function resolveAgentMonitorConfig() {
     return { enabled: true, healthy: false, reason: 'invalid_configuration' };
   }
   var basePath = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname.replace(/\/$/, '') : '';
-  basePath = basePath.replace(/\/(?:health|agents|status)$/, '');
+  basePath = basePath.replace(/\/(?:health|agents|status|ws\/status)$/, '');
   return {
     enabled: true,
     healthy: runtime.healthy === false || runtime.available === false ||
@@ -572,7 +656,8 @@ function resolveAgentMonitorConfig() {
     reason: runtimeReason,
     hostname: parsed.hostname,
     port: normalizePort(parsed.port || port),
-    path: basePath + '/agents'
+    path: basePath + '/agents',
+    websocketPath: basePath + '/ws/status'
   };
 }
 
@@ -3887,11 +3972,11 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-agent-monitor[data-monitor-state="working"] .task-agent-monitor-state::before { animation: taskDotBreathing 1.8s ease-in-out infinite; }
 .task-agent-monitor[data-monitor-state="idle"] .task-agent-monitor-state { color: var(--amber); }
 .task-agent-monitor[data-monitor-state="paused"] {
-  border-color: color-mix(in srgb, var(--rose) 68%, var(--line));
-  background: color-mix(in srgb, var(--rose) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--amber) 72%, var(--line));
+  background: var(--panel);
   animation: agentMonitorPausedBreathing 1.4s ease-in-out infinite;
 }
-.task-agent-monitor[data-monitor-state="paused"] .task-agent-monitor-state { color: var(--rose); }
+.task-agent-monitor[data-monitor-state="paused"] .task-agent-monitor-state { color: var(--amber); }
 .task-agent-monitor[data-monitor-state="paused"] .task-agent-monitor-state::before {
   animation: taskDotBreathing 1.1s ease-in-out infinite;
 }
@@ -4158,12 +4243,12 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 }
 @keyframes agentMonitorPausedBreathing {
   0%, 100% {
-    background: color-mix(in srgb, var(--rose) 9%, var(--panel));
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--rose) 5%, transparent);
+    background: var(--panel);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 5%, transparent);
   }
   50% {
-    background: color-mix(in srgb, var(--rose) 22%, var(--panel));
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--rose) 20%, transparent);
+    background: color-mix(in srgb, var(--amber) 48%, var(--panel));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber) 24%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -4693,8 +4778,9 @@ var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
 var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
+var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [] }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [] }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -6276,6 +6362,7 @@ function startAgentMonitorPolling() {
     renderTaskBoard();
   }
   loadAgentMonitor();
+  connectAgentMonitorSocket();
 }
 
 function stopAgentMonitorPolling() {
@@ -6287,6 +6374,17 @@ function stopAgentMonitorPolling() {
     state.agentMonitorRequest.abort();
     state.agentMonitorRequest = null;
   }
+  if (state.agentMonitorReconnectTimer) {
+    clearTimeout(state.agentMonitorReconnectTimer);
+    state.agentMonitorReconnectTimer = null;
+  }
+  if (state.agentMonitorSocket) {
+    var socket = state.agentMonitorSocket;
+    state.agentMonitorSocket = null;
+    try {
+      socket.close();
+    } catch (error) {}
+  }
   state.agentMonitorLoading = false;
 }
 
@@ -6294,10 +6392,107 @@ function scheduleAgentMonitorPoll() {
   if (state.agentMonitorTimer) clearTimeout(state.agentMonitorTimer);
   state.agentMonitorTimer = null;
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  if (state.agentMonitorSocket &&
+      (state.agentMonitorSocket.readyState === WebSocket.CONNECTING ||
+       state.agentMonitorSocket.readyState === WebSocket.OPEN)) return;
   state.agentMonitorTimer = setTimeout(function() {
     state.agentMonitorTimer = null;
     loadAgentMonitor();
   }, AGENT_MONITOR_POLL_INTERVAL_MS);
+}
+
+function scheduleAgentMonitorReconnect() {
+  if (state.agentMonitorReconnectTimer) clearTimeout(state.agentMonitorReconnectTimer);
+  state.agentMonitorReconnectTimer = null;
+  if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  if (typeof window.WebSocket !== 'function') return;
+  state.agentMonitorReconnectTimer = setTimeout(function() {
+    state.agentMonitorReconnectTimer = null;
+    connectAgentMonitorSocket();
+  }, AGENT_MONITOR_RECONNECT_INTERVAL_MS);
+}
+
+function connectAgentMonitorSocket() {
+  if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  if (typeof window.WebSocket !== 'function') {
+    scheduleAgentMonitorPoll();
+    return;
+  }
+  if (state.agentMonitorSocket &&
+      (state.agentMonitorSocket.readyState === WebSocket.CONNECTING ||
+       state.agentMonitorSocket.readyState === WebSocket.OPEN)) return;
+
+  var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var socket = new WebSocket(protocol + '//' + window.location.host + '/api/agent-monitor/ws');
+  state.agentMonitorSocket = socket;
+
+  socket.addEventListener('open', function() {
+    if (state.agentMonitorSocket !== socket) return;
+    if (state.agentMonitorTimer) {
+      clearTimeout(state.agentMonitorTimer);
+      state.agentMonitorTimer = null;
+    }
+  });
+  socket.addEventListener('message', function(event) {
+    if (state.agentMonitorSocket !== socket) return;
+    var payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (error) {
+      return;
+    }
+    if (!payload || !Array.isArray(payload.agents)) return;
+    state.agentMonitor = {
+      status: 'ok',
+      available: true,
+      reason: '',
+      agents: normalizeAgentMonitorSocketAgents(payload.agents)
+    };
+    if (!state.draggedTaskId) renderTaskBoard();
+  });
+  socket.addEventListener('close', function() {
+    if (state.agentMonitorSocket !== socket) return;
+    state.agentMonitorSocket = null;
+    loadAgentMonitor({ force: true });
+    scheduleAgentMonitorReconnect();
+  });
+  socket.addEventListener('error', function() {
+    if (state.agentMonitorSocket !== socket) return;
+    try {
+      socket.close();
+    } catch (error) {}
+  });
+}
+
+function normalizeAgentMonitorSocketAgents(agents) {
+  return agents.slice(0, 50).map(function(item) {
+    var status = String(item && item.status || '').toLowerCase();
+    var processCount = Math.max(0, Math.floor(Number(
+      item && (item.process_count != null ? item.process_count : item.processCount)
+    ) || 0));
+    if (status !== 'working' && status !== 'idle' &&
+        status !== 'paused' && status !== 'stopped') {
+      status = 'unknown';
+    }
+    if (processCount === 0) status = 'stopped';
+    return {
+      agentId: String(item && (item.agent_id || item.agentId || item.id) || '').toLowerCase(),
+      displayName: String(item && (item.display_name || item.displayName) || ''),
+      status: status,
+      processCount: processCount,
+      cpuPercent: Math.max(0, Number(item && (
+        item.total_cpu_percent != null ? item.total_cpu_percent : item.cpuPercent
+      )) || 0),
+      memoryMb: Math.max(0, Number(item && (
+        item.total_memory_mb != null ? item.total_memory_mb : item.memoryMb
+      )) || 0),
+      uptimeSeconds: Math.max(0, Number(item && (
+        item.max_uptime_seconds != null ? item.max_uptime_seconds : item.uptimeSeconds
+      )) || 0)
+    };
+  }).filter(function(item) {
+    return item.agentId;
+  });
 }
 
 function loadAgentMonitor(options) {

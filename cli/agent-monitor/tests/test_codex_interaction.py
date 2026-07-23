@@ -7,8 +7,12 @@ from pathlib import Path
 
 from collectors.agents import (
     AGENT_DEFINITIONS,
+    _antigravity_log_needs_interaction,
+    _claude_session_needs_interaction,
     _codex_session_needs_interaction,
     _find_agent_processes,
+    _is_antigravity_paused,
+    _is_claude_code_paused,
     collect_agent_status,
 )
 
@@ -171,6 +175,184 @@ class CodexInteractionTests(unittest.TestCase):
             )
 
         self.assertEqual([process.pid for process in processes], [1234])
+
+    def test_claude_code_filter_matches_bare_cli_without_matching_desktop_app(self):
+        cli_process = MagicMock(pid=1234)
+        cli_process.cmdline.return_value = ["claude"]
+        app_process = MagicMock(pid=5678)
+        app_process.cmdline.return_value = [
+            "/Applications/Claude.app/Contents/MacOS/Claude",
+        ]
+        unrelated_process = MagicMock(pid=9012)
+        unrelated_process.cmdline.return_value = [
+            "python",
+            "-c",
+            'collect_agent_status("claude-code")',
+        ]
+        claude_definition = next(
+            definition
+            for definition in AGENT_DEFINITIONS
+            if definition["id"] == "claude-code"
+        )
+
+        with patch(
+            "collectors.agents.psutil.process_iter",
+            return_value=[cli_process, app_process, unrelated_process],
+        ):
+            processes = _find_agent_processes(
+                claude_definition["keywords"],
+                claude_definition["exclude_keywords"],
+            )
+
+        self.assertEqual([process.pid for process in processes], [1234])
+
+    def test_claude_pending_question_is_paused(self):
+        temp = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+        temp.write(json.dumps({
+            "type": "assistant",
+            "uuid": "assistant-1",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "question-1",
+                    "name": "AskUserQuestion",
+                }],
+            },
+        }) + "\n")
+        temp.close()
+        self.addCleanup(Path(temp.name).unlink)
+
+        self.assertTrue(_claude_session_needs_interaction(Path(temp.name)))
+
+    def test_claude_tool_result_resolves_question(self):
+        temp = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "question-1",
+                        "name": "AskUserQuestion",
+                    }],
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "question-1",
+                    }],
+                },
+            },
+        ]
+        for event in events:
+            temp.write(json.dumps(event) + "\n")
+        temp.close()
+        self.addCleanup(Path(temp.name).unlink)
+
+        self.assertFalse(_claude_session_needs_interaction(Path(temp.name)))
+
+    def test_claude_finds_current_project_transcript(self):
+        with tempfile.TemporaryDirectory() as home:
+            project_dir = Path(home) / ".claude" / "projects" / "-tmp-project"
+            project_dir.mkdir(parents=True)
+            transcript = project_dir / "session.jsonl"
+            transcript.write_text(json.dumps({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "question-1",
+                        "name": "AskUserQuestion",
+                    }],
+                },
+            }) + "\n")
+            process = MagicMock(pid=1234)
+            process.create_time.return_value = 0
+            process.open_files.return_value = []
+            process.cwd.return_value = "/tmp/project"
+
+            with (
+                patch("collectors.agents.Path.home", return_value=Path(home)),
+                patch("collectors.agents.psutil.Process", return_value=process),
+            ):
+                self.assertTrue(_is_claude_code_paused(1234))
+
+    def test_antigravity_pending_question_is_paused(self):
+        temp = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False)
+        temp.write(
+            "I0723 16:17:55.495557 53803 conversation_manager.go:499] "
+            "Forwarding user message to conversation abc\n"
+        )
+        temp.write(
+            "I0723 16:17:58.402125 53803 conversation_manager.go:729] "
+            "Surfacing ask_question at step 3\n"
+        )
+        temp.close()
+        self.addCleanup(Path(temp.name).unlink)
+
+        self.assertTrue(
+            _antigravity_log_needs_interaction(Path(temp.name), {53803})
+        )
+
+    def test_antigravity_user_response_resolves_question(self):
+        temp = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False)
+        temp.write(
+            "I0723 16:17:58.402125 53803 conversation_manager.go:729] "
+            "Surfacing ask_question at step 3\n"
+        )
+        temp.write(
+            "I0723 16:18:02.123456 53803 conversation_manager.go:499] "
+            "Forwarding user message to conversation abc\n"
+        )
+        temp.close()
+        self.addCleanup(Path(temp.name).unlink)
+
+        self.assertFalse(
+            _antigravity_log_needs_interaction(Path(temp.name), {53803})
+        )
+
+    def test_antigravity_finds_rotated_cli_log(self):
+        with tempfile.TemporaryDirectory() as home:
+            log_dir = Path(home) / ".gemini" / "antigravity-cli" / "log"
+            log_dir.mkdir(parents=True)
+            log_path = log_dir / "cli-20260723_161716.log"
+            log_path.write_text(
+                "I0723 16:17:58.402125 53803 conversation_manager.go:729] "
+                "Surfacing ask_question at step 3\n"
+            )
+            process = MagicMock(pid=53803)
+            process.create_time.return_value = 0
+            process.children.return_value = []
+            process.open_files.return_value = []
+
+            with (
+                patch("collectors.agents.Path.home", return_value=Path(home)),
+                patch("collectors.agents.psutil.Process", return_value=process),
+            ):
+                self.assertTrue(_is_antigravity_paused(53803))
+
+    def test_collector_marks_claude_code_as_paused(self):
+        process = MagicMock(pid=1234)
+        process.cmdline.return_value = ["claude"]
+        process.cpu_percent.return_value = 0.0
+        process.memory_info.return_value.rss = 64 * 1024 * 1024
+
+        with (
+            patch("collectors.agents._find_agent_processes", return_value=[process]),
+            patch("collectors.agents._get_process_uptime", return_value=10),
+            patch("collectors.agents._is_claude_code_paused", return_value=True),
+        ):
+            statuses = collect_agent_status("claude-code")
+
+        self.assertEqual(statuses[0].status, "paused")
+        self.assertEqual(statuses[0].processes[0]["status"], "paused")
 
 
 if __name__ == "__main__":
