@@ -183,6 +183,7 @@ async function testForegroundWebCleanup(tempDir, fakeServerPath, useSignal) {
   try {
     await waitForWeb(webPort, testDir, child);
     await waitForHealthy(monitorPort);
+    await assertPausedAgentMonitor(webPort, testDir);
     if (useSignal) {
       child.kill('SIGTERM');
     } else {
@@ -212,12 +213,14 @@ async function testBackgroundWebLifecycle(tempDir, fakeServerPath) {
     await runGmc(['web', '--start', '--port', String(webPort)], env);
     await waitForWeb(webPort, testDir);
     await waitForHealthy(monitorPort);
+    await assertPausedAgentMonitor(webPort, testDir);
     firstPid = await waitForMonitorPid(testDir, 1);
     assert.strictEqual(processIsAlive(firstPid), true);
 
     await runGmc(['web', '--restart', '--port', String(webPort)], env);
     await waitForWeb(webPort, testDir);
     await waitForHealthy(monitorPort);
+    await assertPausedAgentMonitor(webPort, testDir);
     secondPid = await waitForMonitorPid(testDir, 2);
     assert.notStrictEqual(secondPid, firstPid);
     await waitForProcessExit(firstPid);
@@ -265,7 +268,15 @@ function fakeServerSource() {
     "  }",
     "  if (req.url === '/agents') {",
     "    res.writeHead(200, { 'Content-Type': 'application/json' });",
-    "    res.end('[]');",
+    "    res.end(JSON.stringify([{",
+    "      agent_id: 'codex-cli',",
+    "      display_name: 'Codex CLI',",
+    "      status: 'paused',",
+    "      process_count: 1,",
+    "      total_cpu_percent: 0.5,",
+    "      total_memory_mb: 42,",
+    "      max_uptime_seconds: 120",
+    "    }]));",
     "    return;",
     "  }",
     "  res.writeHead(404);",
@@ -413,6 +424,17 @@ async function quitWeb(port, testDir) {
   var token = fs.readFileSync(tokenPath, 'utf8').trim();
   var response = await request(port, 'POST', '/api/quit', token);
   assert.strictEqual(response.statusCode, 200, response.body);
+}
+
+async function assertPausedAgentMonitor(port, testDir) {
+  var tokenPath = path.join(testDir, 'home', '.config', 'gmc', 'gitweb-token');
+  var token = fs.readFileSync(tokenPath, 'utf8').trim();
+  var response = await request(port, 'GET', '/api/agent-monitor', token);
+  assert.strictEqual(response.statusCode, 200, response.body);
+  var body = JSON.parse(response.body);
+  assert.strictEqual(body.available, true, response.body);
+  assert.strictEqual(body.agents.length, 1, response.body);
+  assert.strictEqual(body.agents[0].status, 'paused', response.body);
 }
 
 function request(port, method, requestPath, token) {

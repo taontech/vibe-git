@@ -652,7 +652,8 @@ function normalizeAgentMonitorAgents(value) {
     }
     var processCount = safeAgentMonitorNumber(item.process_count, true);
     var status = String(item.status || '').trim().toLowerCase();
-    if (status !== 'working' && status !== 'idle' && status !== 'stopped') {
+    if (status !== 'working' && status !== 'idle' &&
+        status !== 'paused' && status !== 'stopped') {
       status = 'unknown';
     }
     if (processCount === 0) status = 'stopped';
@@ -3885,6 +3886,15 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-agent-monitor[data-monitor-state="working"] .task-agent-monitor-state { color: var(--green); }
 .task-agent-monitor[data-monitor-state="working"] .task-agent-monitor-state::before { animation: taskDotBreathing 1.8s ease-in-out infinite; }
 .task-agent-monitor[data-monitor-state="idle"] .task-agent-monitor-state { color: var(--amber); }
+.task-agent-monitor[data-monitor-state="paused"] {
+  border-color: color-mix(in srgb, var(--rose) 68%, var(--line));
+  background: color-mix(in srgb, var(--rose) 10%, var(--panel));
+  animation: agentMonitorPausedBreathing 1.4s ease-in-out infinite;
+}
+.task-agent-monitor[data-monitor-state="paused"] .task-agent-monitor-state { color: var(--rose); }
+.task-agent-monitor[data-monitor-state="paused"] .task-agent-monitor-state::before {
+  animation: taskDotBreathing 1.1s ease-in-out infinite;
+}
 .task-agent-monitor[data-monitor-state="stopped"] .task-agent-monitor-state { color: var(--muted); }
 .task-agent-monitor[data-monitor-state="unavailable"] .task-agent-monitor-state,
 .task-agent-monitor[data-monitor-state="timeout"] .task-agent-monitor-state,
@@ -4146,8 +4156,19 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
   0%, 100% { transform: scale(.92); box-shadow: 0 0 0 3px color-mix(in srgb, var(--task-color, var(--accent)) 12%, transparent); }
   50% { transform: scale(1.08); box-shadow: 0 0 0 7px color-mix(in srgb, var(--task-color, var(--accent)) 24%, transparent); }
 }
+@keyframes agentMonitorPausedBreathing {
+  0%, 100% {
+    background: color-mix(in srgb, var(--rose) 9%, var(--panel));
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--rose) 5%, transparent);
+  }
+  50% {
+    background: color-mix(in srgb, var(--rose) 22%, var(--panel));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--rose) 20%, transparent);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ai-status-loader, .ai-status-sparkles, .task-dot.breathing, .task-agent-monitor-state::before { animation: none; }
+  .ai-status-loader, .ai-status-sparkles, .task-dot.breathing,
+  .task-agent-monitor, .task-agent-monitor-state::before { animation: none; }
 }
 @media (max-width: 1280px) { 
   .grid, .summary-panel { grid-template-columns: 1fr; } 
@@ -4865,6 +4886,7 @@ var I18N = {
     agentMonitorLoading: '正在加载运行状态...',
     agentMonitorWorking: '运行中',
     agentMonitorIdle: '空闲',
+    agentMonitorPaused: '需要交互',
     agentMonitorStopped: '未运行',
     agentMonitorUnavailable: '监控不可用',
     agentMonitorTimeout: '监控超时',
@@ -5090,6 +5112,7 @@ var I18N = {
     agentMonitorLoading: 'Loading runtime status...',
     agentMonitorWorking: 'Working',
     agentMonitorIdle: 'Idle',
+    agentMonitorPaused: 'Needs interaction',
     agentMonitorStopped: 'Not running',
     agentMonitorUnavailable: 'Monitor unavailable',
     agentMonitorTimeout: 'Monitor timed out',
@@ -5317,6 +5340,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   agentMonitorLoading: '実行状態を読み込み中...',
   agentMonitorWorking: '実行中',
   agentMonitorIdle: '待機中',
+  agentMonitorPaused: '操作が必要',
   agentMonitorStopped: '未実行',
   agentMonitorUnavailable: 'モニターを利用できません',
   agentMonitorTimeout: 'モニターがタイムアウトしました',
@@ -5528,6 +5552,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   agentMonitorLoading: '실행 상태 불러오는 중...',
   agentMonitorWorking: '작업 중',
   agentMonitorIdle: '대기 중',
+  agentMonitorPaused: '사용자 작업 필요',
   agentMonitorStopped: '실행 안 됨',
   agentMonitorUnavailable: '모니터를 사용할 수 없음',
   agentMonitorTimeout: '모니터 시간 초과',
@@ -5739,6 +5764,7 @@ I18N.es = Object.assign({}, I18N.en, {
   agentMonitorLoading: 'Cargando estado de ejecución...',
   agentMonitorWorking: 'Trabajando',
   agentMonitorIdle: 'Inactivo',
+  agentMonitorPaused: 'Requiere interacción',
   agentMonitorStopped: 'Sin ejecutar',
   agentMonitorUnavailable: 'Monitor no disponible',
   agentMonitorTimeout: 'Tiempo de espera agotado',
@@ -5950,6 +5976,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   agentMonitorLoading: 'Chargement de l’état d’exécution...',
   agentMonitorWorking: 'En cours',
   agentMonitorIdle: 'Inactif',
+  agentMonitorPaused: 'Interaction requise',
   agentMonitorStopped: 'Non démarré',
   agentMonitorUnavailable: 'Moniteur indisponible',
   agentMonitorTimeout: 'Délai du moniteur dépassé',
@@ -6597,7 +6624,8 @@ function agentMonitorColumnState(column) {
     };
   });
   var status = 'stopped';
-  if (entries.some(function(entry) { return entry.status === 'working'; })) status = 'working';
+  if (entries.some(function(entry) { return entry.status === 'paused'; })) status = 'paused';
+  else if (entries.some(function(entry) { return entry.status === 'working'; })) status = 'working';
   else if (entries.some(function(entry) { return entry.status === 'idle'; })) status = 'idle';
   else if (entries.some(function(entry) { return entry.status === 'unknown'; })) status = 'unknown';
   return {
@@ -6616,6 +6644,7 @@ function agentMonitorHtml(column) {
     loading: 'agentMonitorLoading',
     working: 'agentMonitorWorking',
     idle: 'agentMonitorIdle',
+    paused: 'agentMonitorPaused',
     stopped: 'agentMonitorStopped',
     unavailable: 'agentMonitorUnavailable',
     timeout: 'agentMonitorTimeout',
@@ -6623,7 +6652,9 @@ function agentMonitorHtml(column) {
   }[summary.status] || 'agentMonitorUnknown';
   var metrics = '';
   var sources = '';
-  if (summary.status === 'working' || summary.status === 'idle' || summary.status === 'stopped' || summary.status === 'unknown') {
+  if (summary.status === 'working' || summary.status === 'idle' ||
+      summary.status === 'paused' || summary.status === 'stopped' ||
+      summary.status === 'unknown') {
     metrics = '<div class="task-agent-monitor-metrics">' +
       '<span>' + escapeHtml(t('agentMonitorProcesses')) + ' ' + summary.processCount + '</span>' +
       '<span>CPU ' + escapeHtml(formatAgentMonitorNumber(summary.cpuPercent)) + '%</span>' +
