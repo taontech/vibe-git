@@ -29,7 +29,8 @@ var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
 var STATUS_CACHE_TTL_MS = process.env.GMC_STATUS_CACHE_MS ? Number(process.env.GMC_STATUS_CACHE_MS) : 10000;
 var TASK_EVENT_DEBOUNCE_MS = 100;
 var TASK_EVENT_HEARTBEAT_MS = 15000;
-var TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
+var TASK_AGENT_STATUSES = ['codex', 'claude', 'antigravity'];
+var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
 var statusCache = {};
 var taskEventChannels = Object.create(null);
@@ -277,6 +278,10 @@ function handleRequest(req, res) {
       }
       if (parsed.pathname === '/api/tasks/create') {
         handleCreateTask(req, res, parsed.query.repo);
+        return;
+      }
+      if (parsed.pathname === '/api/tasks/decompose') {
+        handleDecomposeTask(req, res, parsed.query.repo);
         return;
       }
       if (parsed.pathname === '/api/tasks/update') {
@@ -888,6 +893,15 @@ function handleCreateTask(req, res, targetRepo) {
   if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
   readJsonBody(req).then(function (body) {
     sendJson(res, createRepositoryTask(targetRepo, body));
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleDecomposeTask(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    sendJson(res, decomposeRepositoryTasks(targetRepo, body));
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -1829,6 +1843,47 @@ function createRepositoryTask(root, input) {
   };
 }
 
+function decomposeRepositoryTasks(root, input) {
+  var repoRoot = git.repoRoot(root);
+  input = input || {};
+  var title = String(input.title || '').trim();
+  var content = String(input.content || '').trim();
+  if (!title) throwHttpError('Task title is required');
+  if (title.length > 160) throwHttpError('Task title is too long');
+  if (content.length > 12000) throwHttpError('Task content is too long');
+
+  var selectedAgent = config.currentRepositoryTaskAgent(repoRoot);
+  var generated;
+  var decomposition;
+  try {
+    generated = agent.generateText(prompts.taskDecompositionPrompt({
+      title: title,
+      content: content
+    }), repoRoot, selectedAgent, {
+      outputPrefix: 'gmc-task-decomposition',
+      description: 'task decomposition'
+    });
+    decomposition = taskStatus.parseTaskDecomposition(generated);
+  } catch (error) {
+    var generationError = new Error('AI task decomposition failed: ' + error.message);
+    generationError.httpStatus = 500;
+    throw generationError;
+  }
+
+  var createdTasks = decomposition.map(function (task) {
+    return createRepositoryTask(repoRoot, {
+      title: task.title,
+      content: task.content,
+      status: 'todo'
+    }).task;
+  });
+  return {
+    agent: selectedAgent,
+    createdTasks: createdTasks,
+    tasks: readRepositoryTasks(repoRoot).tasks
+  };
+}
+
 function updateRepositoryTask(root, input, options) {
   var repoRoot = git.repoRoot(root);
   input = input || {};
@@ -1857,7 +1912,13 @@ function updateRepositoryTask(root, input, options) {
   if (Object.prototype.hasOwnProperty.call(input, 'status')) {
     task.status = normalizeTaskStatus(input.status);
   }
-  var shouldLaunchAgent = previousStatus === 'todo' && task.status === 'doing';
+  var selectedAgent = null;
+  if (previousStatus === 'todo' && TASK_AGENT_STATUSES.indexOf(task.status) >= 0) {
+    selectedAgent = task.status;
+  } else if (previousStatus === 'todo' && task.status === 'doing') {
+    selectedAgent = config.currentRepositoryTaskAgent(repoRoot);
+  }
+  var shouldLaunchAgent = !!selectedAgent;
   var agentLaunch = null;
   if (shouldLaunchAgent) {
     if (!options.allowAgentLaunch) {
@@ -1865,7 +1926,6 @@ function updateRepositoryTask(root, input, options) {
       localOnlyError.httpStatus = 403;
       throw localOnlyError;
     }
-    var selectedAgent = config.currentRepositoryTaskAgent(repoRoot);
     agentLaunch = openAgentAtRepository(repoRoot, selectedAgent, prompts.taskPrompt(task));
     agentLaunch.agent = selectedAgent;
     agentLaunch.taskId = task.id;
@@ -3452,7 +3512,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
 .task-field textarea { min-height: 98px; resize: vertical; line-height: 1.5; }
 .task-field input:focus, .task-field textarea:focus, .task-field select:focus { border-color: var(--accent); background: #fff; box-shadow: 0 0 0 3px rgba(6,141,109,.12); }
 .task-form-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.task-board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 14px; align-items: start; min-height: 360px; }
+.task-board { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 14px; align-items: start; min-height: 360px; }
 .task-column { position: relative; min-width: 0; min-height: 280px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.72); box-shadow: 0 1px 2px rgba(15,23,42,.04); transition: border-color .16s, background .16s, box-shadow .16s, transform .16s; }
 .task-column.drag-over { border-color: var(--accent); background: #f0fdf4; box-shadow: 0 16px 34px rgba(6,141,109,.14); transform: translateY(-2px); }
 .task-column-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
@@ -4036,7 +4096,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
         <div class="task-hero">
           <div class="task-hero-main">
             <h2 data-i18n="taskBoardTitle">仓库任务看板</h2>
-            <p data-i18n="taskBoardIntro">任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。这里先保持轻量，只管理标题、内容和状态。</p>
+            <p data-i18n="taskBoardIntro">任务保存在当前仓库的 .gmc/tasks 目录中。把待办任务移到 Agent 列即可启动对应 Agent。</p>
             <div class="task-meta-line">
               <span class="task-pill"><strong id="taskTotalCount">0</strong><span data-i18n="tasksCount">个任务</span></span>
               <span class="task-pill"><span data-i18n="taskStorage">存储</span><strong id="taskStoragePath">.gmc/tasks</strong></span>
@@ -4044,7 +4104,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </div>
           <div class="task-actions">
             <div id="repositoryTaskAgentSelector" class="task-repo-agent">
-              <span class="task-repo-agent-label" data-i18n="repositoryTaskAgentSetting">当前仓库 Task Agent</span>
+              <span class="task-repo-agent-label" data-i18n="repositoryTaskAgentSetting">任务分解 Agent</span>
               <div id="repositoryTaskAgentOptions" class="radio-group"></div>
               <div id="repositoryTaskAgentStatus" class="meta"></div>
             </div>
@@ -4071,6 +4131,7 @@ h2 { margin: 0; font-size: 12px; color: #475569; text-transform: uppercase; lett
           </div>
           <div class="task-form-actions">
             <button id="cancelTaskComposer" class="copy-button" type="button" data-i18n="cancel">取消</button>
+            <button id="decomposeTaskButton" class="copy-button" type="button" data-i18n="decomposeTask">AI 自动分解</button>
             <button id="createTaskButton" class="commit-button" type="submit" data-i18n="createTask">创建任务</button>
           </div>
         </form>
@@ -4381,7 +4442,7 @@ var I18N = {
     gitView: 'Git',
     taskView: 'Task',
     taskBoardTitle: '仓库任务看板',
-    taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中，随代码一起提交和拉取。把待办任务移到进行中时，当前选定的 Task Agent 会自动开始开发。',
+    taskBoardIntro: '任务保存在当前仓库的 .gmc/tasks 目录中。把待办任务移到 Codex、Claude 或 Antigravity 列，就会启动对应 Agent。',
     tasksCount: '个任务',
     taskStorage: '存储',
     refreshTasks: '刷新',
@@ -4392,13 +4453,19 @@ var I18N = {
     taskContentPlaceholder: '写下背景、想法或验收标准。支持 Markdown。',
     createTask: '创建任务',
     creatingTask: '创建中...',
+    decomposeTask: 'AI 自动分解',
+    decomposingTask: '正在分解...',
     loadingTasks: '正在加载任务...',
     taskLoadFailed: '任务加载失败：',
     taskCreateFailed: '任务创建失败：',
+    taskDecomposeFailed: '任务分解失败：',
     taskUpdateFailed: '任务更新失败：',
     noTasksInColumn: '这一列还没有任务',
     noRepoForTasks: '请先选择一个 Git 仓库来使用任务看板。',
     taskStatusTodo: '待办',
+    taskStatusCodex: 'Codex',
+    taskStatusClaude: 'Claude',
+    taskStatusAntigravity: 'Antigravity',
     taskStatusDoing: '进行中',
     taskStatusReview: '待确认',
     taskStatusDone: '已完成',
@@ -4428,8 +4495,8 @@ var I18N = {
     commitAgentSetting: 'Commit message Agent',
     commitAgentSettingHelp: '用于生成 commit message。',
     taskAgentSetting: 'Task Agent',
-    taskAgentSettingHelp: '用于任务进入进行中状态时启动开发。',
-    repositoryTaskAgentSetting: '当前仓库 Task Agent',
+    taskAgentSettingHelp: '作为仓库任务自动分解时的默认 Agent。',
+    repositoryTaskAgentSetting: '任务分解 Agent',
     agentSettingSaved: 'Agent 设置已保存',
     agentSettingSaveFailed: 'Agent 设置保存失败：'
   },
@@ -4585,7 +4652,7 @@ var I18N = {
     gitView: 'Git',
     taskView: 'Tasks',
     taskBoardTitle: 'Repository Task Board',
-    taskBoardIntro: 'Tasks are stored in .gmc/tasks inside this repository and travel with the code. Moving a todo task to Doing automatically starts development with the selected Task Agent.',
+    taskBoardIntro: 'Tasks are stored in .gmc/tasks. Move a todo task to the Codex, Claude, or Antigravity lane to start that agent.',
     tasksCount: 'tasks',
     taskStorage: 'Storage',
     refreshTasks: 'Refresh',
@@ -4596,13 +4663,19 @@ var I18N = {
     taskContentPlaceholder: 'Write context, notes, or acceptance criteria. Markdown is supported.',
     createTask: 'Create Task',
     creatingTask: 'Creating...',
+    decomposeTask: 'Decompose with AI',
+    decomposingTask: 'Decomposing...',
     loadingTasks: 'Loading tasks...',
     taskLoadFailed: 'Failed to load tasks: ',
     taskCreateFailed: 'Failed to create task: ',
+    taskDecomposeFailed: 'Failed to decompose task: ',
     taskUpdateFailed: 'Failed to update task: ',
     noTasksInColumn: 'No tasks in this lane yet',
     noRepoForTasks: 'Select a Git repository before using the task board.',
     taskStatusTodo: 'Todo',
+    taskStatusCodex: 'Codex',
+    taskStatusClaude: 'Claude',
+    taskStatusAntigravity: 'Antigravity',
     taskStatusDoing: 'Doing',
     taskStatusReview: 'Review',
     taskStatusDone: 'Done',
@@ -4632,8 +4705,8 @@ var I18N = {
     commitAgentSetting: 'Commit message agent',
     commitAgentSettingHelp: 'Used to generate commit messages.',
     taskAgentSetting: 'Task agent',
-    taskAgentSettingHelp: 'Used to start development when a task moves to Doing.',
-    repositoryTaskAgentSetting: 'Repository task agent',
+    taskAgentSettingHelp: 'Used as the default agent for repository task decomposition.',
+    repositoryTaskAgentSetting: 'Task decomposition agent',
     agentSettingSaved: 'Agent setting saved',
     agentSettingSaveFailed: 'Failed to save agent setting: '
   }
@@ -4785,7 +4858,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   restoredSuffix: ' 件。',
   taskView: 'タスク',
   taskBoardTitle: 'リポジトリタスクボード',
-  taskBoardIntro: 'タスクはこのリポジトリの .gmc/tasks に保存され、コードと一緒にコミットおよび pull されます。未着手のタスクを進行中に移すと、選択中のタスク Agent が自動的に開発を開始します。',
+  taskBoardIntro: 'タスクは .gmc/tasks に保存されます。未着手のタスクを Codex、Claude、Antigravity の列に移すと、対応する Agent が起動します。',
   tasksCount: '件のタスク',
   taskStorage: '保存先',
   refreshTasks: '更新',
@@ -4796,9 +4869,12 @@ I18N.ja = Object.assign({}, I18N.en, {
   taskContentPlaceholder: '背景、メモ、受け入れ条件を書いてください。Markdown に対応しています。',
   createTask: 'タスクを作成',
   creatingTask: '作成中...',
+  decomposeTask: 'AI で自動分解',
+  decomposingTask: '分解中...',
   loadingTasks: 'タスクを読み込み中...',
   taskLoadFailed: 'タスクの読み込みに失敗しました: ',
   taskCreateFailed: 'タスクの作成に失敗しました: ',
+  taskDecomposeFailed: 'タスクの分解に失敗しました: ',
   taskUpdateFailed: 'タスクの更新に失敗しました: ',
   noTasksInColumn: 'この列にはまだタスクがありません',
   noRepoForTasks: 'タスクボードを使う前に Git リポジトリを選択してください。',
@@ -4824,7 +4900,8 @@ I18N.ja = Object.assign({}, I18N.en, {
   commitAgentSetting: 'コミットメッセージ Agent',
   commitAgentSettingHelp: 'コミットメッセージの生成に使用します。',
   taskAgentSetting: 'タスク Agent',
-  taskAgentSettingHelp: 'タスクが進行中になったときに開発を開始するために使用します。',
+  taskAgentSettingHelp: 'リポジトリタスクの自動分解に使う既定の Agent です。',
+  repositoryTaskAgentSetting: 'タスク分解 Agent',
   agentSettingSaved: 'Agent 設定を保存しました',
   agentSettingSaveFailed: 'Agent 設定の保存に失敗しました: '
 });
@@ -4975,7 +5052,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   restoredSuffix: '개.',
   taskView: '작업',
   taskBoardTitle: '저장소 작업 보드',
-  taskBoardIntro: '작업은 이 저장소의 .gmc/tasks에 저장되며 코드와 함께 커밋 및 pull됩니다. 할 일 작업을 진행 중으로 옮기면 선택한 작업 Agent가 자동으로 개발을 시작합니다.',
+  taskBoardIntro: '작업은 .gmc/tasks에 저장됩니다. 할 일 작업을 Codex, Claude 또는 Antigravity 열로 옮기면 해당 Agent가 시작됩니다.',
   tasksCount: '개 작업',
   taskStorage: '저장 위치',
   refreshTasks: '새로고침',
@@ -4986,9 +5063,12 @@ I18N.ko = Object.assign({}, I18N.en, {
   taskContentPlaceholder: '배경, 메모 또는 인수 조건을 적으세요. Markdown을 지원합니다.',
   createTask: '작업 만들기',
   creatingTask: '만드는 중...',
+  decomposeTask: 'AI 자동 분해',
+  decomposingTask: '분해 중...',
   loadingTasks: '작업 불러오는 중...',
   taskLoadFailed: '작업을 불러오지 못했습니다: ',
   taskCreateFailed: '작업을 만들지 못했습니다: ',
+  taskDecomposeFailed: '작업 분해 실패: ',
   taskUpdateFailed: '작업을 업데이트하지 못했습니다: ',
   noTasksInColumn: '이 열에는 아직 작업이 없습니다',
   noRepoForTasks: '작업 보드를 사용하기 전에 Git 저장소를 선택하세요.',
@@ -5014,7 +5094,8 @@ I18N.ko = Object.assign({}, I18N.en, {
   commitAgentSetting: '커밋 메시지 Agent',
   commitAgentSettingHelp: '커밋 메시지를 생성할 때 사용합니다.',
   taskAgentSetting: '작업 Agent',
-  taskAgentSettingHelp: '작업이 진행 중으로 이동할 때 개발을 시작하는 데 사용합니다.',
+  taskAgentSettingHelp: '저장소 작업 자동 분해의 기본 Agent로 사용합니다.',
+  repositoryTaskAgentSetting: '작업 분해 Agent',
   agentSettingSaved: 'Agent 설정이 저장되었습니다',
   agentSettingSaveFailed: 'Agent 설정 저장 실패: '
 });
@@ -5165,7 +5246,7 @@ I18N.es = Object.assign({}, I18N.en, {
   restoredSuffix: ' archivo(s).',
   taskView: 'Tareas',
   taskBoardTitle: 'Tablero de tareas del repositorio',
-  taskBoardIntro: 'Las tareas se guardan en .gmc/tasks dentro de este repositorio y viajan con el código. Al mover una tarea pendiente a En curso, el agente de tareas seleccionado inicia el desarrollo automáticamente.',
+  taskBoardIntro: 'Las tareas se guardan en .gmc/tasks. Mueve una tarea pendiente a Codex, Claude o Antigravity para iniciar ese agente.',
   tasksCount: 'tareas',
   taskStorage: 'Almacenamiento',
   refreshTasks: 'Actualizar',
@@ -5176,9 +5257,12 @@ I18N.es = Object.assign({}, I18N.en, {
   taskContentPlaceholder: 'Escribe contexto, notas o criterios de aceptación. Markdown está soportado.',
   createTask: 'Crear tarea',
   creatingTask: 'Creando...',
+  decomposeTask: 'Desglosar con IA',
+  decomposingTask: 'Desglosando...',
   loadingTasks: 'Cargando tareas...',
   taskLoadFailed: 'Error al cargar tareas: ',
   taskCreateFailed: 'Error al crear tarea: ',
+  taskDecomposeFailed: 'Error al desglosar la tarea: ',
   taskUpdateFailed: 'Error al actualizar tarea: ',
   noTasksInColumn: 'Aún no hay tareas en esta columna',
   noRepoForTasks: 'Selecciona un repositorio Git antes de usar el tablero de tareas.',
@@ -5204,7 +5288,8 @@ I18N.es = Object.assign({}, I18N.en, {
   commitAgentSetting: 'Agente de commit messages',
   commitAgentSettingHelp: 'Se usa para generar commit messages.',
   taskAgentSetting: 'Agente de tareas',
-  taskAgentSettingHelp: 'Se usa para iniciar el desarrollo cuando una tarea pasa a En curso.',
+  taskAgentSettingHelp: 'Se usa como agente predeterminado para desglosar tareas del repositorio.',
+  repositoryTaskAgentSetting: 'Agente de desglose de tareas',
   agentSettingSaved: 'Ajuste del agente guardado',
   agentSettingSaveFailed: 'Error al guardar el ajuste del agente: '
 });
@@ -5355,7 +5440,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   restoredSuffix: ' fichier(s).',
   taskView: 'Tâches',
   taskBoardTitle: 'Tableau des tâches du dépôt',
-  taskBoardIntro: 'Les tâches sont stockées dans .gmc/tasks dans ce dépôt et voyagent avec le code. Déplacer une tâche À faire vers En cours lance automatiquement le développement avec l’Agent de tâche sélectionné.',
+  taskBoardIntro: 'Les tâches sont stockées dans .gmc/tasks. Déplacez une tâche vers Codex, Claude ou Antigravity pour lancer cet agent.',
   tasksCount: 'tâches',
   taskStorage: 'Stockage',
   refreshTasks: 'Actualiser',
@@ -5366,9 +5451,12 @@ I18N.fr = Object.assign({}, I18N.en, {
   taskContentPlaceholder: 'Ajoutez du contexte, des notes ou des critères d’acceptation. Markdown est pris en charge.',
   createTask: 'Créer la tâche',
   creatingTask: 'Création...',
+  decomposeTask: 'Décomposer avec l’IA',
+  decomposingTask: 'Décomposition...',
   loadingTasks: 'Chargement des tâches...',
   taskLoadFailed: 'Échec de chargement des tâches : ',
   taskCreateFailed: 'Échec de création de la tâche : ',
+  taskDecomposeFailed: 'Échec de décomposition de la tâche : ',
   taskUpdateFailed: 'Échec de mise à jour de la tâche : ',
   noTasksInColumn: 'Aucune tâche dans cette colonne',
   noRepoForTasks: 'Sélectionnez un dépôt Git avant d’utiliser le tableau des tâches.',
@@ -5394,7 +5482,8 @@ I18N.fr = Object.assign({}, I18N.en, {
   commitAgentSetting: 'Agent de commit message',
   commitAgentSettingHelp: 'Utilisé pour générer les commit messages.',
   taskAgentSetting: 'Agent de tâche',
-  taskAgentSettingHelp: 'Utilisé pour démarrer le développement lorsqu’une tâche passe en cours.',
+  taskAgentSettingHelp: 'Utilisé comme agent par défaut pour décomposer les tâches du dépôt.',
+  repositoryTaskAgentSetting: 'Agent de décomposition',
   agentSettingSaved: 'Paramètre de l’agent enregistré',
   agentSettingSaveFailed: 'Échec d’enregistrement du paramètre de l’agent : '
 });
@@ -5427,8 +5516,9 @@ function getPerfMeasure(name) {
 }
 var TASK_BOARD_STATUSES = [
   { id: 'todo', label: 'taskStatusTodo', color: '#0284c7' },
-  { id: 'doing', label: 'taskStatusDoing', color: '#16a34a' },
-  { id: 'review', label: 'taskStatusReview', color: '#d97706' },
+  { id: 'codex', label: 'taskStatusCodex', color: '#16a34a', agent: true },
+  { id: 'claude', label: 'taskStatusClaude', color: '#d97706', agent: true },
+  { id: 'antigravity', label: 'taskStatusAntigravity', color: '#7c3aed', agent: true },
   { id: 'done', label: 'taskStatusDone', color: '#64748b' }
 ];
 
@@ -5558,10 +5648,12 @@ function bindTaskControls() {
   var refresh = $('refreshTasks');
   var openComposer = $('openTaskComposer');
   var cancelComposer = $('cancelTaskComposer');
+  var decompose = $('decomposeTaskButton');
   var form = $('taskComposer');
   if (refresh) refresh.addEventListener('click', function() { loadRepositoryTasks({ force: true }); });
   if (openComposer) openComposer.addEventListener('click', function() { showTaskComposer(true); });
   if (cancelComposer) cancelComposer.addEventListener('click', function() { showTaskComposer(false); });
+  if (decompose) decompose.addEventListener('click', decomposeTaskFromForm);
   if (form) {
     form.addEventListener('submit', function(event) {
       event.preventDefault();
@@ -5656,25 +5748,38 @@ function connectTaskEvents() {
 }
 
 function createTaskFromForm() {
+  submitTaskForm(false);
+}
+
+function decomposeTaskFromForm() {
+  submitTaskForm(true);
+}
+
+function submitTaskForm(decompose) {
   if (!targetRepo) {
     setTaskError(t('noRepoForTasks'));
     return;
   }
   var title = $('taskTitleInput');
   var content = $('taskContentInput');
-  var button = $('createTaskButton');
+  var createButton = $('createTaskButton');
+  var decomposeButton = $('decomposeTaskButton');
+  var button = decompose ? decomposeButton : createButton;
   var titleValue = title ? title.value.trim() : '';
   var contentValue = content ? content.value.trim() : '';
+  if (createButton && createButton.disabled || decomposeButton && decomposeButton.disabled) return;
   if (!titleValue) {
     if (title) title.focus();
     return;
   }
 
   if (button) {
-    button.disabled = true;
-    button.textContent = t('creatingTask');
+    button.textContent = t(decompose ? 'decomposingTask' : 'creatingTask');
   }
-  fetch('/api/tasks/create?repo=' + encodeURIComponent(targetRepo), {
+  if (createButton) createButton.disabled = true;
+  if (decomposeButton) decomposeButton.disabled = true;
+  var endpoint = decompose ? '/api/tasks/decompose' : '/api/tasks/create';
+  fetch(endpoint + '?repo=' + encodeURIComponent(targetRepo), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: titleValue, content: contentValue, status: 'todo' })
@@ -5696,12 +5801,16 @@ function createTaskFromForm() {
       refreshRepositoryStatus();
     })
     .catch(function(error) {
-      setTaskError(t('taskCreateFailed') + error.message);
+      setTaskError(t(decompose ? 'taskDecomposeFailed' : 'taskCreateFailed') + error.message);
     })
     .finally(function() {
-      if (button) {
-        button.disabled = false;
-        button.textContent = t('createTask');
+      if (createButton) {
+        createButton.disabled = false;
+        createButton.textContent = t('createTask');
+      }
+      if (decomposeButton) {
+        decomposeButton.disabled = false;
+        decomposeButton.textContent = t('decomposeTask');
       }
     });
 }
@@ -5760,7 +5869,7 @@ function deleteTask(taskId) {
 function moveTask(taskId, direction) {
   var task = findRepoTask(taskId);
   if (!task) return;
-  var index = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(task.status);
+  var index = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(taskBoardStatus(task.status));
   var next = TASK_BOARD_STATUSES[index + direction];
   if (next) updateTaskStatus(taskId, next.id);
 }
@@ -5770,7 +5879,14 @@ function findRepoTask(taskId) {
 }
 
 function taskStatusMeta(status) {
+  status = taskBoardStatus(status);
   return TASK_BOARD_STATUSES.find(function(item) { return item.id === status; }) || TASK_BOARD_STATUSES[0];
+}
+
+function taskBoardStatus(status) {
+  if (status === 'doing') return 'codex';
+  if (status === 'review') return 'done';
+  return status;
 }
 
 function renderTaskBoard() {
@@ -5789,8 +5905,8 @@ function renderTaskBoard() {
   }
 
   board.innerHTML = TASK_BOARD_STATUSES.map(function(column) {
-    var tasks = (state.repoTasks || []).filter(function(task) { return task.status === column.id; });
-    var dotClass = column.id === 'doing' && tasks.length ? 'task-dot breathing' : 'task-dot';
+    var tasks = (state.repoTasks || []).filter(function(task) { return taskBoardStatus(task.status) === column.id; });
+    var dotClass = column.agent && tasks.length ? 'task-dot breathing' : 'task-dot';
     var cards = tasks.length ? tasks.map(function(task) {
       return taskCardHtml(task, column);
     }).join('') : '<div class="task-empty">' + escapeHtml(t('noTasksInColumn')) + '</div>';
@@ -5806,7 +5922,7 @@ function renderTaskBoard() {
 }
 
 function taskCardHtml(task, column) {
-  var statusIndex = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(task.status);
+  var statusIndex = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(taskBoardStatus(task.status));
   var canMoveLeft = statusIndex > 0;
   var canMoveRight = statusIndex < TASK_BOARD_STATUSES.length - 1;
   var summary = taskSummary(task.content);
@@ -5883,7 +5999,7 @@ function bindRenderedTaskBoard() {
       var taskId = state.draggedTaskId || event.dataTransfer && event.dataTransfer.getData('text/plain');
       var status = column.getAttribute('data-task-status');
       var task = findRepoTask(taskId);
-      if (task && task.status !== status) updateTaskStatus(taskId, status);
+      if (task && taskBoardStatus(task.status) !== status) updateTaskStatus(taskId, status);
     });
   });
 }

@@ -4,9 +4,12 @@ var fs = require('fs');
 var path = require('path');
 var git = require('./git');
 
-var TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
+var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'doing', 'review', 'done'];
 var STATUS_RANK = {
   todo: 0,
+  codex: 1,
+  claude: 1,
+  antigravity: 1,
   doing: 1,
   review: 2,
   done: 3
@@ -60,6 +63,40 @@ function parseCommitPlan(text) {
     message: parsed.message,
     taskUpdates: parsed.taskUpdates
   };
+}
+
+function parseTaskDecomposition(text) {
+  var jsonText = extractJson(text);
+  var parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (error) {
+    try {
+      parsed = JSON.parse(sanitizeJson(jsonText));
+    } catch (e2) {
+      throw new Error('Could not parse AI task decomposition as JSON: ' + firstLine(text));
+    }
+  }
+  if (!parsed || !Array.isArray(parsed.tasks) || !parsed.tasks.length) {
+    throw new Error('AI task decomposition must contain at least one task.');
+  }
+  if (parsed.tasks.length > 20) {
+    throw new Error('AI task decomposition returned more than 20 tasks.');
+  }
+  return parsed.tasks.map(function (item, index) {
+    var title = item && typeof item.title === 'string' ? item.title.trim() : '';
+    var content = item && typeof item.content === 'string' ? item.content.trim() : '';
+    if (!title) {
+      throw new Error('AI task decomposition task ' + (index + 1) + ' is missing a title.');
+    }
+    if (title.length > 160) {
+      throw new Error('AI task decomposition task ' + (index + 1) + ' title is too long.');
+    }
+    if (content.length > 12000) {
+      throw new Error('AI task decomposition task ' + (index + 1) + ' content is too long.');
+    }
+    return { title: title, content: content };
+  });
 }
 
 function extractJson(text) {
@@ -257,6 +294,7 @@ function firstLine(value) {
 module.exports = {
   applyUpdates: applyUpdates,
   parseCommitPlan: parseCommitPlan,
+  parseTaskDecomposition: parseTaskDecomposition,
   readRepositoryTasks: readRepositoryTasks,
   readUnfinishedTasksForPrompt: readUnfinishedTasksForPrompt,
   taskForPrompt: taskForPrompt

@@ -62,6 +62,33 @@ function taskPrompt(task) {
     'Modify the task status to "done" after the task is completed.';
 }
 
+function taskDecompositionPrompt(requirement) {
+  return [
+    'Break the following repository requirement into a small set of concrete, independently actionable development tasks.',
+    '',
+    'Return JSON only. Do not use markdown or code fences.',
+    'Schema: {"tasks":[{"title":"concise task title","content":"implementation scope and acceptance criteria in Markdown"}]}',
+    '',
+    'Rules:',
+    '- Produce between 1 and 8 tasks, using fewer tasks when the requirement is already focused.',
+    '- Prefer dividing tasks by type of work, such as UI, backend logic, algorithms, tests, or documentation.',
+    '- Make tasks as independent as possible so agents can implement and verify them in parallel.',
+    '- Combine work into one task when it has strong dependencies or would inevitably create substantial merge conflicts.',
+    '- When the affected files can be determined, state which existing files each task may modify; new files are not restricted.',
+    '- Avoid assigning the same existing file to multiple tasks whenever possible.',
+    '- Order tasks by dependency. When dependencies or shared existing files cannot be avoided, explicitly describe the dependency and merge-conflict risk in the task content.',
+    '- Preserve all important constraints and acceptance criteria from the requirement.',
+    '- Do not include task IDs or statuses; GMC assigns IDs and adds every generated task to Todo.',
+    '- Do not create a separate planning-only task.',
+    '',
+    'Requirement title:',
+    requirement.title,
+    '',
+    'Requirement details:',
+    requirement.content || '(none)'
+  ].join('\n');
+}
+
 function commitMessagePrompt(binding, diff, status, options) {
   options = options || {};
   var changeDescription = options.changeDescription || 'staged changes';
@@ -118,7 +145,7 @@ function commitMessagePlanPrompt(binding, diff, status, tasks, options) {
     'Generate a clear Git commit message and decide whether this commit should update repository task statuses.',
     '',
     'Return JSON only. Do not use markdown or code fences.',
-    'Schema: {"message":"commit subject\\n\\ncommit body","taskUpdates":[{"id":"GMC-0001","status":"doing","reason":"short reason"}]}',
+    'Schema: {"message":"commit subject\\n\\ncommit body","taskUpdates":[{"id":"GMC-0001","status":"done","reason":"short reason"}]}',
     '',
     'Commit message rules:',
     '- The message field must contain only the commit message text.',
@@ -142,13 +169,12 @@ function commitMessagePlanPrompt(binding, diff, status, tasks, options) {
     '',
     'Task status rules:',
     '- Only update tasks clearly related to the diff.',
-    '- Use status "doing" when the diff starts or partially implements a task but does not clearly finish it.',
-    '- Use status "review" when the diff appears implemented but still needs review or verification.',
     '- Use status "done" when the diff clearly completes the task.',
+    '- Leave partially implemented tasks in their current Todo or agent lane.',
     '- Do not move a task backward, for example from done to doing.',
     '- Do not change unrelated tasks.',
     '- If no task should change, use an empty taskUpdates array.',
-    '- Allowed task statuses: todo, doing, review, done.',
+    '- The only status this plan may assign is done. Current in-progress lane statuses may be codex, claude, or antigravity.',
     ''
   ]);
   if (binding) {
@@ -210,6 +236,7 @@ function mergeConflictPrompt(options) {
 module.exports = {
   issuePrompt: issuePrompt,
   taskPrompt: taskPrompt,
+  taskDecompositionPrompt: taskDecompositionPrompt,
   commitMessagePrompt: commitMessagePrompt,
   commitMessagePlanPrompt: commitMessagePlanPrompt,
   mergeConflictPrompt: mergeConflictPrompt,
