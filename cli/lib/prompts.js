@@ -67,11 +67,12 @@ function taskDecompositionPrompt(requirement) {
     'Break the following repository requirement into a small set of concrete, independently actionable development tasks.',
     '',
     'Return JSON only. Do not use markdown or code fences.',
-    'Schema: {"tasks":[{"title":"concise task title","content":"implementation scope and acceptance criteria in Markdown"}]}',
+    'Schema: {"tasks":[{"content":"concise task summary followed by implementation scope and acceptance criteria in Markdown"}]}',
     '',
     'Rules:',
     '- Produce between 2 and 8 tasks. Never return a single restatement of the original requirement.',
     '- Every generated task must be narrower than the original requirement and have a distinct implementation or verification scope.',
+    '- Begin each task content with a concise standalone summary because tasks do not have a separate title field.',
     '- Prefer dividing tasks by type of work, such as UI, backend logic, algorithms, tests, or documentation.',
     '- Make tasks as independent as possible so agents can implement and verify them in parallel.',
     '- Combine work into one task when it has strong dependencies or would inevitably create substantial merge conflicts.',
@@ -82,11 +83,8 @@ function taskDecompositionPrompt(requirement) {
     '- Do not include task IDs or statuses; GMC assigns IDs and adds every generated task to Todo.',
     '- Do not create a separate planning-only task.',
     '',
-    'Requirement title:',
-    requirement.title,
-    '',
-    'Requirement details:',
-    requirement.content || '(none)'
+    'Requirement:',
+    requirement.content || '(empty)'
   ].join('\n');
 }
 

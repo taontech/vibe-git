@@ -18,7 +18,6 @@ var STATUS_RANK = {
 function taskForPrompt(task) {
   return {
     id: task.id,
-    title: task.title,
     status: task.status,
     content: task.content
   };
@@ -84,18 +83,14 @@ function parseTaskDecomposition(text) {
     throw new Error('AI task decomposition returned more than 20 tasks.');
   }
   return parsed.tasks.map(function (item, index) {
-    var title = item && typeof item.title === 'string' ? item.title.trim() : '';
     var content = item && typeof item.content === 'string' ? item.content.trim() : '';
-    if (!title) {
-      throw new Error('AI task decomposition task ' + (index + 1) + ' is missing a title.');
-    }
-    if (title.length > 160) {
-      throw new Error('AI task decomposition task ' + (index + 1) + ' title is too long.');
+    if (!content) {
+      throw new Error('AI task decomposition task ' + (index + 1) + ' is missing content.');
     }
     if (content.length > 12000) {
       throw new Error('AI task decomposition task ' + (index + 1) + ' content is too long.');
     }
-    return { title: title, content: content };
+    return { content: content };
   });
 }
 
@@ -183,15 +178,18 @@ function readRepositoryTaskFile(repoRoot, filePath) {
   var parsed = parseTaskMarkdown(raw);
   var id = normalizeTaskId(parsed.meta.id) || normalizeTaskId(path.basename(filePath, '.md'));
   if (!id) return null;
-  return {
+  var task = {
     id: id,
-    title: String(parsed.meta.title || firstMarkdownHeading(parsed.content) || id).trim().slice(0, 160),
     status: normalizeTaskStatus(parsed.meta.status || 'todo') || 'todo',
     created: String(parsed.meta.created || ''),
     updated: String(parsed.meta.updated || parsed.meta.created || ''),
     content: parsed.content.trim(),
     path: path.relative(repoRoot, filePath)
   };
+  if (parsed.meta.title) {
+    task.title = String(parsed.meta.title).trim().slice(0, 160);
+  }
+  return task;
 }
 
 function writeRepositoryTask(repoRoot, task) {
@@ -205,10 +203,14 @@ function writeRepositoryTask(repoRoot, task) {
 }
 
 function taskMarkdown(task) {
-  return [
+  var lines = [
     '---',
     'id: ' + task.id,
-    'title: ' + JSON.stringify(task.title || task.id),
+  ];
+  if (task.title) {
+    lines.push('title: ' + JSON.stringify(task.title));
+  }
+  return lines.concat([
     'status: ' + (normalizeTaskStatus(task.status) || 'todo'),
     'created: ' + JSON.stringify(task.created || new Date().toISOString()),
     'updated: ' + JSON.stringify(task.updated || task.created || new Date().toISOString()),
@@ -216,7 +218,7 @@ function taskMarkdown(task) {
     '',
     String(task.content || '').trim(),
     ''
-  ].join('\n');
+  ]).join('\n');
 }
 
 function parseTaskMarkdown(raw) {
@@ -247,15 +249,6 @@ function parseTaskScalar(value) {
     } catch (e) { /* fall back */ }
   }
   return value;
-}
-
-function firstMarkdownHeading(content) {
-  var lines = String(content || '').split(/\r?\n/);
-  for (var i = 0; i < lines.length; i++) {
-    var match = /^#\s+(.+)$/.exec(lines[i].trim());
-    if (match) return match[1];
-  }
-  return '';
 }
 
 function repositoryTasksDir(repoRoot) {

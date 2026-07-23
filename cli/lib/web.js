@@ -2134,17 +2134,14 @@ function readRepositoryTasks(root) {
 function createRepositoryTask(root, input) {
   var repoRoot = git.repoRoot(root);
   input = input || {};
-  var title = String(input.title || '').trim();
   var content = String(input.content || '').trim();
   var status = normalizeTaskStatus(input.status || 'todo');
-  if (!title) throwHttpError('Task title is required');
-  if (title.length > 160) throwHttpError('Task title is too long');
+  if (!content) throwHttpError('Task content is required');
   if (content.length > 12000) throwHttpError('Task content is too long');
 
   var now = new Date().toISOString();
   var task = {
     id: nextRepositoryTaskId(repoRoot),
-    title: title,
     status: status,
     created: now,
     updated: now,
@@ -2160,15 +2157,12 @@ function createRepositoryTask(root, input) {
 function decomposeRepositoryTasks(root, input) {
   var repoRoot = git.repoRoot(root);
   input = input || {};
-  var title = String(input.title || '').trim();
   var content = String(input.content || '').trim();
-  if (!title) throwHttpError('Task title is required');
-  if (title.length > 160) throwHttpError('Task title is too long');
+  if (!content) throwHttpError('Task content is required');
   if (content.length > 12000) throwHttpError('Task content is too long');
 
   var selectedAgent = config.currentRepositoryTaskAgent(repoRoot);
   return agent.generateTextAsync(prompts.taskDecompositionPrompt({
-    title: title,
     content: content
   }), repoRoot, selectedAgent, {
     outputPrefix: 'gmc-task-decomposition',
@@ -2178,7 +2172,6 @@ function decomposeRepositoryTasks(root, input) {
   }).then(function (decomposition) {
     var createdTasks = decomposition.map(function (task) {
       return createRepositoryTask(repoRoot, {
-        title: task.title,
         content: task.content,
         status: 'todo'
       }).task;
@@ -2209,14 +2202,9 @@ function updateRepositoryTask(root, input, options) {
   var task = readRepositoryTaskFile(repoRoot, filePath);
   if (!task) throwHttpError('Task not found: ' + id);
   var previousStatus = task.status;
-  if (Object.prototype.hasOwnProperty.call(input, 'title')) {
-    var title = String(input.title || '').trim();
-    if (!title) throwHttpError('Task title is required');
-    if (title.length > 160) throwHttpError('Task title is too long');
-    task.title = title;
-  }
   if (Object.prototype.hasOwnProperty.call(input, 'content')) {
     var content = String(input.content || '').trim();
+    if (!content) throwHttpError('Task content is required');
     if (content.length > 12000) throwHttpError('Task content is too long');
     task.content = content;
   }
@@ -2280,15 +2268,18 @@ function readRepositoryTaskFile(repoRoot, filePath) {
   var parsed = parseTaskMarkdown(raw);
   var id = normalizeTaskId(parsed.meta.id) || normalizeTaskId(path.basename(filePath, '.md'));
   if (!id) return null;
-  return {
+  var task = {
     id: id,
-    title: String(parsed.meta.title || firstMarkdownHeading(parsed.content) || id).trim().slice(0, 160),
     status: normalizeTaskStatus(parsed.meta.status || 'todo'),
     created: String(parsed.meta.created || ''),
     updated: String(parsed.meta.updated || parsed.meta.created || ''),
     content: parsed.content.trim(),
     path: path.relative(repoRoot, filePath)
   };
+  if (parsed.meta.title) {
+    task.title = String(parsed.meta.title).trim().slice(0, 160);
+  }
+  return task;
 }
 
 function writeRepositoryTask(repoRoot, task) {
@@ -2300,10 +2291,14 @@ function writeRepositoryTask(repoRoot, task) {
 }
 
 function taskMarkdown(task) {
-  return [
+  var lines = [
     '---',
     'id: ' + task.id,
-    'title: ' + JSON.stringify(task.title || task.id),
+  ];
+  if (task.title) {
+    lines.push('title: ' + JSON.stringify(task.title));
+  }
+  return lines.concat([
     'status: ' + normalizeTaskStatus(task.status || 'todo'),
     'created: ' + JSON.stringify(task.created || new Date().toISOString()),
     'updated: ' + JSON.stringify(task.updated || task.created || new Date().toISOString()),
@@ -2311,7 +2306,7 @@ function taskMarkdown(task) {
     '',
     String(task.content || '').trim(),
     ''
-  ].join('\n');
+  ]).join('\n');
 }
 
 function parseTaskMarkdown(raw) {
@@ -2342,15 +2337,6 @@ function parseTaskScalar(value) {
     } catch (e) { /* fall back */ }
   }
   return value;
-}
-
-function firstMarkdownHeading(content) {
-  var lines = String(content || '').split(/\r?\n/);
-  for (var i = 0; i < lines.length; i++) {
-    var match = /^#\s+(.+)$/.exec(lines[i].trim());
-    if (match) return match[1];
-  }
-  return '';
 }
 
 function nextRepositoryTaskId(repoRoot) {
@@ -3948,12 +3934,27 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-error.visible { display: block; }
 .task-composer { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); transform-origin: top right; animation: taskComposerIn .18s ease-out; }
 .task-composer[hidden] { display: none; }
-.task-form-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 12px; align-items: start; }
+.task-form-grid { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; }
 .task-field { display: grid; gap: 6px; min-width: 0; }
 .task-field label { color: var(--muted); font-size: 12px; font-weight: 750; }
 .task-field input, .task-field textarea, .task-field select { width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--input-bg); color: var(--text); font: inherit; padding: 9px 10px; outline: none; transition: border-color .16s, background .16s, box-shadow .16s; }
-.task-field textarea { min-height: 98px; resize: vertical; line-height: 1.5; }
+.task-field textarea { min-height: 132px; resize: vertical; line-height: 1.5; }
 .task-field input:focus, .task-field textarea:focus, .task-field select:focus { border-color: var(--accent); background: var(--panel); box-shadow: 0 0 0 3px var(--accent-soft); }
+.task-content-input { position: relative; min-width: 0; }
+.task-content-input textarea { display: block; padding-right: 54px; }
+.task-speech-button { position: absolute; right: 8px; bottom: 8px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--accent); cursor: pointer; box-shadow: 0 5px 16px rgba(15,23,42,.12); transition: color .16s, background .16s, border-color .16s, box-shadow .16s, transform .16s; }
+.task-speech-button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
+.task-speech-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-speech-button:disabled { color: var(--muted); opacity: .48; cursor: not-allowed; box-shadow: none; }
+.task-speech-button svg { width: 19px; height: 19px; pointer-events: none; }
+.task-speech-button.listening { color: #fff; border-color: var(--rose); background: var(--rose); box-shadow: 0 0 0 5px color-mix(in srgb, var(--rose) 18%, transparent), 0 8px 20px rgba(220,38,38,.25); animation: taskSpeechPulse 1.35s ease-in-out infinite; }
+.task-speech-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 20px; color: var(--muted); font-size: 11.5px; }
+.task-speech-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.task-speech-status.active { color: var(--rose); font-weight: 750; }
+.task-speech-status.error { color: var(--rose); }
+.task-speech-status.active::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent); }
+.task-speech-hint { white-space: nowrap; }
+.task-speech-hint kbd { display: inline-flex; align-items: center; min-height: 19px; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel-soft); color: var(--text); font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .task-form-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .task-board { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 14px; align-items: start; min-height: 360px; }
 .task-column { position: relative; min-width: 0; min-height: 280px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); box-shadow: 0 1px 2px rgba(15,23,42,.04); transition: border-color .16s, background .16s, box-shadow .16s, transform .16s; }
@@ -3991,7 +3992,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-agent-monitor-source span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-column-body { display: grid; gap: 10px; min-height: 220px; align-content: start; align-items: start; grid-auto-rows: 132px; }
 .task-empty { display: grid; place-items: center; min-height: 116px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; text-align: center; padding: 14px; background: var(--panel); }
-.task-card { position: relative; display: grid; grid-template-rows: 30px auto auto 1fr; gap: 9px; height: 132px; padding: 0 12px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; overflow: hidden; transition: transform .16s, box-shadow .16s, border-color .16s; }
+.task-card { position: relative; display: grid; grid-template-rows: 30px minmax(0, 1fr) auto; gap: 8px; height: 132px; padding: 0 12px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; overflow: hidden; transition: transform .16s, box-shadow .16s, border-color .16s; }
 .task-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--task-color, var(--accent)) 42%, var(--line)); box-shadow: 0 16px 36px rgba(15,23,42,.11); }
 .task-card.dragging { opacity: .52; transform: rotate(1deg) scale(.98); }
 .task-card-band { display: flex; align-items: center; min-height: 30px; margin: 0 -12px; padding: 0 42px 0 12px; background: linear-gradient(90deg, var(--task-color, var(--accent)), color-mix(in srgb, var(--task-color, var(--accent)) 60%, var(--panel))); }
@@ -4000,9 +4001,11 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-remove:hover { color: #fff; background: rgba(220,38,38,.92); border-color: rgba(255,255,255,.58); }
 .task-remove svg { width: 14px; height: 14px; pointer-events: none; }
 .task-id { color: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 900; text-shadow: 0 1px 2px rgba(15,23,42,.18); }
-.task-title-button { margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; line-height: 1.32; font-weight: 800; letter-spacing: 0; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-title-button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-.task-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-card-copy { display: grid; align-content: start; gap: 5px; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow: hidden; }
+.task-card-title { display: block; color: var(--text); font-size: 14px; line-height: 1.32; font-weight: 800; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-card-summary { display: -webkit-box; color: var(--muted); font-size: 12.5px; line-height: 1.42; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.task-card-copy:not(.has-title) .task-card-summary { color: var(--text); font-size: 13.5px; line-height: 1.48; -webkit-line-clamp: 3; }
+.task-card-copy:hover .task-card-title, .task-card-copy:hover .task-card-summary { color: var(--accent); }
 .task-card-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
 .task-card-actions { display: flex; gap: 5px; }
 .task-mini-button { display: inline-grid; place-items: center; width: 28px; height: 26px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--muted); cursor: pointer; }
@@ -4011,6 +4014,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-mini-button:disabled:hover { color: var(--muted); border-color: var(--line); background: var(--panel); }
 .task-board-loading { grid-column: 1 / -1; display: grid; place-items: center; min-height: 260px; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; background: var(--panel-soft); }
 @keyframes taskComposerIn { from { opacity: 0; transform: translateY(-8px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes taskSpeechPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 440px); gap: 16px; align-items: start; min-width: 0; }
 .grid > *, .summary-panel > *, .side, .panel { min-width: 0; }
 .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
@@ -4253,7 +4257,8 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 }
 @media (prefers-reduced-motion: reduce) {
   .ai-status-loader, .ai-status-sparkles, .task-dot.breathing,
-  .task-agent-monitor, .task-agent-monitor-state::before { animation: none; }
+  .task-agent-monitor, .task-agent-monitor-state::before,
+  .task-speech-button.listening { animation: none; }
 }
 @media (max-width: 1280px) { 
   .grid, .summary-panel { grid-template-columns: 1fr; } 
@@ -4291,6 +4296,8 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
   .task-action-buttons, .task-repo-agent .radio-group { justify-content: flex-start; }
   .task-repo-agent { justify-items: start; }
   .task-form-grid { grid-template-columns: 1fr; }
+  .task-speech-meta { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .task-speech-hint { display: none; }
   .task-board { grid-template-columns: 1fr; }
   .commit { grid-template-columns: 1fr; } 
   .hash { display: none; } 
@@ -4602,12 +4609,17 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
         <form id="taskComposer" class="task-composer" hidden>
           <div class="task-form-grid">
             <div class="task-field">
-              <label for="taskTitleInput" data-i18n="taskTitle">标题</label>
-              <input id="taskTitleInput" type="text" maxlength="160" autocomplete="off" data-i18n-placeholder="taskTitlePlaceholder" placeholder="例如：完善移动端任务看板">
-            </div>
-            <div class="task-field">
               <label for="taskContentInput" data-i18n="taskContent">内容</label>
-              <textarea id="taskContentInput" data-i18n-placeholder="taskContentPlaceholder" placeholder="写下背景、想法或验收标准。支持 Markdown。"></textarea>
+              <div class="task-content-input">
+                <textarea id="taskContentInput" maxlength="12000" data-i18n-placeholder="taskContentPlaceholder" placeholder="写下任务内容、背景或验收标准。支持 Markdown。"></textarea>
+                <button id="taskSpeechButton" class="task-speech-button" type="button" aria-pressed="false" data-i18n-title="startSpeechInput" data-i18n-aria-label="startSpeechInput" title="开始语音输入">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"></rect><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0"></path><path d="M12 17v4"></path><path d="M8.5 21h7"></path></svg>
+                </button>
+              </div>
+              <div class="task-speech-meta">
+                <span id="taskSpeechStatus" class="task-speech-status" role="status" aria-live="polite" data-i18n="speechReady">点击麦克风开始语音输入。音频不会保存。</span>
+                <span class="task-speech-hint"><kbd>F8</kbd> <span data-i18n="holdToTalk">按住说话</span></span>
+              </div>
             </div>
           </div>
           <div class="task-form-actions">
@@ -4717,7 +4729,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
   </div>
 </div>
 
-<div id="taskDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="taskDetailTitle">
+<div id="taskDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" data-i18n-aria-label="taskDetails" aria-label="任务详情">
   <div class="modal task-detail-modal">
     <div class="task-detail-head">
       <div class="task-detail-meta">
@@ -4729,10 +4741,6 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
     </div>
     <div id="taskDetailBody" class="task-detail-body"></div>
     <form id="taskDetailEdit" class="task-detail-edit" hidden>
-      <div class="task-field">
-        <label for="taskDetailTitleInput" data-i18n="taskTitle">标题</label>
-        <input id="taskDetailTitleInput" type="text" maxlength="160" autocomplete="off">
-      </div>
       <div class="task-field">
         <label for="taskDetailContentInput" data-i18n="taskContent">内容</label>
         <textarea id="taskDetailContentInput"></textarea>
@@ -4781,6 +4789,21 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [] }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var taskSpeech = {
+  recognition: null,
+  supported: false,
+  requested: false,
+  listening: false,
+  stopping: false,
+  heldByShortcut: false,
+  baseValue: '',
+  insertStart: 0,
+  insertEnd: 0,
+  finalTranscript: '',
+  interimTranscript: '',
+  statusKey: 'speechReady',
+  statusClass: ''
+};
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -4946,10 +4969,24 @@ var I18N = {
     taskStorage: '存储',
     refreshTasks: '刷新',
     newTask: '新建任务',
-    taskTitle: '标题',
     taskContent: '内容',
-    taskTitlePlaceholder: '例如：完善移动端任务看板',
-    taskContentPlaceholder: '写下背景、想法或验收标准。支持 Markdown。',
+    taskDetails: '任务详情',
+    taskContentPlaceholder: '写下任务内容、背景或验收标准。支持 Markdown。',
+    startSpeechInput: '开始语音输入',
+    stopSpeechInput: '停止语音输入',
+    speechReady: '点击麦克风开始语音输入。音频不会保存。',
+    speechUnsupported: '当前浏览器不支持网页语音识别，请改用键盘输入。',
+    speechStarting: '正在请求麦克风权限...',
+    speechListening: '正在聆听并实时识别...',
+    speechStopping: '正在结束识别...',
+    speechPermissionDenied: '无法使用麦克风，请允许浏览器访问麦克风。',
+    speechMicrophoneUnavailable: '没有找到可用的麦克风。',
+    speechNoSpeech: '没有识别到语音，请重试。',
+    speechNetworkError: '语音识别网络不可用，请稍后重试。',
+    speechLanguageUnsupported: '当前语言暂不支持语音识别。',
+    speechFailed: '语音识别失败，请重试。',
+    speechContentLimit: '已达到任务内容长度上限。',
+    holdToTalk: '按住说话',
     createTask: '创建任务',
     creatingTask: '创建中...',
     decomposeTask: 'AI 自动分解',
@@ -5172,10 +5209,24 @@ var I18N = {
     taskStorage: 'Storage',
     refreshTasks: 'Refresh',
     newTask: 'New Task',
-    taskTitle: 'Title',
     taskContent: 'Content',
-    taskTitlePlaceholder: 'Example: polish the mobile task board',
-    taskContentPlaceholder: 'Write context, notes, or acceptance criteria. Markdown is supported.',
+    taskDetails: 'Task details',
+    taskContentPlaceholder: 'Describe the task, context, or acceptance criteria. Markdown is supported.',
+    startSpeechInput: 'Start voice input',
+    stopSpeechInput: 'Stop voice input',
+    speechReady: 'Click the microphone to start voice input. Audio is not saved.',
+    speechUnsupported: 'This browser does not support web speech recognition. Use the keyboard instead.',
+    speechStarting: 'Requesting microphone access...',
+    speechListening: 'Listening and transcribing live...',
+    speechStopping: 'Finishing transcription...',
+    speechPermissionDenied: 'Microphone access is unavailable. Allow microphone permission in the browser.',
+    speechMicrophoneUnavailable: 'No available microphone was found.',
+    speechNoSpeech: 'No speech was recognized. Try again.',
+    speechNetworkError: 'The speech recognition service is unavailable. Try again later.',
+    speechLanguageUnsupported: 'Speech recognition is unavailable for the current language.',
+    speechFailed: 'Speech recognition failed. Try again.',
+    speechContentLimit: 'The task content limit has been reached.',
+    holdToTalk: 'hold to talk',
     createTask: 'Create Task',
     creatingTask: 'Creating...',
     decomposeTask: 'Decompose with AI',
@@ -5401,10 +5452,24 @@ I18N.ja = Object.assign({}, I18N.en, {
   taskStorage: '保存先',
   refreshTasks: '更新',
   newTask: '新規タスク',
-  taskTitle: 'タイトル',
   taskContent: '内容',
-  taskTitlePlaceholder: '例: モバイルタスクボードを磨く',
-  taskContentPlaceholder: '背景、メモ、受け入れ条件を書いてください。Markdown に対応しています。',
+  taskDetails: 'タスクの詳細',
+  taskContentPlaceholder: 'タスク内容、背景、受け入れ条件を書いてください。Markdown に対応しています。',
+  startSpeechInput: '音声入力を開始',
+  stopSpeechInput: '音声入力を停止',
+  speechReady: 'マイクをクリックして音声入力を開始します。音声は保存されません。',
+  speechUnsupported: 'このブラウザーは音声認識に対応していません。キーボード入力を使用してください。',
+  speechStarting: 'マイクへのアクセスを要求しています...',
+  speechListening: '音声をリアルタイムで認識しています...',
+  speechStopping: '音声認識を終了しています...',
+  speechPermissionDenied: 'マイクを使用できません。ブラウザーでマイクへのアクセスを許可してください。',
+  speechMicrophoneUnavailable: '利用可能なマイクが見つかりません。',
+  speechNoSpeech: '音声を認識できませんでした。もう一度お試しください。',
+  speechNetworkError: '音声認識サービスを利用できません。後でもう一度お試しください。',
+  speechLanguageUnsupported: '現在の言語では音声認識を利用できません。',
+  speechFailed: '音声認識に失敗しました。もう一度お試しください。',
+  speechContentLimit: 'タスク内容の文字数上限に達しました。',
+  holdToTalk: '押しながら話す',
   createTask: 'タスクを作成',
   creatingTask: '作成中...',
   decomposeTask: 'AI で自動分解',
@@ -5613,10 +5678,24 @@ I18N.ko = Object.assign({}, I18N.en, {
   taskStorage: '저장 위치',
   refreshTasks: '새로고침',
   newTask: '새 작업',
-  taskTitle: '제목',
   taskContent: '내용',
-  taskTitlePlaceholder: '예: 모바일 작업 보드 다듬기',
-  taskContentPlaceholder: '배경, 메모 또는 인수 조건을 적으세요. Markdown을 지원합니다.',
+  taskDetails: '작업 상세',
+  taskContentPlaceholder: '작업 내용, 배경 또는 인수 조건을 적으세요. Markdown을 지원합니다.',
+  startSpeechInput: '음성 입력 시작',
+  stopSpeechInput: '음성 입력 중지',
+  speechReady: '마이크를 클릭해 음성 입력을 시작하세요. 오디오는 저장되지 않습니다.',
+  speechUnsupported: '이 브라우저는 웹 음성 인식을 지원하지 않습니다. 키보드를 사용하세요.',
+  speechStarting: '마이크 권한 요청 중...',
+  speechListening: '음성을 실시간으로 인식 중...',
+  speechStopping: '음성 인식 종료 중...',
+  speechPermissionDenied: '마이크를 사용할 수 없습니다. 브라우저에서 마이크 권한을 허용하세요.',
+  speechMicrophoneUnavailable: '사용 가능한 마이크를 찾을 수 없습니다.',
+  speechNoSpeech: '음성이 인식되지 않았습니다. 다시 시도하세요.',
+  speechNetworkError: '음성 인식 서비스를 사용할 수 없습니다. 나중에 다시 시도하세요.',
+  speechLanguageUnsupported: '현재 언어에서는 음성 인식을 사용할 수 없습니다.',
+  speechFailed: '음성 인식에 실패했습니다. 다시 시도하세요.',
+  speechContentLimit: '작업 내용 길이 제한에 도달했습니다.',
+  holdToTalk: '누르고 말하기',
   createTask: '작업 만들기',
   creatingTask: '만드는 중...',
   decomposeTask: 'AI 자동 분해',
@@ -5825,10 +5904,24 @@ I18N.es = Object.assign({}, I18N.en, {
   taskStorage: 'Almacenamiento',
   refreshTasks: 'Actualizar',
   newTask: 'Nueva tarea',
-  taskTitle: 'Título',
   taskContent: 'Contenido',
-  taskTitlePlaceholder: 'Ejemplo: pulir el tablero móvil de tareas',
-  taskContentPlaceholder: 'Escribe contexto, notas o criterios de aceptación. Markdown está soportado.',
+  taskDetails: 'Detalles de la tarea',
+  taskContentPlaceholder: 'Describe la tarea, el contexto o los criterios de aceptación. Se admite Markdown.',
+  startSpeechInput: 'Iniciar entrada de voz',
+  stopSpeechInput: 'Detener entrada de voz',
+  speechReady: 'Pulsa el micrófono para iniciar la entrada de voz. El audio no se guarda.',
+  speechUnsupported: 'Este navegador no admite reconocimiento de voz web. Usa el teclado.',
+  speechStarting: 'Solicitando acceso al micrófono...',
+  speechListening: 'Escuchando y transcribiendo en directo...',
+  speechStopping: 'Finalizando la transcripción...',
+  speechPermissionDenied: 'No se puede usar el micrófono. Permite el acceso en el navegador.',
+  speechMicrophoneUnavailable: 'No se encontró ningún micrófono disponible.',
+  speechNoSpeech: 'No se reconoció voz. Inténtalo de nuevo.',
+  speechNetworkError: 'El servicio de reconocimiento no está disponible. Inténtalo más tarde.',
+  speechLanguageUnsupported: 'El reconocimiento de voz no está disponible para el idioma actual.',
+  speechFailed: 'Falló el reconocimiento de voz. Inténtalo de nuevo.',
+  speechContentLimit: 'Se alcanzó el límite de contenido de la tarea.',
+  holdToTalk: 'mantén para hablar',
   createTask: 'Crear tarea',
   creatingTask: 'Creando...',
   decomposeTask: 'Desglosar con IA',
@@ -6037,10 +6130,24 @@ I18N.fr = Object.assign({}, I18N.en, {
   taskStorage: 'Stockage',
   refreshTasks: 'Actualiser',
   newTask: 'Nouvelle tâche',
-  taskTitle: 'Titre',
   taskContent: 'Contenu',
-  taskTitlePlaceholder: 'Exemple : peaufiner le tableau de tâches mobile',
-  taskContentPlaceholder: 'Ajoutez du contexte, des notes ou des critères d’acceptation. Markdown est pris en charge.',
+  taskDetails: 'Détails de la tâche',
+  taskContentPlaceholder: 'Décrivez la tâche, le contexte ou les critères d’acceptation. Markdown est pris en charge.',
+  startSpeechInput: 'Démarrer la saisie vocale',
+  stopSpeechInput: 'Arrêter la saisie vocale',
+  speechReady: 'Cliquez sur le micro pour démarrer la saisie vocale. L’audio n’est pas enregistré.',
+  speechUnsupported: 'Ce navigateur ne prend pas en charge la reconnaissance vocale web. Utilisez le clavier.',
+  speechStarting: 'Demande d’accès au microphone...',
+  speechListening: 'Écoute et transcription en direct...',
+  speechStopping: 'Fin de la transcription...',
+  speechPermissionDenied: 'Le microphone est inaccessible. Autorisez-le dans le navigateur.',
+  speechMicrophoneUnavailable: 'Aucun microphone disponible n’a été trouvé.',
+  speechNoSpeech: 'Aucune parole reconnue. Réessayez.',
+  speechNetworkError: 'Le service de reconnaissance vocale est indisponible. Réessayez plus tard.',
+  speechLanguageUnsupported: 'La reconnaissance vocale est indisponible pour la langue actuelle.',
+  speechFailed: 'La reconnaissance vocale a échoué. Réessayez.',
+  speechContentLimit: 'La limite de contenu de la tâche est atteinte.',
+  holdToTalk: 'maintenir pour parler',
   createTask: 'Créer la tâche',
   creatingTask: 'Création...',
   decomposeTask: 'Décomposer avec l’IA',
@@ -6169,6 +6276,7 @@ function applyLanguage() {
   renderSecurityControls();
   renderThemeControls();
   renderTaskBoard();
+  renderTaskSpeechState();
   if (targetRepo) {
     if ($('upstream').dataset.empty === 'true') $('upstream').textContent = t('noUpstream');
     renderFiles(state.files || []);
@@ -6230,6 +6338,7 @@ function bindViewTabs() {
 
 function setActiveView(view) {
   view = view === 'tasks' ? 'tasks' : 'git';
+  if (view !== 'tasks') cancelTaskSpeech();
   state.settingsOpen = false;
   state.activeView = view;
   var gitPage = $('gitPage');
@@ -6276,18 +6385,267 @@ function bindTaskControls() {
       createTaskFromForm();
     });
   }
+  initTaskSpeech();
 }
 
 function showTaskComposer(open) {
   var form = $('taskComposer');
   if (!form) return;
+  if (!open) cancelTaskSpeech();
   form.hidden = !open;
   if (open) {
     setTaskError('');
     window.setTimeout(function() {
-      var title = $('taskTitleInput');
-      if (title) title.focus();
+      var content = $('taskContentInput');
+      if (content) content.focus();
     }, 0);
+  }
+}
+
+function initTaskSpeech() {
+  var button = $('taskSpeechButton');
+  var input = $('taskContentInput');
+  var hint = document.querySelector('.task-speech-hint');
+  taskSpeech.supported = typeof (window.SpeechRecognition || window.webkitSpeechRecognition) === 'function';
+  if (button) {
+    button.disabled = !taskSpeech.supported;
+    button.addEventListener('click', function() {
+      if (taskSpeech.requested || taskSpeech.listening) stopTaskSpeech();
+      else startTaskSpeech(false);
+    });
+  }
+  if (input) {
+    input.addEventListener('input', function() {
+      if (taskSpeech.requested || taskSpeech.listening) cancelTaskSpeech();
+    });
+  }
+  if (hint && !taskSpeech.supported) hint.hidden = true;
+  document.addEventListener('keydown', function(event) {
+    if ((event.key !== 'F8' && event.code !== 'F8') || event.repeat) return;
+    if (!taskSpeech.supported || !taskSpeechShortcutAvailable()) return;
+    event.preventDefault();
+    taskSpeech.heldByShortcut = true;
+    startTaskSpeech(true);
+  });
+  document.addEventListener('keyup', function(event) {
+    if (event.key !== 'F8' && event.code !== 'F8') return;
+    if (!taskSpeech.heldByShortcut) return;
+    event.preventDefault();
+    taskSpeech.heldByShortcut = false;
+    stopTaskSpeech();
+  });
+  window.addEventListener('blur', function() {
+    if (taskSpeech.heldByShortcut) {
+      taskSpeech.heldByShortcut = false;
+      stopTaskSpeech();
+    }
+  });
+  taskSpeech.statusKey = taskSpeech.supported ? 'speechReady' : 'speechUnsupported';
+  taskSpeech.statusClass = taskSpeech.supported ? '' : 'error';
+  renderTaskSpeechState();
+}
+
+function taskSpeechShortcutAvailable() {
+  var form = $('taskComposer');
+  var createButton = $('createTaskButton');
+  var decomposeButton = $('decomposeTaskButton');
+  var taskDetailModal = $('taskDetailModal');
+  return !!form && !form.hidden && state.activeView === 'tasks' &&
+    !(taskDetailModal && taskDetailModal.classList.contains('visible')) &&
+    !(createButton && createButton.disabled) &&
+    !(decomposeButton && decomposeButton.disabled);
+}
+
+function taskSpeechLanguage() {
+  return {
+    'zh-CN': 'zh-CN',
+    en: 'en-US',
+    ja: 'ja-JP',
+    ko: 'ko-KR',
+    es: 'es-ES',
+    fr: 'fr-FR'
+  }[currentLanguage] || 'en-US';
+}
+
+function startTaskSpeech(fromShortcut) {
+  var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var input = $('taskContentInput');
+  if (typeof Recognition !== 'function' || !input || !taskSpeechShortcutAvailable()) return;
+  if (taskSpeech.requested || taskSpeech.listening) return;
+
+  taskSpeech.baseValue = input.value;
+  taskSpeech.insertStart = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
+  taskSpeech.insertEnd = typeof input.selectionEnd === 'number' ? input.selectionEnd : taskSpeech.insertStart;
+  taskSpeech.finalTranscript = '';
+  taskSpeech.interimTranscript = '';
+  taskSpeech.statusKey = 'speechStarting';
+  taskSpeech.statusClass = 'active';
+  taskSpeech.requested = true;
+  taskSpeech.stopping = false;
+  taskSpeech.heldByShortcut = fromShortcut === true;
+
+  var recognition = new Recognition();
+  taskSpeech.recognition = recognition;
+  recognition.lang = taskSpeechLanguage();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+  recognition.onstart = function() {
+    if (taskSpeech.recognition !== recognition) return;
+    taskSpeech.listening = true;
+    taskSpeech.statusKey = 'speechListening';
+    taskSpeech.statusClass = 'active';
+    renderTaskSpeechState();
+  };
+  recognition.onresult = function(event) {
+    if (taskSpeech.recognition !== recognition) return;
+    var interim = '';
+    var i;
+    for (i = event.resultIndex; i < event.results.length; i += 1) {
+      var transcript = event.results[i][0] ? event.results[i][0].transcript : '';
+      if (event.results[i].isFinal) {
+        taskSpeech.finalTranscript = appendSpeechText(taskSpeech.finalTranscript, transcript);
+      } else {
+        interim = appendSpeechText(interim, transcript);
+      }
+    }
+    taskSpeech.interimTranscript = interim;
+    if (!renderTaskSpeechTranscript()) {
+      taskSpeech.statusKey = 'speechContentLimit';
+      taskSpeech.statusClass = 'error';
+      stopTaskSpeech(true);
+      return;
+    }
+    taskSpeech.statusKey = 'speechListening';
+    taskSpeech.statusClass = 'active';
+    renderTaskSpeechState();
+  };
+  recognition.onerror = function(event) {
+    if (taskSpeech.recognition !== recognition) return;
+    if (event.error === 'aborted' && taskSpeech.stopping) return;
+    taskSpeech.statusKey = taskSpeechErrorKey(event.error);
+    taskSpeech.statusClass = 'error';
+    renderTaskSpeechState();
+  };
+  recognition.onend = function() {
+    if (taskSpeech.recognition !== recognition) return;
+    if (taskSpeech.interimTranscript) {
+      taskSpeech.finalTranscript = appendSpeechText(taskSpeech.finalTranscript, taskSpeech.interimTranscript);
+      taskSpeech.interimTranscript = '';
+      renderTaskSpeechTranscript();
+    }
+    taskSpeech.recognition = null;
+    taskSpeech.requested = false;
+    taskSpeech.listening = false;
+    taskSpeech.stopping = false;
+    if (taskSpeech.statusClass !== 'error') {
+      taskSpeech.statusKey = 'speechReady';
+      taskSpeech.statusClass = '';
+    }
+    renderTaskSpeechState();
+  };
+
+  renderTaskSpeechState();
+  input.focus();
+  try {
+    recognition.start();
+  } catch (error) {
+    taskSpeech.recognition = null;
+    taskSpeech.requested = false;
+    taskSpeech.listening = false;
+    taskSpeech.statusKey = 'speechFailed';
+    taskSpeech.statusClass = 'error';
+    renderTaskSpeechState();
+  }
+}
+
+function stopTaskSpeech(preserveStatus) {
+  var recognition = taskSpeech.recognition;
+  if (!recognition) {
+    taskSpeech.requested = false;
+    taskSpeech.listening = false;
+    renderTaskSpeechState();
+    return;
+  }
+  taskSpeech.stopping = true;
+  if (!preserveStatus) {
+    taskSpeech.statusKey = 'speechStopping';
+    taskSpeech.statusClass = 'active';
+  }
+  renderTaskSpeechState();
+  try {
+    recognition.stop();
+  } catch (error) {
+    try { recognition.abort(); } catch (ignore) {}
+  }
+}
+
+function cancelTaskSpeech() {
+  var recognition = taskSpeech.recognition;
+  taskSpeech.recognition = null;
+  taskSpeech.requested = false;
+  taskSpeech.listening = false;
+  taskSpeech.stopping = false;
+  taskSpeech.heldByShortcut = false;
+  taskSpeech.finalTranscript = '';
+  taskSpeech.interimTranscript = '';
+  taskSpeech.statusKey = taskSpeech.supported ? 'speechReady' : 'speechUnsupported';
+  taskSpeech.statusClass = taskSpeech.supported ? '' : 'error';
+  if (recognition) {
+    try { recognition.abort(); } catch (ignore) {}
+  }
+  renderTaskSpeechState();
+}
+
+function appendSpeechText(existing, addition) {
+  existing = String(existing || '').trim();
+  addition = String(addition || '').trim();
+  if (!existing) return addition;
+  if (!addition) return existing;
+  return existing + (/\\s$/.test(existing) || /^\\s/.test(addition) ? '' : ' ') + addition;
+}
+
+function renderTaskSpeechTranscript() {
+  var input = $('taskContentInput');
+  if (!input) return false;
+  var transcript = appendSpeechText(taskSpeech.finalTranscript, taskSpeech.interimTranscript);
+  if (!transcript) return true;
+  var before = taskSpeech.baseValue.slice(0, taskSpeech.insertStart);
+  var after = taskSpeech.baseValue.slice(taskSpeech.insertEnd);
+  var beforeSpace = before && !/\\s$/.test(before) ? ' ' : '';
+  var afterSpace = after && !/^\\s/.test(after) ? ' ' : '';
+  var available = 12000 - before.length - after.length - beforeSpace.length - afterSpace.length;
+  if (available <= 0) return false;
+  var clipped = transcript.slice(0, available);
+  input.value = before + beforeSpace + clipped + afterSpace + after;
+  var caret = before.length + beforeSpace.length + clipped.length;
+  if (typeof input.setSelectionRange === 'function') input.setSelectionRange(caret, caret);
+  return clipped.length === transcript.length;
+}
+
+function taskSpeechErrorKey(error) {
+  if (error === 'not-allowed' || error === 'service-not-allowed') return 'speechPermissionDenied';
+  if (error === 'audio-capture') return 'speechMicrophoneUnavailable';
+  if (error === 'no-speech') return 'speechNoSpeech';
+  if (error === 'network') return 'speechNetworkError';
+  if (error === 'language-not-supported' || error === 'language-unavailable') return 'speechLanguageUnsupported';
+  return 'speechFailed';
+}
+
+function renderTaskSpeechState() {
+  var button = $('taskSpeechButton');
+  var status = $('taskSpeechStatus');
+  var active = taskSpeech.requested || taskSpeech.listening;
+  if (button) {
+    button.classList.toggle('listening', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.title = t(active ? 'stopSpeechInput' : 'startSpeechInput');
+    button.setAttribute('aria-label', t(active ? 'stopSpeechInput' : 'startSpeechInput'));
+  }
+  if (status) {
+    status.textContent = t(taskSpeech.statusKey || 'speechReady');
+    status.classList.toggle('active', taskSpeech.statusClass === 'active');
+    status.classList.toggle('error', taskSpeech.statusClass === 'error');
   }
 }
 
@@ -6574,19 +6932,18 @@ function submitTaskForm(decompose) {
     setTaskError(t('noRepoForTasks'));
     return;
   }
-  var title = $('taskTitleInput');
   var content = $('taskContentInput');
   var createButton = $('createTaskButton');
   var decomposeButton = $('decomposeTaskButton');
   var button = decompose ? decomposeButton : createButton;
-  var titleValue = title ? title.value.trim() : '';
   var contentValue = content ? content.value.trim() : '';
   if (createButton && createButton.disabled || decomposeButton && decomposeButton.disabled) return;
-  if (!titleValue) {
-    if (title) title.focus();
+  if (!contentValue) {
+    if (content) content.focus();
     return;
   }
 
+  cancelTaskSpeech();
   if (button) {
     button.textContent = t(decompose ? 'decomposingTask' : 'creatingTask');
   }
@@ -6596,7 +6953,7 @@ function submitTaskForm(decompose) {
   var requestOptions = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: titleValue, content: contentValue, status: 'todo' })
+    body: JSON.stringify({ content: contentValue, status: 'todo' })
   };
   if (decompose) requestOptions.gmcTimeoutMs = TASK_DECOMPOSITION_TIMEOUT_MS;
   fetch(endpoint + '?repo=' + encodeURIComponent(targetRepo), requestOptions)
@@ -6609,7 +6966,6 @@ function submitTaskForm(decompose) {
     .then(function(data) {
       state.repoTasks = data.tasks || [];
       state.tasksLoaded = true;
-      if (title) title.value = '';
       if (content) content.value = '';
       showTaskComposer(false);
       setTaskError('');
@@ -6638,10 +6994,13 @@ function decomposeTaskDetail() {
   setTaskError('');
   button.disabled = true;
   button.textContent = t('decomposingTask');
+  var requirementContent = task.title ?
+    task.title + (task.content ? '\\n\\n' + task.content : '') :
+    task.content;
   fetch('/api/tasks/decompose?repo=' + encodeURIComponent(targetRepo), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: task.title, content: task.content }),
+    body: JSON.stringify({ content: requirementContent }),
     gmcTimeoutMs: TASK_DECOMPOSITION_TIMEOUT_MS
   })
     .then(function(res) {
@@ -6913,6 +7272,8 @@ function taskCardHtml(task, column) {
   var canMoveLeft = statusIndex > 0;
   var canMoveRight = statusIndex < TASK_BOARD_STATUSES.length - 1;
   var summary = taskSummary(task.content);
+  var titleHtml = task.title ? '<strong class="task-card-title">' + escapeHtml(task.title) + '</strong>' : '';
+  var copyClass = task.title ? 'task-card-copy has-title' : 'task-card-copy';
   return '<article class="task-card" draggable="true" data-task-id="' + escapeHtml(task.id) + '" style="--task-color:' + escapeHtml(column.color) + '">' +
     '<button class="task-remove" type="button" title="' + escapeHtml(t('deleteTask')) + '" aria-label="' + escapeHtml(t('deleteTask') + ' ' + task.id) + '" data-task-delete="' + escapeHtml(task.id) + '">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
@@ -6920,8 +7281,10 @@ function taskCardHtml(task, column) {
     '<div class="task-card-band">' +
       '<span class="task-id">' + escapeHtml(task.id) + '</span>' +
     '</div>' +
-    '<button class="task-title-button" type="button" data-task-detail="' + escapeHtml(task.id) + '">' + escapeHtml(task.title || task.id) + '</button>' +
-    '<p>' + escapeHtml(summary || t('taskContentEmpty')) + '</p>' +
+    '<button class="' + copyClass + '" type="button" data-task-detail="' + escapeHtml(task.id) + '">' +
+      titleHtml +
+      '<span class="task-card-summary">' + escapeHtml(summary || t('taskContentEmpty')) + '</span>' +
+    '</button>' +
     '<div class="task-card-footer">' +
       '<span>' + escapeHtml(formatTaskUpdated(task.updated || task.created)) + '</span>' +
       '<span class="task-card-actions">' +
@@ -7014,7 +7377,8 @@ function renderTaskDetail(task) {
   $('taskDetailStatus').textContent = t(meta.label);
   $('taskDetailStatus').style.setProperty('--task-color', meta.color);
   $('taskDetailUpdated').textContent = formatTaskUpdated(task.updated || task.created);
-  $('taskDetailTitle').textContent = task.title || task.id;
+  $('taskDetailTitle').textContent = task.title || '';
+  $('taskDetailTitle').hidden = !task.title;
   renderTaskMarkdown($('taskDetailBody'), task.content || t('taskContentEmpty'));
 }
 
@@ -7041,22 +7405,19 @@ function setTaskDetailEditing(editing) {
   if (cancelButton) cancelButton.hidden = !state.taskDetailEditing;
   if (saveButton) saveButton.hidden = !state.taskDetailEditing;
   if (state.taskDetailEditing && task) {
-    $('taskDetailTitleInput').value = task.title || '';
     $('taskDetailContentInput').value = task.content || '';
-    window.setTimeout(function() { $('taskDetailTitleInput').focus(); }, 0);
+    window.setTimeout(function() { $('taskDetailContentInput').focus(); }, 0);
   }
 }
 
 function saveTaskDetail() {
   var task = findRepoTask(state.activeTaskId);
   if (!task) return;
-  var titleInput = $('taskDetailTitleInput');
   var contentInput = $('taskDetailContentInput');
   var saveButton = $('saveTaskDetail');
-  var title = titleInput ? titleInput.value.trim() : '';
   var content = contentInput ? contentInput.value.trim() : '';
-  if (!title) {
-    if (titleInput) titleInput.focus();
+  if (!content) {
+    if (contentInput) contentInput.focus();
     return;
   }
   if (saveButton) {
@@ -7066,7 +7427,7 @@ function saveTaskDetail() {
   fetch('/api/tasks/update?repo=' + encodeURIComponent(targetRepo), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: task.id, title: title, content: content })
+    body: JSON.stringify({ id: task.id, content: content })
   })
     .then(function(res) {
       return res.json().then(function(data) {
@@ -7623,6 +7984,7 @@ function initThemeControls() {
 }
 
 function openSettings() {
+  cancelTaskSpeech();
   state.settingsOpen = true;
   stopAgentMonitorPolling();
   state.previousViewBeforeSettings = state.activeView || 'git';
@@ -8084,10 +8446,12 @@ window.addEventListener('resize', function() {
   if (state.contributions) renderCalendar(state.contributions);
 });
 window.addEventListener('beforeunload', function() {
+  cancelTaskSpeech();
   if (state.taskEvents) state.taskEvents.close();
   stopAgentMonitorPolling();
 });
 document.addEventListener('visibilitychange', function() {
+  if (document.hidden) cancelTaskSpeech();
   if (state.activeView === 'tasks' && !state.settingsOpen) {
     if (document.hidden) stopAgentMonitorPolling();
     else startAgentMonitorPolling();
