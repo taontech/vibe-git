@@ -67,7 +67,13 @@ async function run() {
     assert.ok(html.indexOf('taskSpeechButton') >= 0);
     assert.ok(html.indexOf('recognition.continuous = true') >= 0);
     assert.ok(html.indexOf('recognition.interimResults = true') >= 0);
-    assert.ok(html.indexOf("event.key !== 'F8'") >= 0);
+    assert.strictEqual(html.indexOf("event.key !== 'F8'"), -1);
+    assert.strictEqual(html.indexOf('isTaskSpeechShortcut'), -1);
+    assert.strictEqual(html.indexOf('Alt+S'), -1);
+    assert.ok(html.indexOf('<kbd>Ctrl</kbd>') >= 0);
+    assert.ok(html.indexOf('TASK_SPEECH_CTRL_HOLD_MS = 400') >= 0);
+    assert.ok(html.indexOf("event.key === 'Control'") >= 0);
+    assert.ok(html.indexOf('taskSpeech.shortcutTimer = window.setTimeout') >= 0);
 
     var createResponse = await request(info, '/api/tasks/create?repo=' + encodeURIComponent(repoRoot), {
       method: 'POST',

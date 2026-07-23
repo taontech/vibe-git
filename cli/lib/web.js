@@ -4618,7 +4618,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
               </div>
               <div class="task-speech-meta">
                 <span id="taskSpeechStatus" class="task-speech-status" role="status" aria-live="polite" data-i18n="speechReady">点击麦克风开始语音输入。音频不会保存。</span>
-                <span class="task-speech-hint"><kbd>F8</kbd> <span data-i18n="holdToTalk">按住说话</span></span>
+                <span class="task-speech-hint"><kbd>Ctrl</kbd> <span data-i18n="holdToTalk">长按 0.4 秒说话</span></span>
               </div>
             </div>
           </div>
@@ -4788,6 +4788,7 @@ var HIDDEN_STATUS_INTERVAL_MS = 60000;
 var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
+var TASK_SPEECH_CTRL_HOLD_MS = 400;
 var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [] }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
@@ -4796,6 +4797,8 @@ var taskSpeech = {
   listening: false,
   stopping: false,
   heldByShortcut: false,
+  shortcutPressed: false,
+  shortcutTimer: null,
   baseValue: '',
   insertStart: 0,
   insertEnd: 0,
@@ -4986,7 +4989,7 @@ var I18N = {
     speechLanguageUnsupported: '当前语言暂不支持语音识别。',
     speechFailed: '语音识别失败，请重试。',
     speechContentLimit: '已达到任务内容长度上限。',
-    holdToTalk: '按住说话',
+    holdToTalk: '长按 0.4 秒说话',
     createTask: '创建任务',
     creatingTask: '创建中...',
     decomposeTask: 'AI 自动分解',
@@ -5226,7 +5229,7 @@ var I18N = {
     speechLanguageUnsupported: 'Speech recognition is unavailable for the current language.',
     speechFailed: 'Speech recognition failed. Try again.',
     speechContentLimit: 'The task content limit has been reached.',
-    holdToTalk: 'hold to talk',
+    holdToTalk: 'hold for 0.4s to talk',
     createTask: 'Create Task',
     creatingTask: 'Creating...',
     decomposeTask: 'Decompose with AI',
@@ -5469,7 +5472,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   speechLanguageUnsupported: '現在の言語では音声認識を利用できません。',
   speechFailed: '音声認識に失敗しました。もう一度お試しください。',
   speechContentLimit: 'タスク内容の文字数上限に達しました。',
-  holdToTalk: '押しながら話す',
+  holdToTalk: '0.4秒長押しして話す',
   createTask: 'タスクを作成',
   creatingTask: '作成中...',
   decomposeTask: 'AI で自動分解',
@@ -5695,7 +5698,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   speechLanguageUnsupported: '현재 언어에서는 음성 인식을 사용할 수 없습니다.',
   speechFailed: '음성 인식에 실패했습니다. 다시 시도하세요.',
   speechContentLimit: '작업 내용 길이 제한에 도달했습니다.',
-  holdToTalk: '누르고 말하기',
+  holdToTalk: '0.4초 길게 눌러 말하기',
   createTask: '작업 만들기',
   creatingTask: '만드는 중...',
   decomposeTask: 'AI 자동 분해',
@@ -5921,7 +5924,7 @@ I18N.es = Object.assign({}, I18N.en, {
   speechLanguageUnsupported: 'El reconocimiento de voz no está disponible para el idioma actual.',
   speechFailed: 'Falló el reconocimiento de voz. Inténtalo de nuevo.',
   speechContentLimit: 'Se alcanzó el límite de contenido de la tarea.',
-  holdToTalk: 'mantén para hablar',
+  holdToTalk: 'mantén 0,4 s para hablar',
   createTask: 'Crear tarea',
   creatingTask: 'Creando...',
   decomposeTask: 'Desglosar con IA',
@@ -6147,7 +6150,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   speechLanguageUnsupported: 'La reconnaissance vocale est indisponible pour la langue actuelle.',
   speechFailed: 'La reconnaissance vocale a échoué. Réessayez.',
   speechContentLimit: 'La limite de contenu de la tâche est atteinte.',
-  holdToTalk: 'maintenir pour parler',
+  holdToTalk: 'maintenir 0,4 s pour parler',
   createTask: 'Créer la tâche',
   creatingTask: 'Création...',
   decomposeTask: 'Décomposer avec l’IA',
@@ -6402,6 +6405,17 @@ function showTaskComposer(open) {
   }
 }
 
+function clearTaskSpeechShortcutTimer() {
+  if (!taskSpeech.shortcutTimer) return;
+  window.clearTimeout(taskSpeech.shortcutTimer);
+  taskSpeech.shortcutTimer = null;
+}
+
+function cancelPendingTaskSpeechShortcut() {
+  clearTaskSpeechShortcutTimer();
+  taskSpeech.shortcutPressed = false;
+}
+
 function initTaskSpeech() {
   var button = $('taskSpeechButton');
   var input = $('taskContentInput');
@@ -6421,20 +6435,40 @@ function initTaskSpeech() {
   }
   if (hint && !taskSpeech.supported) hint.hidden = true;
   document.addEventListener('keydown', function(event) {
-    if ((event.key !== 'F8' && event.code !== 'F8') || event.repeat) return;
-    if (!taskSpeech.supported || !taskSpeechShortcutAvailable()) return;
-    event.preventDefault();
-    taskSpeech.heldByShortcut = true;
-    startTaskSpeech(true);
+    if (event.key === 'Escape' && (taskSpeech.requested || taskSpeech.listening)) {
+      cancelTaskSpeech();
+      return;
+    }
+    if (event.key === 'Control') {
+      if (event.repeat || taskSpeech.shortcutPressed || !taskSpeech.supported || !taskSpeechShortcutAvailable()) return;
+      if ((taskSpeech.requested || taskSpeech.listening) && !taskSpeech.heldByShortcut) return;
+      taskSpeech.shortcutPressed = true;
+      clearTaskSpeechShortcutTimer();
+      taskSpeech.shortcutTimer = window.setTimeout(function() {
+        taskSpeech.shortcutTimer = null;
+        if (!taskSpeech.shortcutPressed || !taskSpeechShortcutAvailable()) return;
+        startTaskSpeech(true);
+      }, TASK_SPEECH_CTRL_HOLD_MS);
+      return;
+    }
+
+    if (taskSpeech.shortcutPressed || taskSpeech.heldByShortcut) {
+      var wasHeldByShortcut = taskSpeech.heldByShortcut;
+      cancelPendingTaskSpeechShortcut();
+      if (wasHeldByShortcut && (taskSpeech.requested || taskSpeech.listening)) cancelTaskSpeech();
+    }
   });
   document.addEventListener('keyup', function(event) {
-    if (event.key !== 'F8' && event.code !== 'F8') return;
+    if (event.key !== 'Control') return;
+    clearTaskSpeechShortcutTimer();
+    taskSpeech.shortcutPressed = false;
     if (!taskSpeech.heldByShortcut) return;
-    event.preventDefault();
     taskSpeech.heldByShortcut = false;
     stopTaskSpeech();
   });
   window.addEventListener('blur', function() {
+    clearTaskSpeechShortcutTimer();
+    taskSpeech.shortcutPressed = false;
     if (taskSpeech.heldByShortcut) {
       taskSpeech.heldByShortcut = false;
       stopTaskSpeech();
@@ -6582,11 +6616,13 @@ function stopTaskSpeech(preserveStatus) {
 
 function cancelTaskSpeech() {
   var recognition = taskSpeech.recognition;
+  clearTaskSpeechShortcutTimer();
   taskSpeech.recognition = null;
   taskSpeech.requested = false;
   taskSpeech.listening = false;
   taskSpeech.stopping = false;
   taskSpeech.heldByShortcut = false;
+  taskSpeech.shortcutPressed = false;
   taskSpeech.finalTranscript = '';
   taskSpeech.interimTranscript = '';
   taskSpeech.statusKey = taskSpeech.supported ? 'speechReady' : 'speechUnsupported';
