@@ -124,6 +124,24 @@ function generateText(prompt, cwd, selectedAgent, options) {
   throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex, claude, antigravity or opencode.');
 }
 
+function generateTextAsync(prompt, cwd, selectedAgent, options) {
+  selectedAgent = selectedAgent || 'codex';
+  options = options || {};
+  if (selectedAgent === 'codex') {
+    return generateCodexTextAsync(prompt, cwd, options);
+  }
+  if (selectedAgent === 'claude') {
+    return generateClaudeTextAsync(prompt, cwd);
+  }
+  if (selectedAgent === 'antigravity') {
+    return generateAntigravityTextAsync(prompt, cwd);
+  }
+  if (selectedAgent === 'opencode') {
+    return generateOpencodeTextAsync(prompt, cwd);
+  }
+  return Promise.reject(new Error('Unsupported agent: ' + selectedAgent + '. Use codex, claude, antigravity or opencode.'));
+}
+
 function generateCodexText(prompt, cwd, options) {
   var outputFile = path.join(os.tmpdir(), (options.outputPrefix || 'gmc-agent-output') + '-' + Date.now() + '-' + process.pid + '.txt');
   var description = options.description || 'generation';
@@ -177,6 +195,53 @@ function generateCodexText(prompt, cwd, options) {
   return cleanAgentOutput(result.stdout);
 }
 
+function generateCodexTextAsync(prompt, cwd, options) {
+  var outputFile = path.join(os.tmpdir(), (options.outputPrefix || 'gmc-agent-output') + '-' + Date.now() + '-' + process.pid + '.txt');
+  var description = options.description || 'generation';
+  var help = codexExecHelp();
+  var timeoutMs = codexTimeoutMs();
+  var args = [
+    'exec',
+    '--cd', cwd,
+    '--sandbox', 'read-only',
+    '--color', 'never'
+  ];
+
+  if (help.indexOf('--ignore-user-config') >= 0) {
+    args.push('--ignore-user-config');
+  }
+  if (process.env.GMC_CODEX_MODEL) {
+    args.push('--model', process.env.GMC_CODEX_MODEL);
+  }
+  if (help.indexOf('--output-last-message') >= 0) {
+    args.push('--output-last-message', outputFile);
+  }
+  args.push('-');
+
+  return spawnTextCommand('codex', args, {
+    cwd: cwd,
+    input: prompt,
+    timeout: timeoutMs
+  }).then(function (result) {
+    if (result.status !== 0) {
+      removeOutputFile(outputFile);
+      throw new Error('codex ' + description + ' failed with status ' + result.status + ': ' + commandOutput(result));
+    }
+    if (fs.existsSync(outputFile)) {
+      var finalMessage = fs.readFileSync(outputFile, 'utf8');
+      removeOutputFile(outputFile);
+      return cleanAgentOutput(finalMessage);
+    }
+    return cleanAgentOutput(result.stdout);
+  }).catch(function (error) {
+    removeOutputFile(outputFile);
+    if (error.code === 'ETIMEDOUT') {
+      throw new Error('codex ' + description + ' timed out after ' + Math.round(timeoutMs / 1000) + 's');
+    }
+    throw error;
+  });
+}
+
 function generateClaudeText(prompt, cwd) {
   var result = childProcess.spawnSync('claude', [
     '-p',
@@ -205,6 +270,33 @@ function generateClaudeText(prompt, cwd) {
   return cleanAgentOutput(result.stdout);
 }
 
+function generateClaudeTextAsync(prompt, cwd) {
+  var timeoutMs = codexTimeoutMs();
+  return spawnTextCommand('claude', [
+    '-p',
+    '--no-session-persistence',
+    '--disable-slash-commands',
+    '--strict-mcp-config',
+    '--mcp-config', '{"mcpServers":{}}',
+    '--tools', '',
+    '--system-prompt', CLAUDE_TEXT_SYSTEM_PROMPT
+  ], {
+    cwd: cwd,
+    input: prompt,
+    timeout: timeoutMs
+  }).then(function (result) {
+    if (result.status !== 0) {
+      throw new Error('claude generation failed with status ' + result.status + ': ' + commandOutput(result));
+    }
+    return cleanAgentOutput(result.stdout);
+  }).catch(function (error) {
+    if (error.code === 'ETIMEDOUT') {
+      throw new Error('claude generation timed out after ' + Math.round(timeoutMs / 1000) + 's');
+    }
+    throw error;
+  });
+}
+
 function generateAntigravityText(prompt, cwd) {
   var result = childProcess.spawnSync('agy', ['--prompt', prompt], {
     cwd: cwd,
@@ -224,6 +316,24 @@ function generateAntigravityText(prompt, cwd) {
   return cleanAgentOutput(result.stdout);
 }
 
+function generateAntigravityTextAsync(prompt, cwd) {
+  var timeoutMs = codexTimeoutMs();
+  return spawnTextCommand('agy', ['--prompt', prompt], {
+    cwd: cwd,
+    timeout: timeoutMs
+  }).then(function (result) {
+    if (result.status !== 0) {
+      throw new Error('antigravity generation failed with status ' + result.status + ': ' + commandOutput(result));
+    }
+    return cleanAgentOutput(result.stdout);
+  }).catch(function (error) {
+    if (error.code === 'ETIMEDOUT') {
+      throw new Error('antigravity generation timed out after ' + Math.round(timeoutMs / 1000) + 's');
+    }
+    throw error;
+  });
+}
+
 function generateOpencodeText(prompt, cwd) {
   var result = childProcess.spawnSync('opencode', ['run', prompt], {
     cwd: cwd,
@@ -241,6 +351,89 @@ function generateOpencodeText(prompt, cwd) {
     throw new Error('opencode generation failed with status ' + result.status + ': ' + commandOutput(result));
   }
   return cleanAgentOutput(result.stdout);
+}
+
+function generateOpencodeTextAsync(prompt, cwd) {
+  var timeoutMs = codexTimeoutMs();
+  return spawnTextCommand('opencode', ['run', prompt], {
+    cwd: cwd,
+    timeout: timeoutMs
+  }).then(function (result) {
+    if (result.status !== 0) {
+      throw new Error('opencode generation failed with status ' + result.status + ': ' + commandOutput(result));
+    }
+    return cleanAgentOutput(result.stdout);
+  }).catch(function (error) {
+    if (error.code === 'ETIMEDOUT') {
+      throw new Error('opencode generation timed out after ' + Math.round(timeoutMs / 1000) + 's');
+    }
+    throw error;
+  });
+}
+
+function spawnTextCommand(command, args, options) {
+  options = options || {};
+  return new Promise(function (resolve, reject) {
+    var child;
+    var stdout = '';
+    var stderr = '';
+    var settled = false;
+    var timedOut = false;
+    var timer;
+    var forceKillTimer;
+
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (error) reject(error);
+      else resolve(result);
+    }
+
+    try {
+      child = childProcess.spawn(command, args, {
+        cwd: options.cwd,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    } catch (error) {
+      finish(error);
+      return;
+    }
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', function (chunk) { stdout += chunk; });
+    child.stderr.on('data', function (chunk) { stderr += chunk; });
+    child.on('error', function (error) { finish(error); });
+    child.on('close', function (status, signal) {
+      if (timedOut) {
+        var timeoutError = new Error(command + ' timed out');
+        timeoutError.code = 'ETIMEDOUT';
+        finish(timeoutError);
+        return;
+      }
+      finish(null, {
+        status: status == null ? 1 : status,
+        signal: signal,
+        stdout: stdout,
+        stderr: stderr
+      });
+    });
+
+    timer = setTimeout(function () {
+      timedOut = true;
+      child.kill('SIGTERM');
+      forceKillTimer = setTimeout(function () {
+        child.kill('SIGKILL');
+      }, 2000);
+    }, options.timeout || DEFAULT_CODEX_TIMEOUT_MS);
+
+    child.stdin.on('error', function (error) {
+      if (error.code !== 'EPIPE') finish(error);
+    });
+    child.stdin.end(options.input || '');
+  });
 }
 
 function generateCommitMessage(prompt, cwd) {
@@ -307,6 +500,7 @@ module.exports = {
   launchAgent: launchAgent,
   interactiveInvocation: interactiveInvocation,
   generateText: generateText,
+  generateTextAsync: generateTextAsync,
   generateCommitMessage: generateCommitMessage,
   codexTimeoutMs: codexTimeoutMs
 };

@@ -900,8 +900,13 @@ function handleCreateTask(req, res, targetRepo) {
 
 function handleDecomposeTask(req, res, targetRepo) {
   if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  res.gmcLongLived = true;
+  req.setTimeout(0);
+  res.setTimeout(0);
   readJsonBody(req).then(function (body) {
-    sendJson(res, decomposeRepositoryTasks(targetRepo, body));
+    return decomposeRepositoryTasks(targetRepo, body);
+  }).then(function (result) {
+    sendJson(res, result);
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -1853,35 +1858,32 @@ function decomposeRepositoryTasks(root, input) {
   if (content.length > 12000) throwHttpError('Task content is too long');
 
   var selectedAgent = config.currentRepositoryTaskAgent(repoRoot);
-  var generated;
-  var decomposition;
-  try {
-    generated = agent.generateText(prompts.taskDecompositionPrompt({
-      title: title,
-      content: content
-    }), repoRoot, selectedAgent, {
-      outputPrefix: 'gmc-task-decomposition',
-      description: 'task decomposition'
+  return agent.generateTextAsync(prompts.taskDecompositionPrompt({
+    title: title,
+    content: content
+  }), repoRoot, selectedAgent, {
+    outputPrefix: 'gmc-task-decomposition',
+    description: 'task decomposition'
+  }).then(function (generated) {
+    return taskStatus.parseTaskDecomposition(generated);
+  }).then(function (decomposition) {
+    var createdTasks = decomposition.map(function (task) {
+      return createRepositoryTask(repoRoot, {
+        title: task.title,
+        content: task.content,
+        status: 'todo'
+      }).task;
     });
-    decomposition = taskStatus.parseTaskDecomposition(generated);
-  } catch (error) {
+    return {
+      agent: selectedAgent,
+      createdTasks: createdTasks,
+      tasks: readRepositoryTasks(repoRoot).tasks
+    };
+  }).catch(function (error) {
     var generationError = new Error('AI task decomposition failed: ' + error.message);
     generationError.httpStatus = 500;
     throw generationError;
-  }
-
-  var createdTasks = decomposition.map(function (task) {
-    return createRepositoryTask(repoRoot, {
-      title: task.title,
-      content: task.content,
-      status: 'todo'
-    }).task;
   });
-  return {
-    agent: selectedAgent,
-    createdTasks: createdTasks,
-    tasks: readRepositoryTasks(repoRoot).tasks
-  };
 }
 
 function updateRepositoryTask(root, input, options) {
@@ -4391,6 +4393,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
       </div>
     </form>
     <div class="modal-actions">
+      <button id="decomposeTaskDetail" class="copy-button" type="button" data-i18n="decomposeTask">AI 自动分解</button>
       <button id="editTaskDetail" class="copy-button" type="button" data-i18n="editTask">编辑</button>
       <button id="cancelTaskEdit" class="copy-button" type="button" data-i18n="cancel" hidden>取消</button>
       <button id="saveTaskDetail" class="commit-button" type="button" data-i18n="saveTask" hidden>保存</button>
@@ -4408,8 +4411,10 @@ var AUTH_QUERY_PARAM = ${JSON.stringify(AUTH_QUERY_PARAM)};
   var FETCH_TIMEOUT_MS = 30000;
   window.fetch = function(input, init) {
     init = init || {};
+    var timeoutMs = Number(init.gmcTimeoutMs) > 0 ? Number(init.gmcTimeoutMs) : FETCH_TIMEOUT_MS;
+    delete init.gmcTimeoutMs;
     var controller = new AbortController();
-    var timer = setTimeout(function() { controller.abort(); }, FETCH_TIMEOUT_MS);
+    var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
     if (init.signal) {
       init.signal.addEventListener('abort', function() { controller.abort(); });
     }
@@ -4426,6 +4431,7 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
+var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
@@ -4604,6 +4610,7 @@ var I18N = {
     taskLoadFailed: '任务加载失败：',
     taskCreateFailed: '任务创建失败：',
     taskDecomposeFailed: '任务分解失败：',
+    deleteDecomposedTaskConfirm: 'AI 已将 {id} 分解为 {count} 个新任务。是否删除原任务？',
     taskUpdateFailed: '任务更新失败：',
     noTasksInColumn: '这一列还没有任务',
     noRepoForTasks: '请先选择一个 Git 仓库来使用任务看板。',
@@ -4814,6 +4821,7 @@ var I18N = {
     taskLoadFailed: 'Failed to load tasks: ',
     taskCreateFailed: 'Failed to create task: ',
     taskDecomposeFailed: 'Failed to decompose task: ',
+    deleteDecomposedTaskConfirm: 'AI decomposed {id} into {count} new tasks. Delete the original task?',
     taskUpdateFailed: 'Failed to update task: ',
     noTasksInColumn: 'No tasks in this lane yet',
     noRepoForTasks: 'Select a Git repository before using the task board.',
@@ -5932,11 +5940,13 @@ function submitTaskForm(decompose) {
   if (createButton) createButton.disabled = true;
   if (decomposeButton) decomposeButton.disabled = true;
   var endpoint = decompose ? '/api/tasks/decompose' : '/api/tasks/create';
-  fetch(endpoint + '?repo=' + encodeURIComponent(targetRepo), {
+  var requestOptions = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: titleValue, content: contentValue, status: 'todo' })
-  })
+  };
+  if (decompose) requestOptions.gmcTimeoutMs = TASK_DECOMPOSITION_TIMEOUT_MS;
+  fetch(endpoint + '?repo=' + encodeURIComponent(targetRepo), requestOptions)
     .then(function(res) {
       return res.json().then(function(data) {
         if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
@@ -5968,6 +5978,49 @@ function submitTaskForm(decompose) {
     });
 }
 
+function decomposeTaskDetail() {
+  var task = findRepoTask(state.activeTaskId);
+  var button = $('decomposeTaskDetail');
+  if (!task || !button || button.disabled) return;
+  setTaskError('');
+  button.disabled = true;
+  button.textContent = t('decomposingTask');
+  fetch('/api/tasks/decompose?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: task.title, content: task.content }),
+    gmcTimeoutMs: TASK_DECOMPOSITION_TIMEOUT_MS
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.repoTasks = data.tasks || [];
+      state.tasksLoaded = true;
+      renderTaskBoard();
+      setTaskError('');
+      var count = (data.createdTasks || []).length;
+      var message = t('deleteDecomposedTaskConfirm')
+        .replace('{id}', task.id)
+        .replace('{count}', String(count));
+      if (confirm(message)) {
+        return deleteTaskRequest(task.id);
+      }
+      renderTaskDetail(findRepoTask(task.id));
+      refreshRepositoryStatus();
+    })
+    .catch(function(error) {
+      setTaskError(t('taskDecomposeFailed') + error.message);
+    })
+    .finally(function() {
+      button.disabled = false;
+      button.textContent = t('decomposeTask');
+    });
+}
+
 function updateTaskStatus(taskId, status) {
   if (!targetRepo || !taskId || !status) return;
   setTaskError('');
@@ -5996,6 +6049,10 @@ function updateTaskStatus(taskId, status) {
 function deleteTask(taskId) {
   if (!targetRepo || !taskId) return;
   if (!confirm(t('deleteTaskConfirmPrefix') + taskId + t('deleteTaskConfirmSuffix'))) return;
+  return deleteTaskRequest(taskId);
+}
+
+function deleteTaskRequest(taskId) {
   setTaskError('');
   return fetch('/api/tasks/delete?repo=' + encodeURIComponent(targetRepo), {
     method: 'POST',
@@ -6011,6 +6068,7 @@ function deleteTask(taskId) {
     .then(function(data) {
       state.repoTasks = data.tasks || [];
       renderTaskBoard();
+      if (state.activeTaskId === taskId) hideTaskDetail();
       refreshRepositoryStatus();
     })
     .catch(function(error) {
@@ -6197,11 +6255,13 @@ function setTaskDetailEditing(editing) {
   var body = $('taskDetailBody');
   var form = $('taskDetailEdit');
   var editButton = $('editTaskDetail');
+  var decomposeButton = $('decomposeTaskDetail');
   var cancelButton = $('cancelTaskEdit');
   var saveButton = $('saveTaskDetail');
   if (body) body.hidden = state.taskDetailEditing;
   if (form) form.hidden = !state.taskDetailEditing;
   if (editButton) editButton.hidden = state.taskDetailEditing;
+  if (decomposeButton) decomposeButton.hidden = state.taskDetailEditing;
   if (cancelButton) cancelButton.hidden = !state.taskDetailEditing;
   if (saveButton) saveButton.hidden = !state.taskDetailEditing;
   if (state.taskDetailEditing && task) {
@@ -6681,6 +6741,7 @@ function initSecurityControls() {
   $('copyAccessUrl').addEventListener('click', copyAccessUrl);
   $('cancelRotateToken').addEventListener('click', hideTokenConfirmModal);
   $('confirmRotateToken').addEventListener('click', rotateToken);
+  $('decomposeTaskDetail').addEventListener('click', decomposeTaskDetail);
   $('editTaskDetail').addEventListener('click', function() { setTaskDetailEditing(true); });
   $('cancelTaskEdit').addEventListener('click', function() { setTaskDetailEditing(false); });
   $('saveTaskDetail').addEventListener('click', saveTaskDetail);

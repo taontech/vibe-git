@@ -77,8 +77,8 @@ function parseTaskDecomposition(text) {
       throw new Error('Could not parse AI task decomposition as JSON: ' + firstLine(text));
     }
   }
-  if (!parsed || !Array.isArray(parsed.tasks) || !parsed.tasks.length) {
-    throw new Error('AI task decomposition must contain at least one task.');
+  if (!parsed || !Array.isArray(parsed.tasks) || parsed.tasks.length < 2) {
+    throw new Error('AI task decomposition must contain at least two tasks.');
   }
   if (parsed.tasks.length > 20) {
     throw new Error('AI task decomposition returned more than 20 tasks.');
