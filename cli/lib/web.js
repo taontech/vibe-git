@@ -29,14 +29,21 @@ var RECENT_REPOS_VISIT_INTERVAL_MS = 10 * 60 * 1000;
 var STATUS_CACHE_TTL_MS = process.env.GMC_STATUS_CACHE_MS ? Number(process.env.GMC_STATUS_CACHE_MS) : 10000;
 var TASK_EVENT_DEBOUNCE_MS = 100;
 var TASK_EVENT_HEARTBEAT_MS = 15000;
+var AGENT_MONITOR_DEFAULT_PORT = 8898;
+var AGENT_MONITOR_TIMEOUT_MS = 1500;
+var AGENT_MONITOR_MAX_RESPONSE_BYTES = 256 * 1024;
 var TASK_AGENT_STATUSES = ['codex', 'claude', 'antigravity'];
 var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
 var statusCache = {};
 var taskEventChannels = Object.create(null);
+var agentMonitorRuntime = null;
 
 function start(root, options) {
   options = options || {};
+  if (options.agentMonitor || options.monitor) {
+    agentMonitorRuntime = options.agentMonitor || options.monitor;
+  }
   recordRepositoryVisitIfValid(root);
 
   var requestedPort = normalizePort(options.port || process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
@@ -343,6 +350,11 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname === '/api/agent-monitor') {
+      handleAgentMonitor(req, res);
+      return;
+    }
+
     if (parsed.pathname === '/api/agent') {
       var currentAgent = 'codex';
       var currentCommitAgent = 'codex';
@@ -464,6 +476,198 @@ function handleRequest(req, res) {
     logRequestTiming(reqPath, reqT0, error);
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
+}
+
+function handleAgentMonitor(req, res) {
+  var monitor = resolveAgentMonitorConfig();
+  if (!monitor.enabled) {
+    sendJson(res, agentMonitorUnavailable('disabled'));
+    return;
+  }
+  if (monitor.healthy === false) {
+    sendJson(res, agentMonitorUnavailable(monitor.reason || 'unavailable'));
+    return;
+  }
+
+  requestAgentMonitorAgents(monitor).then(function (agents) {
+    sendJson(res, {
+      status: 'ok',
+      available: true,
+      agents: agents,
+      fetchedAt: new Date().toISOString()
+    });
+  }).catch(function (error) {
+    var reason = error && error.agentMonitorReason || 'unavailable';
+    var status = reason === 'invalid_response' || reason === 'http_error' ? 'error' : 'unavailable';
+    sendJson(res, {
+      status: status,
+      available: false,
+      reason: reason,
+      agents: []
+    });
+  });
+}
+
+function resolveAgentMonitorConfig() {
+  var runtime = agentMonitorRuntime || {};
+  var runtimeStatus = String(runtime.status || '').toLowerCase();
+  var runtimeReason = String(runtime.reason || '').toLowerCase();
+  if (runtimeReason !== 'timeout' && runtimeReason !== 'disabled' &&
+      runtimeReason !== 'unavailable' && runtimeReason !== 'invalid_configuration') {
+    runtimeReason = '';
+  }
+  var disabled = process.env.GMC_AGENT_MONITOR_DISABLED === '1' ||
+    process.env.GMC_AGENT_MONITOR_DISABLED === 'true' ||
+    runtime.enabled === false ||
+    runtimeStatus === 'disabled';
+  var configuredUrl = runtime.url || runtime.address || runtime.baseUrl || runtime.monitorUrl ||
+    process.env.GMC_AGENT_MONITOR_URL || '';
+  var port;
+  var parsed;
+
+  if (disabled) {
+    return { enabled: false };
+  }
+  try {
+    port = normalizePort(runtime.port || process.env.GMC_AGENT_MONITOR_PORT || AGENT_MONITOR_DEFAULT_PORT);
+    parsed = configuredUrl ? new URL(configuredUrl) : new URL('http://127.0.0.1:' + port);
+  } catch (error) {
+    return { enabled: true, healthy: false, reason: 'invalid_configuration' };
+  }
+  if (parsed.protocol !== 'http:') {
+    return { enabled: true, healthy: false, reason: 'invalid_configuration' };
+  }
+  if (parsed.hostname === '0.0.0.0' || parsed.hostname === '::') {
+    parsed.hostname = '127.0.0.1';
+  }
+  if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost' && parsed.hostname !== '::1') {
+    return { enabled: true, healthy: false, reason: 'invalid_configuration' };
+  }
+  var basePath = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname.replace(/\/$/, '') : '';
+  basePath = basePath.replace(/\/(?:health|agents|status)$/, '');
+  return {
+    enabled: true,
+    healthy: runtime.healthy === false || runtime.available === false ||
+      runtimeStatus === 'unavailable' || runtimeStatus === 'unhealthy' ||
+      runtimeStatus === 'error' || runtimeStatus === 'failed' ? false : true,
+    reason: runtimeReason,
+    hostname: parsed.hostname,
+    port: normalizePort(parsed.port || port),
+    path: basePath + '/agents'
+  };
+}
+
+function requestAgentMonitorAgents(monitor) {
+  return new Promise(function (resolve, reject) {
+    var settled = false;
+    var req = http.request({
+      hostname: monitor.hostname,
+      port: monitor.port,
+      path: monitor.path,
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Connection': 'close'
+      }
+    }, function (response) {
+      var chunks = [];
+      var size = 0;
+      response.on('data', function (chunk) {
+        if (settled) return;
+        size += chunk.length;
+        if (size > AGENT_MONITOR_MAX_RESPONSE_BYTES) {
+          settled = true;
+          req.destroy();
+          reject(agentMonitorError('invalid_response'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', function () {
+        if (settled) return;
+        settled = true;
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(agentMonitorError('http_error'));
+          return;
+        }
+        var parsed;
+        try {
+          parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch (error) {
+          reject(agentMonitorError('invalid_response'));
+          return;
+        }
+        try {
+          resolve(normalizeAgentMonitorAgents(parsed));
+        } catch (error) {
+          reject(agentMonitorError('invalid_response'));
+        }
+      });
+    });
+    req.on('error', function () {
+      if (settled) return;
+      settled = true;
+      reject(agentMonitorError('unavailable'));
+    });
+    req.setTimeout(AGENT_MONITOR_TIMEOUT_MS, function () {
+      if (settled) return;
+      settled = true;
+      req.destroy();
+      reject(agentMonitorError('timeout'));
+    });
+    req.end();
+  });
+}
+
+function normalizeAgentMonitorAgents(value) {
+  if (!Array.isArray(value)) {
+    throw new Error('Agent Monitor response must be an array');
+  }
+  return value.slice(0, 50).map(function (item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Invalid Agent Monitor entry');
+    }
+    var agentId = String(item.agent_id || item.id || '').trim().toLowerCase();
+    if (!agentId || agentId.length > 80) {
+      throw new Error('Invalid Agent Monitor id');
+    }
+    var processCount = safeAgentMonitorNumber(item.process_count, true);
+    var status = String(item.status || '').trim().toLowerCase();
+    if (status !== 'working' && status !== 'idle' && status !== 'stopped') {
+      status = 'unknown';
+    }
+    if (processCount === 0) status = 'stopped';
+    return {
+      agentId: agentId,
+      displayName: String(item.display_name || item.displayName || agentId).slice(0, 120),
+      status: status,
+      processCount: processCount,
+      cpuPercent: safeAgentMonitorNumber(item.total_cpu_percent, false),
+      memoryMb: safeAgentMonitorNumber(item.total_memory_mb, false),
+      uptimeSeconds: safeAgentMonitorNumber(item.max_uptime_seconds, false)
+    };
+  });
+}
+
+function safeAgentMonitorNumber(value, integer) {
+  value = Number(value);
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return integer ? Math.floor(value) : Math.round(value * 10) / 10;
+}
+
+function agentMonitorUnavailable(reason) {
+  return {
+    status: 'unavailable',
+    available: false,
+    reason: reason || 'unavailable',
+    agents: []
+  };
+}
+
+function agentMonitorError(reason) {
+  var error = new Error('Agent Monitor request failed');
+  error.agentMonitorReason = reason;
+  return error;
 }
 
 function logRequestTiming(pathname, t0, error) {
@@ -3649,11 +3853,28 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-board { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 14px; align-items: start; min-height: 360px; }
 .task-column { position: relative; min-width: 0; min-height: 280px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); box-shadow: 0 1px 2px rgba(15,23,42,.04); transition: border-color .16s, background .16s, box-shadow .16s, transform .16s; }
 .task-column.drag-over { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 16px 34px rgba(6,141,109,.14); transform: translateY(-2px); }
-.task-column-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.task-column-head { display: grid; gap: 9px; margin-bottom: 10px; }
+.task-column-head-main { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .task-column-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; color: var(--text); }
 .task-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--task-color, var(--accent)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--task-color, var(--accent)) 14%, transparent); }
 .task-dot.breathing { animation: taskDotBreathing 1.8s ease-in-out infinite; }
 .task-count { display: grid; place-items: center; min-width: 26px; height: 24px; padding: 0 7px; border-radius: 999px; background: var(--input-bg); color: var(--muted); font-weight: 800; font-size: 12px; }
+.task-agent-monitor { display: grid; gap: 7px; min-width: 0; padding: 9px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--panel); color: var(--muted); font-size: 11px; line-height: 1.35; }
+.task-agent-monitor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.task-agent-monitor-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-weight: 800; }
+.task-agent-monitor-state::before { content: ""; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent); }
+.task-agent-monitor[data-monitor-state="working"] .task-agent-monitor-state { color: var(--green); }
+.task-agent-monitor[data-monitor-state="working"] .task-agent-monitor-state::before { animation: taskDotBreathing 1.8s ease-in-out infinite; }
+.task-agent-monitor[data-monitor-state="idle"] .task-agent-monitor-state { color: var(--amber); }
+.task-agent-monitor[data-monitor-state="stopped"] .task-agent-monitor-state { color: var(--muted); }
+.task-agent-monitor[data-monitor-state="unavailable"] .task-agent-monitor-state,
+.task-agent-monitor[data-monitor-state="timeout"] .task-agent-monitor-state,
+.task-agent-monitor[data-monitor-state="unknown"] .task-agent-monitor-state { color: var(--rose); }
+.task-agent-monitor-metrics { display: flex; flex-wrap: wrap; gap: 4px 8px; color: var(--muted); }
+.task-agent-monitor-metrics span { white-space: nowrap; }
+.task-agent-monitor-sources { display: grid; gap: 3px; padding-top: 6px; border-top: 1px solid var(--line-soft); }
+.task-agent-monitor-source { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.task-agent-monitor-source span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-column-body { display: grid; gap: 10px; min-height: 220px; align-content: start; align-items: start; grid-auto-rows: 132px; }
 .task-empty { display: grid; place-items: center; min-height: 116px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; text-align: center; padding: 14px; background: var(--panel); }
 .task-card { position: relative; display: grid; grid-template-rows: 30px auto auto 1fr; gap: 9px; height: 132px; padding: 0 12px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; overflow: hidden; transition: transform .16s, box-shadow .16s, border-color .16s; }
@@ -3907,7 +4128,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
   50% { transform: scale(1.08); box-shadow: 0 0 0 7px color-mix(in srgb, var(--task-color, var(--accent)) 24%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ai-status-loader, .ai-status-sparkles, .task-dot.breathing { animation: none; }
+  .ai-status-loader, .ai-status-sparkles, .task-dot.breathing, .task-agent-monitor-state::before { animation: none; }
 }
 @media (max-width: 1280px) { 
   .grid, .summary-panel { grid-template-columns: 1fr; } 
@@ -4431,8 +4652,9 @@ var targetRepo = urlParams.get('repo') || '';
 var initialReloadToken = ${JSON.stringify(RELOAD_TOKEN)};
 var AUTO_STATUS_INTERVAL_MS = 10000;
 var HIDDEN_STATUS_INTERVAL_MS = 60000;
+var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [] }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var I18N = {
   'zh-CN': {
     language: '语言',
@@ -4621,6 +4843,20 @@ var I18N = {
     taskStatusDoing: '进行中',
     taskStatusReview: '待确认',
     taskStatusDone: '已完成',
+    agentMonitorLoading: '正在加载运行状态...',
+    agentMonitorWorking: '运行中',
+    agentMonitorIdle: '空闲',
+    agentMonitorStopped: '未运行',
+    agentMonitorUnavailable: '监控不可用',
+    agentMonitorTimeout: '监控超时',
+    agentMonitorUnknown: '状态未知',
+    agentMonitorProcesses: '进程',
+    agentMonitorMemory: '内存',
+    agentMonitorUptime: '最长运行',
+    agentMonitorDays: '天',
+    agentMonitorHours: '小时',
+    agentMonitorMinutes: '分钟',
+    agentMonitorSeconds: '秒',
     moveTaskLeft: '前移',
     moveTaskRight: '后移',
     taskUpdatedJustNow: '刚刚更新',
@@ -4832,6 +5068,20 @@ var I18N = {
     taskStatusDoing: 'Doing',
     taskStatusReview: 'Review',
     taskStatusDone: 'Done',
+    agentMonitorLoading: 'Loading runtime status...',
+    agentMonitorWorking: 'Working',
+    agentMonitorIdle: 'Idle',
+    agentMonitorStopped: 'Not running',
+    agentMonitorUnavailable: 'Monitor unavailable',
+    agentMonitorTimeout: 'Monitor timed out',
+    agentMonitorUnknown: 'Unknown status',
+    agentMonitorProcesses: 'Processes',
+    agentMonitorMemory: 'Memory',
+    agentMonitorUptime: 'Longest runtime',
+    agentMonitorDays: 'd',
+    agentMonitorHours: 'h',
+    agentMonitorMinutes: 'm',
+    agentMonitorSeconds: 's',
     moveTaskLeft: 'Move left',
     moveTaskRight: 'Move right',
     taskUpdatedJustNow: 'Updated just now',
@@ -5039,9 +5289,26 @@ I18N.ja = Object.assign({}, I18N.en, {
   noTasksInColumn: 'この列にはまだタスクがありません',
   noRepoForTasks: 'タスクボードを使う前に Git リポジトリを選択してください。',
   taskStatusTodo: '未着手',
+  taskStatusCodex: 'Codex',
+  taskStatusClaude: 'Claude',
+  taskStatusAntigravity: 'Antigravity',
   taskStatusDoing: '進行中',
   taskStatusReview: 'レビュー',
   taskStatusDone: '完了',
+  agentMonitorLoading: '実行状態を読み込み中...',
+  agentMonitorWorking: '実行中',
+  agentMonitorIdle: '待機中',
+  agentMonitorStopped: '未実行',
+  agentMonitorUnavailable: 'モニターを利用できません',
+  agentMonitorTimeout: 'モニターがタイムアウトしました',
+  agentMonitorUnknown: '状態不明',
+  agentMonitorProcesses: 'プロセス',
+  agentMonitorMemory: 'メモリ',
+  agentMonitorUptime: '最長実行時間',
+  agentMonitorDays: '日',
+  agentMonitorHours: '時間',
+  agentMonitorMinutes: '分',
+  agentMonitorSeconds: '秒',
   moveTaskLeft: '左へ移動',
   moveTaskRight: '右へ移動',
   taskUpdatedJustNow: 'たった今更新',
@@ -5233,9 +5500,26 @@ I18N.ko = Object.assign({}, I18N.en, {
   noTasksInColumn: '이 열에는 아직 작업이 없습니다',
   noRepoForTasks: '작업 보드를 사용하기 전에 Git 저장소를 선택하세요.',
   taskStatusTodo: '할 일',
+  taskStatusCodex: 'Codex',
+  taskStatusClaude: 'Claude',
+  taskStatusAntigravity: 'Antigravity',
   taskStatusDoing: '진행 중',
   taskStatusReview: '검토',
   taskStatusDone: '완료',
+  agentMonitorLoading: '실행 상태 불러오는 중...',
+  agentMonitorWorking: '작업 중',
+  agentMonitorIdle: '대기 중',
+  agentMonitorStopped: '실행 안 됨',
+  agentMonitorUnavailable: '모니터를 사용할 수 없음',
+  agentMonitorTimeout: '모니터 시간 초과',
+  agentMonitorUnknown: '알 수 없는 상태',
+  agentMonitorProcesses: '프로세스',
+  agentMonitorMemory: '메모리',
+  agentMonitorUptime: '최장 실행 시간',
+  agentMonitorDays: '일',
+  agentMonitorHours: '시간',
+  agentMonitorMinutes: '분',
+  agentMonitorSeconds: '초',
   moveTaskLeft: '왼쪽으로 이동',
   moveTaskRight: '오른쪽으로 이동',
   taskUpdatedJustNow: '방금 업데이트됨',
@@ -5427,9 +5711,26 @@ I18N.es = Object.assign({}, I18N.en, {
   noTasksInColumn: 'Aún no hay tareas en esta columna',
   noRepoForTasks: 'Selecciona un repositorio Git antes de usar el tablero de tareas.',
   taskStatusTodo: 'Pendiente',
+  taskStatusCodex: 'Codex',
+  taskStatusClaude: 'Claude',
+  taskStatusAntigravity: 'Antigravity',
   taskStatusDoing: 'En curso',
   taskStatusReview: 'Revisión',
   taskStatusDone: 'Hecho',
+  agentMonitorLoading: 'Cargando estado de ejecución...',
+  agentMonitorWorking: 'Trabajando',
+  agentMonitorIdle: 'Inactivo',
+  agentMonitorStopped: 'Sin ejecutar',
+  agentMonitorUnavailable: 'Monitor no disponible',
+  agentMonitorTimeout: 'Tiempo de espera agotado',
+  agentMonitorUnknown: 'Estado desconocido',
+  agentMonitorProcesses: 'Procesos',
+  agentMonitorMemory: 'Memoria',
+  agentMonitorUptime: 'Mayor tiempo activo',
+  agentMonitorDays: 'd',
+  agentMonitorHours: 'h',
+  agentMonitorMinutes: 'min',
+  agentMonitorSeconds: 's',
   moveTaskLeft: 'Mover a la izquierda',
   moveTaskRight: 'Mover a la derecha',
   taskUpdatedJustNow: 'Actualizado ahora mismo',
@@ -5621,9 +5922,26 @@ I18N.fr = Object.assign({}, I18N.en, {
   noTasksInColumn: 'Aucune tâche dans cette colonne',
   noRepoForTasks: 'Sélectionnez un dépôt Git avant d’utiliser le tableau des tâches.',
   taskStatusTodo: 'À faire',
+  taskStatusCodex: 'Codex',
+  taskStatusClaude: 'Claude',
+  taskStatusAntigravity: 'Antigravity',
   taskStatusDoing: 'En cours',
   taskStatusReview: 'Revue',
   taskStatusDone: 'Terminé',
+  agentMonitorLoading: 'Chargement de l’état d’exécution...',
+  agentMonitorWorking: 'En cours',
+  agentMonitorIdle: 'Inactif',
+  agentMonitorStopped: 'Non démarré',
+  agentMonitorUnavailable: 'Moniteur indisponible',
+  agentMonitorTimeout: 'Délai du moniteur dépassé',
+  agentMonitorUnknown: 'État inconnu',
+  agentMonitorProcesses: 'Processus',
+  agentMonitorMemory: 'Mémoire',
+  agentMonitorUptime: 'Durée maximale',
+  agentMonitorDays: 'j',
+  agentMonitorHours: 'h',
+  agentMonitorMinutes: 'min',
+  agentMonitorSeconds: 's',
   moveTaskLeft: 'Déplacer à gauche',
   moveTaskRight: 'Déplacer à droite',
   taskUpdatedJustNow: 'Mis à jour à l’instant',
@@ -5676,9 +5994,9 @@ function getPerfMeasure(name) {
 }
 var TASK_BOARD_STATUSES = [
   { id: 'todo', label: 'taskStatusTodo', color: '#0284c7' },
-  { id: 'codex', label: 'taskStatusCodex', color: '#16a34a', agent: true },
-  { id: 'claude', label: 'taskStatusClaude', color: '#d97706', agent: true },
-  { id: 'antigravity', label: 'taskStatusAntigravity', color: '#7c3aed', agent: true },
+  { id: 'codex', label: 'taskStatusCodex', color: '#16a34a', agent: true, monitorIds: ['codex-cli', 'codex-app'] },
+  { id: 'claude', label: 'taskStatusClaude', color: '#d97706', agent: true, monitorIds: ['claude-code'] },
+  { id: 'antigravity', label: 'taskStatusAntigravity', color: '#7c3aed', agent: true, monitorIds: ['antigravity'] },
   { id: 'done', label: 'taskStatusDone', color: '#64748b' }
 ];
 
@@ -5794,6 +6112,7 @@ function setActiveView(view) {
     button.classList.toggle('active', button.getAttribute('data-view-tab') === view);
   });
   if (view === 'tasks') {
+    startAgentMonitorPolling();
     performance.mark('gmc-task-view-start');
     Promise.all([loadRepositoryTasks(), loadRepositoryTaskAgent()]).then(function() {
       performance.mark('gmc-task-view-end');
@@ -5801,6 +6120,7 @@ function setActiveView(view) {
       console.debug('[gmc:timing] task view switch: ' + getPerfMeasure('gmc-task-view-switch') + 'ms');
     });
   } else {
+    stopAgentMonitorPolling();
     refreshLayoutSoon();
   }
 }
@@ -5811,7 +6131,10 @@ function bindTaskControls() {
   var cancelComposer = $('cancelTaskComposer');
   var decompose = $('decomposeTaskButton');
   var form = $('taskComposer');
-  if (refresh) refresh.addEventListener('click', function() { loadRepositoryTasks({ force: true }); });
+  if (refresh) refresh.addEventListener('click', function() {
+    loadRepositoryTasks({ force: true });
+    loadAgentMonitor({ force: true });
+  });
   if (openComposer) openComposer.addEventListener('click', function() { showTaskComposer(true); });
   if (cancelComposer) cancelComposer.addEventListener('click', function() { showTaskComposer(false); });
   if (decompose) decompose.addEventListener('click', decomposeTaskFromForm);
@@ -5896,6 +6219,95 @@ function loadRepositoryTasks(options) {
         state.pendingTaskReload = false;
         return loadRepositoryTasks({ force: true });
       }
+    });
+}
+
+function startAgentMonitorPolling() {
+  stopAgentMonitorPolling();
+  if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  if (!state.agentMonitor.agents.length) {
+    state.agentMonitor = { status: 'loading', available: false, reason: '', agents: [] };
+    renderTaskBoard();
+  }
+  loadAgentMonitor();
+}
+
+function stopAgentMonitorPolling() {
+  if (state.agentMonitorTimer) {
+    clearTimeout(state.agentMonitorTimer);
+    state.agentMonitorTimer = null;
+  }
+  if (state.agentMonitorRequest) {
+    state.agentMonitorRequest.abort();
+    state.agentMonitorRequest = null;
+  }
+  state.agentMonitorLoading = false;
+}
+
+function scheduleAgentMonitorPoll() {
+  if (state.agentMonitorTimer) clearTimeout(state.agentMonitorTimer);
+  state.agentMonitorTimer = null;
+  if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  state.agentMonitorTimer = setTimeout(function() {
+    state.agentMonitorTimer = null;
+    loadAgentMonitor();
+  }, AGENT_MONITOR_POLL_INTERVAL_MS);
+}
+
+function loadAgentMonitor(options) {
+  options = options || {};
+  if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) {
+    return Promise.resolve(state.agentMonitor);
+  }
+  if (state.agentMonitorLoading && !options.force) {
+    return Promise.resolve(state.agentMonitor);
+  }
+  if (state.agentMonitorRequest) state.agentMonitorRequest.abort();
+  if (state.agentMonitorTimer) clearTimeout(state.agentMonitorTimer);
+  state.agentMonitorTimer = null;
+  var controller = new AbortController();
+  state.agentMonitorRequest = controller;
+  state.agentMonitorLoading = true;
+  return fetch('/api/agent-monitor', {
+    cache: 'no-store',
+    signal: controller.signal,
+    gmcTimeoutMs: 5000
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      if (state.agentMonitorRequest !== controller) return state.agentMonitor;
+      state.agentMonitor = {
+        status: data.status || 'unavailable',
+        available: data.available === true,
+        reason: data.reason || '',
+        agents: Array.isArray(data.agents) ? data.agents : []
+      };
+      if (!state.draggedTaskId) renderTaskBoard();
+      return state.agentMonitor;
+    })
+    .catch(function(error) {
+      if (state.agentMonitorRequest !== controller || error && error.name === 'AbortError') {
+        return state.agentMonitor;
+      }
+      state.agentMonitor = {
+        status: 'unavailable',
+        available: false,
+        reason: 'unavailable',
+        agents: []
+      };
+      if (!state.draggedTaskId) renderTaskBoard();
+      return state.agentMonitor;
+    })
+    .finally(function() {
+      if (state.agentMonitorRequest !== controller) return;
+      state.agentMonitorRequest = null;
+      state.agentMonitorLoading = false;
+      scheduleAgentMonitorPoll();
     });
 }
 
@@ -6117,19 +6529,138 @@ function renderTaskBoard() {
 
   board.innerHTML = TASK_BOARD_STATUSES.map(function(column) {
     var tasks = (state.repoTasks || []).filter(function(task) { return taskBoardStatus(task.status) === column.id; });
-    var dotClass = column.agent && tasks.length ? 'task-dot breathing' : 'task-dot';
+    var monitorState = column.agent ? agentMonitorColumnState(column).status : '';
+    var dotClass = column.agent && monitorState === 'working' ? 'task-dot breathing' : 'task-dot';
     var cards = tasks.length ? tasks.map(function(task) {
       return taskCardHtml(task, column);
     }).join('') : '<div class="task-empty">' + escapeHtml(t('noTasksInColumn')) + '</div>';
     return '<section class="task-column" data-task-status="' + escapeHtml(column.id) + '" style="--task-color:' + escapeHtml(column.color) + '">' +
       '<div class="task-column-head">' +
-        '<div class="task-column-title"><span class="' + dotClass + '"></span><span>' + escapeHtml(t(column.label)) + '</span></div>' +
-        '<div class="task-count">' + tasks.length + '</div>' +
+        '<div class="task-column-head-main">' +
+          '<div class="task-column-title"><span class="' + dotClass + '"></span><span>' + escapeHtml(t(column.label)) + '</span></div>' +
+          '<div class="task-count">' + tasks.length + '</div>' +
+        '</div>' +
+        (column.agent ? agentMonitorHtml(column) : '') +
       '</div>' +
       '<div class="task-column-body">' + cards + '</div>' +
     '</section>';
   }).join('');
   bindRenderedTaskBoard();
+}
+
+function agentMonitorColumnState(column) {
+  var monitor = state.agentMonitor || {};
+  if (monitor.status === 'loading') {
+    return { status: 'loading', entries: [], processCount: 0, cpuPercent: 0, memoryMb: 0, uptimeSeconds: 0 };
+  }
+  if (!monitor.available) {
+    return {
+      status: monitor.reason === 'timeout' ? 'timeout' : 'unavailable',
+      entries: [],
+      processCount: 0,
+      cpuPercent: 0,
+      memoryMb: 0,
+      uptimeSeconds: 0
+    };
+  }
+  var entries = (column.monitorIds || []).map(function(agentId) {
+    var entry = (monitor.agents || []).find(function(item) {
+      return item && item.agentId === agentId;
+    });
+    return entry || {
+      agentId: agentId,
+      displayName: agentMonitorSourceLabel(agentId),
+      status: 'stopped',
+      processCount: 0,
+      cpuPercent: 0,
+      memoryMb: 0,
+      uptimeSeconds: 0
+    };
+  });
+  var status = 'stopped';
+  if (entries.some(function(entry) { return entry.status === 'working'; })) status = 'working';
+  else if (entries.some(function(entry) { return entry.status === 'idle'; })) status = 'idle';
+  else if (entries.some(function(entry) { return entry.status === 'unknown'; })) status = 'unknown';
+  return {
+    status: status,
+    entries: entries,
+    processCount: entries.reduce(function(total, entry) { return total + (Number(entry.processCount) || 0); }, 0),
+    cpuPercent: entries.reduce(function(total, entry) { return total + (Number(entry.cpuPercent) || 0); }, 0),
+    memoryMb: entries.reduce(function(total, entry) { return total + (Number(entry.memoryMb) || 0); }, 0),
+    uptimeSeconds: entries.reduce(function(longest, entry) { return Math.max(longest, Number(entry.uptimeSeconds) || 0); }, 0)
+  };
+}
+
+function agentMonitorHtml(column) {
+  var summary = agentMonitorColumnState(column);
+  var stateKey = {
+    loading: 'agentMonitorLoading',
+    working: 'agentMonitorWorking',
+    idle: 'agentMonitorIdle',
+    stopped: 'agentMonitorStopped',
+    unavailable: 'agentMonitorUnavailable',
+    timeout: 'agentMonitorTimeout',
+    unknown: 'agentMonitorUnknown'
+  }[summary.status] || 'agentMonitorUnknown';
+  var metrics = '';
+  var sources = '';
+  if (summary.status === 'working' || summary.status === 'idle' || summary.status === 'stopped' || summary.status === 'unknown') {
+    metrics = '<div class="task-agent-monitor-metrics">' +
+      '<span>' + escapeHtml(t('agentMonitorProcesses')) + ' ' + summary.processCount + '</span>' +
+      '<span>CPU ' + escapeHtml(formatAgentMonitorNumber(summary.cpuPercent)) + '%</span>' +
+      '<span>' + escapeHtml(t('agentMonitorMemory')) + ' ' + escapeHtml(formatAgentMonitorMemory(summary.memoryMb)) + '</span>' +
+      '<span>' + escapeHtml(t('agentMonitorUptime')) + ' ' + escapeHtml(formatAgentMonitorUptime(summary.uptimeSeconds)) + '</span>' +
+    '</div>';
+  }
+  if (summary.entries.length > 1) {
+    sources = '<div class="task-agent-monitor-sources">' + summary.entries.map(function(entry) {
+      return '<div class="task-agent-monitor-source">' +
+        '<span>' + escapeHtml(agentMonitorSourceLabel(entry.agentId)) + '</span>' +
+        '<span>' + escapeHtml(t('agentMonitor' + capitalizeAgentMonitorStatus(entry.status))) + ' · ' +
+          (Number(entry.processCount) || 0) + '</span>' +
+      '</div>';
+    }).join('') + '</div>';
+  }
+  return '<div class="task-agent-monitor" data-monitor-state="' + escapeHtml(summary.status) + '">' +
+    '<div class="task-agent-monitor-head">' +
+      '<span class="task-agent-monitor-state">' + escapeHtml(t(stateKey)) + '</span>' +
+    '</div>' +
+    metrics +
+    sources +
+  '</div>';
+}
+
+function capitalizeAgentMonitorStatus(status) {
+  status = String(status || 'unknown');
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function agentMonitorSourceLabel(agentId) {
+  return {
+    'codex-cli': 'Codex CLI',
+    'codex-app': 'Codex App',
+    'claude-code': 'Claude Code',
+    'antigravity': 'Antigravity'
+  }[agentId] || agentId;
+}
+
+function formatAgentMonitorNumber(value) {
+  value = Number(value) || 0;
+  return value.toFixed(value >= 10 || value === 0 ? 0 : 1);
+}
+
+function formatAgentMonitorMemory(value) {
+  value = Number(value) || 0;
+  if (value >= 1024) return (value / 1024).toFixed(value >= 10240 ? 0 : 1) + ' GB';
+  return Math.round(value) + ' MB';
+}
+
+function formatAgentMonitorUptime(value) {
+  value = Math.max(0, Math.floor(Number(value) || 0));
+  if (value >= 86400) return Math.floor(value / 86400) + t('agentMonitorDays');
+  if (value >= 3600) return Math.floor(value / 3600) + t('agentMonitorHours');
+  if (value >= 60) return Math.floor(value / 60) + t('agentMonitorMinutes');
+  return value + t('agentMonitorSeconds');
 }
 
 function taskCardHtml(task, column) {
@@ -6848,6 +7379,7 @@ function initThemeControls() {
 
 function openSettings() {
   state.settingsOpen = true;
+  stopAgentMonitorPolling();
   state.previousViewBeforeSettings = state.activeView || 'git';
   var tabs = document.querySelector('.view-tabs');
   if (tabs) tabs.hidden = true;
@@ -7308,8 +7840,13 @@ window.addEventListener('resize', function() {
 });
 window.addEventListener('beforeunload', function() {
   if (state.taskEvents) state.taskEvents.close();
+  stopAgentMonitorPolling();
 });
 document.addEventListener('visibilitychange', function() {
+  if (state.activeView === 'tasks' && !state.settingsOpen) {
+    if (document.hidden) stopAgentMonitorPolling();
+    else startAgentMonitorPolling();
+  }
   if (!document.hidden && state.auto && targetRepo && !isDetailPageOpen()) {
     load({ force: true });
   } else {
