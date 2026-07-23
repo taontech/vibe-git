@@ -38,12 +38,14 @@ var recentRepoVisitTimes = {};
 var statusCache = {};
 var taskEventChannels = Object.create(null);
 var agentMonitorRuntime = null;
+var shutdownHandler = null;
 
 function start(root, options) {
   options = options || {};
   if (options.agentMonitor || options.monitor) {
     agentMonitorRuntime = options.agentMonitor || options.monitor;
   }
+  shutdownHandler = typeof options.onQuit === 'function' ? options.onQuit : null;
   recordRepositoryVisitIfValid(root);
 
   var requestedPort = normalizePort(options.port || process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
@@ -199,10 +201,7 @@ function handleRequest(req, res) {
 
     if (req.method === 'POST') {
       if (parsed.pathname === '/api/quit') {
-        sendJson(res, { status: 'ok' });
-        setTimeout(function () {
-          process.exit(0);
-        }, 100);
+        handleQuit(res);
         return;
       }
       if (parsed.pathname === '/api/commit-selected') {
@@ -478,6 +477,23 @@ function handleRequest(req, res) {
   }
 }
 
+function handleQuit(res) {
+  var shutdown;
+  try {
+    shutdown = shutdownHandler ? shutdownHandler() : null;
+  } catch (error) {
+    shutdown = Promise.reject(error);
+  }
+  Promise.resolve(shutdown).catch(function (error) {
+    console.error('GMC Web shutdown cleanup failed: ' + error.message);
+  }).then(function () {
+    sendJson(res, { status: 'ok' });
+    setTimeout(function () {
+      process.exit(0);
+    }, 100);
+  });
+}
+
 function handleAgentMonitor(req, res) {
   var monitor = resolveAgentMonitorConfig();
   if (!monitor.enabled) {
@@ -513,7 +529,10 @@ function resolveAgentMonitorConfig() {
   var runtimeStatus = String(runtime.status || '').toLowerCase();
   var runtimeReason = String(runtime.reason || '').toLowerCase();
   if (runtimeReason !== 'timeout' && runtimeReason !== 'disabled' &&
-      runtimeReason !== 'unavailable' && runtimeReason !== 'invalid_configuration') {
+      runtimeReason !== 'unavailable' && runtimeReason !== 'invalid_configuration' &&
+      runtimeReason !== 'python_not_found' && runtimeReason !== 'dependency_missing' &&
+      runtimeReason !== 'service_missing' && runtimeReason !== 'port_conflict' &&
+      runtimeReason !== 'process_exited' && runtimeReason !== 'stopped') {
     runtimeReason = '';
   }
   var disabled = process.env.GMC_AGENT_MONITOR_DISABLED === '1' ||
@@ -9850,7 +9869,7 @@ function quit(port) {
     req.on('error', function () {
       resolve();
     });
-    req.setTimeout(1000, function () {
+    req.setTimeout(5000, function () {
       req.destroy();
       resolve();
     });

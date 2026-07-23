@@ -15,6 +15,7 @@ var agent = require('../lib/agent');
 var autogmc = require('../lib/autogmc');
 var taskStatus = require('../lib/task-status');
 var web = require('../lib/web');
+var agentMonitor = require('../lib/agent-monitor');
 var mergeConflict = require('../lib/merge-conflict');
 var packageInfo = require('../package.json');
 
@@ -393,10 +394,44 @@ async function gitWebCommand(flags) {
     return;
   }
 
-  var started = await web.start(root || process.cwd(), {
-    port: flags.port,
-    noOpen: flags.noOpen
-  });
+  var monitorManager = agentMonitor.createManager();
+  var monitorState = await monitorManager.start();
+  if (monitorState.healthy) {
+    console.log(
+      'Agent Monitor: ' + monitorState.url +
+      (monitorState.owned ? ' (started by GMC)' : ' (reused)')
+    );
+  } else if (monitorState.status !== 'disabled') {
+    console.error('Agent Monitor unavailable: ' + agentMonitor.describe(monitorState));
+  }
+
+  var started;
+  try {
+    started = await web.start(root || process.cwd(), {
+      port: flags.port,
+      noOpen: flags.noOpen,
+      agentMonitor: monitorState,
+      onQuit: function () {
+        return monitorManager.stop();
+      }
+    });
+  } catch (error) {
+    await monitorManager.stop();
+    throw error;
+  }
+  var stoppingWeb = false;
+  function stopWebForSignal() {
+    if (stoppingWeb) return;
+    stoppingWeb = true;
+    monitorManager.stop().then(function () {
+      process.exit(0);
+    }, function (error) {
+      console.error('Agent Monitor cleanup failed: ' + error.message);
+      process.exit(1);
+    });
+  }
+  process.once('SIGINT', stopWebForSignal);
+  process.once('SIGTERM', stopWebForSignal);
   console.log('GMC Web: ' + started.url);
   if (root) {
     var createdLinkPath = web.createWebloc(root, {
@@ -424,7 +459,8 @@ async function runWatchedGitWeb(root, flags, port, isRunning) {
     port: port
   });
   var watchFiles = [
-    path.resolve(__dirname, '../lib/web.js')
+    path.resolve(__dirname, '../lib/web.js'),
+    path.resolve(__dirname, '../lib/agent-monitor.js')
   ];
   var fileHashes = {};
   watchFiles.forEach(function(filePath) {

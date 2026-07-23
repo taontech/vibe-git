@@ -1,4 +1,5 @@
 /.DS_Store
 /git.webloc
 /cli/node_modules/
-/agent-monitor/
+/agent-monitor/.venv/
+/agent-monitor/**/__pycache__/
