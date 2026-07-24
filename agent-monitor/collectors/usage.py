@@ -364,16 +364,29 @@ class UsageFetcher:
             total_input = 0
             total_output = 0
             total_cost = 0.0
+            session_ids = set()
             
             for proj_path, proj_info in projects.items():
-                total_input += proj_info.get("lastTotalInputTokens", 0)
-                total_output += proj_info.get("lastTotalOutputTokens", 0)
-                total_cost += proj_info.get("lastCost", 0)
+                if not isinstance(proj_info, dict):
+                    continue
+                session_id = str(proj_info.get("lastSessionId") or "").strip()
+                session_key = session_id or f"project:{proj_path}"
+                has_usage = any(
+                    proj_info.get(key) is not None
+                    for key in ("lastCost", "lastTotalInputTokens", "lastTotalOutputTokens")
+                )
+                if not has_usage or session_key in session_ids:
+                    continue
+                session_ids.add(session_key)
+                total_input += proj_info.get("lastTotalInputTokens") or 0
+                total_output += proj_info.get("lastTotalOutputTokens") or 0
+                total_cost += proj_info.get("lastCost") or 0
 
             result.status = "ok"
             result.windows.append(UsageWindow(
-                label="last_session",
-                cost_cents=int(total_cost * 100),
+                label="project_last_sessions",
+                cost_cents=round(total_cost * 100),
+                sessions=len(session_ids),
                 tokens_input=total_input,
                 tokens_output=total_output
             ))

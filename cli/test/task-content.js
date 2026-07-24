@@ -74,6 +74,19 @@ async function run() {
     assert.ok(html.indexOf('TASK_SPEECH_CTRL_HOLD_MS = 400') >= 0);
     assert.ok(html.indexOf("event.key === 'Control'") >= 0);
     assert.ok(html.indexOf('taskSpeech.shortcutTimer = window.setTimeout') >= 0);
+    assert.ok(html.indexOf('task-agent-monitor-usage') >= 0);
+    assert.ok(html.indexOf('agentUsageHtml') >= 0);
+    assert.strictEqual((html.match(/function loadAgentMonitor\(options\)/g) || []).length, 1);
+    assert.strictEqual((html.match(/function agentMonitorHtml\(column\)/g) || []).length, 1);
+    var monitorLoadStart = html.indexOf('function loadAgentMonitor(options)');
+    var monitorLoadEnd = html.indexOf('\nfunction connectTaskEvents', monitorLoadStart);
+    var monitorLoadSource = html.slice(monitorLoadStart, monitorLoadEnd);
+    assert.ok(monitorLoadSource.indexOf('usage: data.usage || null') >= 0);
+    var monitorRenderStart = html.indexOf('function agentMonitorHtml(column)');
+    var monitorRenderEnd = html.indexOf('\nfunction capitalizeAgentMonitorStatus', monitorRenderStart);
+    var monitorRenderSource = html.slice(monitorRenderStart, monitorRenderEnd);
+    assert.ok(monitorRenderSource.indexOf('var usage = agentUsageHtml(column)') >= 0);
+    assert.ok(monitorRenderSource.indexOf('metrics +\n    usage +') >= 0);
 
     var createResponse = await request(info, '/api/tasks/create?repo=' + encodeURIComponent(repoRoot), {
       method: 'POST',

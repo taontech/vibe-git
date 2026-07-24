@@ -507,11 +507,12 @@ function handleAgentMonitor(req, res) {
     return;
   }
 
-  requestAgentMonitorAgents(monitor).then(function (agents) {
+  requestAgentMonitorAgents(monitor).then(function (result) {
     sendJson(res, {
       status: 'ok',
       available: true,
-      agents: agents,
+      agents: result.agents,
+      usage: result.usage || null,
       fetchedAt: new Date().toISOString()
     });
   }).catch(function (error) {
@@ -521,7 +522,8 @@ function handleAgentMonitor(req, res) {
       status: status,
       available: false,
       reason: reason,
-      agents: []
+      agents: [],
+      usage: null
     });
   });
 }
@@ -656,7 +658,7 @@ function resolveAgentMonitorConfig() {
     reason: runtimeReason,
     hostname: parsed.hostname,
     port: normalizePort(parsed.port || port),
-    path: basePath + '/agents',
+    path: basePath + '/status',
     websocketPath: basePath + '/ws/status'
   };
 }
@@ -702,7 +704,7 @@ function requestAgentMonitorAgents(monitor) {
           return;
         }
         try {
-          resolve(normalizeAgentMonitorAgents(parsed));
+          resolve(normalizeAgentMonitorResponse(parsed));
         } catch (error) {
           reject(agentMonitorError('invalid_response'));
         }
@@ -721,6 +723,19 @@ function requestAgentMonitorAgents(monitor) {
     });
     req.end();
   });
+}
+
+function normalizeAgentMonitorResponse(parsed) {
+  var agentsRaw = parsed;
+  var usageRaw = null;
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    agentsRaw = parsed.agents || [];
+    usageRaw = parsed.usage || null;
+  }
+  return {
+    agents: normalizeAgentMonitorAgents(agentsRaw),
+    usage: usageRaw
+  };
 }
 
 function normalizeAgentMonitorAgents(value) {
@@ -765,7 +780,8 @@ function agentMonitorUnavailable(reason) {
     status: 'unavailable',
     available: false,
     reason: reason || 'unavailable',
-    agents: []
+    agents: [],
+    usage: null
   };
 }
 
@@ -3990,6 +4006,15 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-agent-monitor-sources { display: grid; gap: 3px; padding-top: 6px; border-top: 1px solid var(--line-soft); }
 .task-agent-monitor-source { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
 .task-agent-monitor-source span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-agent-monitor-usage { display: grid; gap: 4px; padding-top: 6px; border-top: 1px solid var(--line-soft); }
+.task-agent-usage-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); font-weight: 700; }
+.task-agent-usage-title { color: var(--text-muted, var(--muted)); }
+.task-agent-usage-plan { padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--task-color, var(--accent)) 12%, transparent); color: var(--task-color, var(--accent)); font-weight: 700; font-size: 10px; text-transform: none; }
+.task-agent-usage-windows { display: grid; gap: 3px; }
+.task-agent-usage-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+.task-agent-usage-label { color: var(--muted); white-space: nowrap; }
+.task-agent-usage-val { font-weight: 700; color: var(--text); white-space: nowrap; }
+.task-agent-usage-error { font-size: 10px; color: var(--rose); word-break: break-word; }
 .task-column-body { display: grid; gap: 10px; min-height: 220px; align-content: start; align-items: start; grid-auto-rows: 132px; }
 .task-empty { display: grid; place-items: center; min-height: 116px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; text-align: center; padding: 14px; background: var(--panel); }
 .task-card { position: relative; display: grid; grid-template-rows: 30px minmax(0, 1fr) auto; gap: 8px; height: 132px; padding: 0 12px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 22px rgba(15,23,42,.06); cursor: grab; overflow: hidden; transition: transform .16s, box-shadow .16s, border-color .16s; }
@@ -4789,7 +4814,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [] }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -5024,6 +5049,18 @@ var I18N = {
     agentMonitorHours: '小时',
     agentMonitorMinutes: '分钟',
     agentMonitorSeconds: '秒',
+    agentUsageTitle: '用量信息',
+    agentUsage5h: '5小时用量',
+    agentUsage7d: '7日用量',
+    agentUsage24h: '24小时用量',
+    agentUsage30d: '30日用量',
+    agentUsageToday: '今日用量',
+    agentUsageMonth: '本月用量',
+    agentUsageTotal: '累计用量',
+    agentUsageLastSession: '最近会话',
+    agentUsageProjectLastSessions: '各项目最近会话',
+    agentUsageSessions: '次会话',
+    agentUsageNoData: '暂无用量',
     moveTaskLeft: '前移',
     moveTaskRight: '后移',
     taskUpdatedJustNow: '刚刚更新',
@@ -5264,6 +5301,18 @@ var I18N = {
     agentMonitorHours: 'h',
     agentMonitorMinutes: 'm',
     agentMonitorSeconds: 's',
+    agentUsageTitle: 'Usage',
+    agentUsage5h: '5h Usage',
+    agentUsage7d: '7d Usage',
+    agentUsage24h: '24h Usage',
+    agentUsage30d: '30d Usage',
+    agentUsageToday: 'Today',
+    agentUsageMonth: 'This Month',
+    agentUsageTotal: 'Total',
+    agentUsageLastSession: 'Last Session',
+    agentUsageProjectLastSessions: 'Latest Project Sessions',
+    agentUsageSessions: 'sessions',
+    agentUsageNoData: 'No usage data',
     moveTaskLeft: 'Move left',
     moveTaskRight: 'Move right',
     taskUpdatedJustNow: 'Updated just now',
@@ -6752,7 +6801,7 @@ function startAgentMonitorPolling() {
   stopAgentMonitorPolling();
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
   if (!state.agentMonitor.agents.length) {
-    state.agentMonitor = { status: 'loading', available: false, reason: '', agents: [] };
+    state.agentMonitor = { status: 'loading', available: false, reason: '', agents: [], usage: null };
     renderTaskBoard();
   }
   loadAgentMonitor();
@@ -6835,12 +6884,14 @@ function connectAgentMonitorSocket() {
     } catch (error) {
       return;
     }
-    if (!payload || !Array.isArray(payload.agents)) return;
+    if (!payload) return;
+    var socketAgents = Array.isArray(payload.agents) ? payload.agents : [];
     state.agentMonitor = {
       status: 'ok',
       available: true,
       reason: '',
-      agents: normalizeAgentMonitorSocketAgents(payload.agents)
+      agents: normalizeAgentMonitorSocketAgents(socketAgents),
+      usage: payload.usage || null
     };
     if (!state.draggedTaskId) renderTaskBoard();
   });
@@ -6889,6 +6940,105 @@ function normalizeAgentMonitorSocketAgents(agents) {
   });
 }
 
+function getAgentUsageData(column) {
+  var monitor = state.agentMonitor || {};
+  var usage = monitor.usage;
+  if (!usage || typeof usage !== 'object') return null;
+  var agentId = String(column && column.id || '').toLowerCase();
+  if (!agentId) return null;
+
+  if (usage[agentId]) return usage[agentId];
+  if (agentId === 'claude' && (usage['claude'] || usage['claude-code'])) return usage['claude'] || usage['claude-code'];
+  if (agentId === 'codex' && (usage['codex'] || usage['codex-cli'] || usage['codex-app'])) return usage['codex'] || usage['codex-cli'] || usage['codex-app'];
+  if (agentId === 'antigravity' && usage['antigravity']) return usage['antigravity'];
+
+  var keys = Object.keys(usage);
+  for (var i = 0; i < keys.length; i += 1) {
+    var k = keys[i];
+    if (k === agentId || k.indexOf(agentId) >= 0 || agentId.indexOf(k) >= 0) {
+      return usage[k];
+    }
+  }
+  return null;
+}
+
+function formatUsageWindowLabel(label) {
+  var norm = String(label || '').trim().toLowerCase();
+  if (norm === '5h' || norm === '5h window' || norm === '5h_window') return t('agentUsage5h');
+  if (norm === '7d' || norm === '7d window' || norm === '7d_window') return t('agentUsage7d');
+  if (norm === '24h' || norm === '24h window' || norm === '24h_window') return t('agentUsage24h');
+  if (norm === '30d' || norm === '30d window' || norm === '30d_window') return t('agentUsage30d');
+  if (norm === 'today') return t('agentUsageToday');
+  if (norm === 'month' || norm === 'this_month') return t('agentUsageMonth');
+  if (norm === 'total' || norm === 'all_time') return t('agentUsageTotal');
+  if (norm === 'last_session') return t('agentUsageLastSession');
+  if (norm === 'project_last_sessions') return t('agentUsageProjectLastSessions');
+  return label;
+}
+
+function formatUsageWindowMetrics(win) {
+  var parts = [];
+  if (win.used_percent != null && win.used_percent !== undefined) {
+    var pct = Number(win.used_percent);
+    parts.push((pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)) + '%');
+  }
+  if (win.cost_cents != null && win.cost_cents !== undefined) {
+    var dollars = (Number(win.cost_cents) / 100).toFixed(2);
+    parts.push('$' + dollars);
+  }
+  if (win.tokens_input != null || win.tokens_output != null) {
+    var totalTokens = (Number(win.tokens_input) || 0) + (Number(win.tokens_output) || 0);
+    if (totalTokens > 0) {
+      parts.push(formatTokenCount(totalTokens));
+    }
+  }
+  if (win.sessions != null && win.sessions > 0) {
+    parts.push(win.sessions + ' ' + t('agentUsageSessions'));
+  }
+  return parts.join(' · ');
+}
+
+function formatTokenCount(num) {
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+  return String(num);
+}
+
+function agentUsageHtml(column) {
+  var data = getAgentUsageData(column);
+  if (!data) return '';
+  if (data.status === 'error' && data.error) {
+    return '<div class="task-agent-monitor-usage">' +
+      '<div class="task-agent-usage-head"><span class="task-agent-usage-title">' + escapeHtml(t('agentUsageTitle')) + '</span></div>' +
+      '<div class="task-agent-usage-error">' + escapeHtml(data.error) + '</div>' +
+    '</div>';
+  }
+  var windows = Array.isArray(data.windows) ? data.windows : [];
+  if (!windows.length && !data.plan) return '';
+
+  var planHtml = data.plan ? '<span class="task-agent-usage-plan">' + escapeHtml(data.plan) + '</span>' : '';
+  var windowsHtml = windows.map(function(win) {
+    var label = formatUsageWindowLabel(win.label);
+    var metrics = formatUsageWindowMetrics(win);
+    if (!metrics) return '';
+    return '<div class="task-agent-usage-item">' +
+      '<span class="task-agent-usage-label">' + escapeHtml(label) + '</span>' +
+      '<span class="task-agent-usage-val">' + escapeHtml(metrics) + '</span>' +
+    '</div>';
+  }).filter(Boolean).join('');
+
+  if (!windowsHtml && !planHtml) return '';
+
+  return '<div class="task-agent-monitor-usage">' +
+    '<div class="task-agent-usage-head">' +
+      '<span class="task-agent-usage-title">' + escapeHtml(t('agentUsageTitle')) + '</span>' +
+      planHtml +
+    '</div>' +
+    (windowsHtml ? '<div class="task-agent-usage-windows">' + windowsHtml + '</div>' : '') +
+  '</div>';
+}
+
+
 function loadAgentMonitor(options) {
   options = options || {};
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) {
@@ -6920,7 +7070,8 @@ function loadAgentMonitor(options) {
         status: data.status || 'unavailable',
         available: data.available === true,
         reason: data.reason || '',
-        agents: Array.isArray(data.agents) ? data.agents : []
+        agents: Array.isArray(data.agents) ? data.agents : [],
+        usage: data.usage || null
       };
       if (!state.draggedTaskId) renderTaskBoard();
       return state.agentMonitor;
@@ -6933,7 +7084,8 @@ function loadAgentMonitor(options) {
         status: 'unavailable',
         available: false,
         reason: 'unavailable',
-        agents: []
+        agents: [],
+        usage: null
       };
       if (!state.draggedTaskId) renderTaskBoard();
       return state.agentMonitor;
@@ -7261,11 +7413,13 @@ function agentMonitorHtml(column) {
       '</div>';
     }).join('') + '</div>';
   }
+  var usage = agentUsageHtml(column);
   return '<div class="task-agent-monitor" data-monitor-state="' + escapeHtml(summary.status) + '">' +
     '<div class="task-agent-monitor-head">' +
       '<span class="task-agent-monitor-state">' + escapeHtml(t(stateKey)) + '</span>' +
     '</div>' +
     metrics +
+    usage +
     sources +
   '</div>';
 }
