@@ -3842,6 +3842,9 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .view-tab svg { width: 16px; height: 16px; }
 .view-tab:hover { color: var(--accent); background: var(--accent-soft); }
 .view-tab.active { color: #fff; background: linear-gradient(135deg, var(--accent), var(--green)); border-color: transparent; box-shadow: 0 10px 24px rgba(6,141,109,.22); }
+.tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 1; color: #fff; box-sizing: border-box; margin-left: 2px; }
+.tab-badge-git { background-color: #ef4444; }
+.tab-badge-task { background-color: #f97316; }
 .view-page[hidden], .task-page[hidden] { display: none; }
 .language-wrap { position: relative; }
 .language-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
@@ -4416,10 +4419,12 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
             <button id="gitViewTab" class="view-tab active" type="button" data-view-tab="git">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M8.6 7.8 15.4 16.2"></path><path d="M6 9v6"></path></svg>
               <span data-i18n="gitView">Git</span>
+              <span id="gitTabBadge" class="tab-badge tab-badge-git" style="display:none;">0</span>
             </button>
             <button id="taskViewTab" class="view-tab" type="button" data-view-tab="tasks">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 8h10"></path><path d="M7 12h5"></path><path d="m14 16 1.5 1.5L18 15"></path></svg>
               <span data-i18n="taskView">Task</span>
+              <span id="taskTabBadge" class="tab-badge tab-badge-task" style="display:none;">0</span>
             </button>
           </nav>
           <div class="actions">
@@ -6421,6 +6426,33 @@ function setActiveView(view) {
   }
 }
 
+function updateGitTabBadge(count) {
+  var badge = $('gitTabBadge');
+  if (!badge) return;
+  count = Number(count) || 0;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function updateTaskTabBadge(count) {
+  var badge = $('taskTabBadge');
+  if (!badge) return;
+  if (typeof count !== 'number') {
+    var taskList = (state.tasksLoaded || (state.repoTasks && state.repoTasks.length)) ? state.repoTasks : (state.tasks || []);
+    count = (taskList || []).filter(function(t) { return t && t.status !== 'done'; }).length;
+  }
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
 function bindTaskControls() {
   var refresh = $('refreshTasks');
   var openComposer = $('openTaskComposer');
@@ -7370,6 +7402,7 @@ function renderTaskBoard() {
   if (!board) return;
   var total = $('taskTotalCount');
   if (total) total.textContent = String((state.repoTasks || []).length);
+  updateTaskTabBadge();
 
   if (!targetRepo) {
     board.innerHTML = '<div class="task-board-loading">' + escapeHtml(t('noRepoForTasks')) + '</div>';
@@ -8875,8 +8908,10 @@ function render(data) {
   $('btnPull').onclick = function(event) { executeAction('/api/pull', t('pulling'), event.currentTarget); };
   
   $('dirty').textContent = data.status.files.length;
+  updateGitTabBadge(data.status.files.length);
   
   state.tasks = data.tasks || [];
+  updateTaskTabBadge();
   state.install = data.install || { hooks: true, webloc: true };
   renderInstallBanner();
   
@@ -9029,6 +9064,7 @@ function executeAction(url, loadingMsg, button) {
 function renderFiles(files) {
   files = files || [];
   state.files = files;
+  updateGitTabBadge(files.length);
   var modified = files.filter(function (file) { return file.worktree !== ' '; });
   var staged = files.filter(function (file) { return file.index !== ' ' && file.index !== '?'; });
   var nextModified = {};
