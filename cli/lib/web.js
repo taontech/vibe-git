@@ -4010,10 +4010,13 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .task-agent-usage-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); font-weight: 700; }
 .task-agent-usage-title { color: var(--text-muted, var(--muted)); }
 .task-agent-usage-plan { padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--task-color, var(--accent)) 12%, transparent); color: var(--task-color, var(--accent)); font-weight: 700; font-size: 10px; text-transform: none; }
-.task-agent-usage-windows { display: grid; gap: 3px; }
-.task-agent-usage-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+.task-agent-usage-windows { display: grid; gap: 5px; }
+.task-agent-usage-item { display: grid; gap: 3px; font-size: 11px; }
+.task-agent-usage-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .task-agent-usage-label { color: var(--muted); white-space: nowrap; }
 .task-agent-usage-val { font-weight: 700; color: var(--text); white-space: nowrap; }
+.task-agent-usage-progress { width: 100%; height: 4px; background: color-mix(in srgb, var(--text) 10%, transparent); border-radius: 999px; overflow: hidden; }
+.task-agent-usage-progress-bar { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
 .task-agent-usage-error { font-size: 10px; color: var(--rose); word-break: break-word; }
 .task-column-body { display: grid; gap: 10px; min-height: 220px; align-content: start; align-items: start; grid-auto-rows: 132px; }
 .task-empty { display: grid; place-items: center; min-height: 116px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; text-align: center; padding: 14px; background: var(--panel); }
@@ -7004,6 +7007,55 @@ function formatTokenCount(num) {
   return String(num);
 }
 
+function getCodexUsageColor(pct) {
+  var p = Math.max(0, Math.min(100, Number(pct) || 0));
+  var stops = [
+    { pct: 0, r: 34, g: 197, b: 94 },
+    { pct: 25, r: 234, g: 179, b: 8 },
+    { pct: 50, r: 249, g: 115, b: 22 },
+    { pct: 75, r: 239, g: 68, b: 68 },
+    { pct: 100, r: 127, g: 29, b: 29 }
+  ];
+  for (var i = 0; i < stops.length - 1; i += 1) {
+    var s1 = stops[i];
+    var s2 = stops[i + 1];
+    if (p >= s1.pct && p <= s2.pct) {
+      var factor = (p - s1.pct) / (s2.pct - s1.pct);
+      var r = Math.round(s1.r + factor * (s2.r - s1.r));
+      var g = Math.round(s1.g + factor * (s2.g - s1.g));
+      var b = Math.round(s1.b + factor * (s2.b - s1.b));
+      return 'rgb(' + r + ', ' + g + ', ' + b + ')';
+    }
+  }
+  return 'rgb(127, 29, 29)';
+}
+
+function getCodexUsageGradient(pct) {
+  var p = Math.max(0, Math.min(100, Number(pct) || 0));
+  if (p <= 0) return 'rgb(34, 197, 94)';
+
+  var allStops = [
+    { pct: 0, color: 'rgb(34, 197, 94)' },
+    { pct: 25, color: 'rgb(234, 179, 8)' },
+    { pct: 50, color: 'rgb(249, 115, 22)' },
+    { pct: 75, color: 'rgb(239, 68, 68)' },
+    { pct: 100, color: 'rgb(127, 29, 29)' }
+  ];
+
+  var currentColor = getCodexUsageColor(p);
+  var activeStops = [];
+  for (var i = 0; i < allStops.length; i += 1) {
+    if (allStops[i].pct < p) {
+      var stopPos = (allStops[i].pct / p * 100).toFixed(1) + '%';
+      activeStops.push(allStops[i].color + ' ' + stopPos);
+    }
+  }
+  activeStops.push(currentColor + ' 100%');
+
+  if (activeStops.length === 1) return currentColor;
+  return 'linear-gradient(90deg, ' + activeStops.join(', ') + ')';
+}
+
 function agentUsageHtml(column) {
   var data = getAgentUsageData(column);
   if (!data) return '';
@@ -7021,9 +7073,22 @@ function agentUsageHtml(column) {
     var label = formatUsageWindowLabel(win.label);
     var metrics = formatUsageWindowMetrics(win);
     if (!metrics) return '';
+
+    var progressBarHtml = '';
+    if (win.used_percent != null && win.used_percent !== undefined) {
+      var pct = Math.max(0, Math.min(100, Number(win.used_percent) || 0));
+      var bgGradient = getCodexUsageGradient(pct);
+      progressBarHtml = '<div class="task-agent-usage-progress">' +
+        '<div class="task-agent-usage-progress-bar" style="width: ' + pct + '%; background: ' + bgGradient + ';"></div>' +
+      '</div>';
+    }
+
     return '<div class="task-agent-usage-item">' +
-      '<span class="task-agent-usage-label">' + escapeHtml(label) + '</span>' +
-      '<span class="task-agent-usage-val">' + escapeHtml(metrics) + '</span>' +
+      '<div class="task-agent-usage-row">' +
+        '<span class="task-agent-usage-label">' + escapeHtml(label) + '</span>' +
+        '<span class="task-agent-usage-val">' + escapeHtml(metrics) + '</span>' +
+      '</div>' +
+      progressBarHtml +
     '</div>';
   }).filter(Boolean).join('');
 

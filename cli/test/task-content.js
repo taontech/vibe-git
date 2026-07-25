@@ -76,6 +76,10 @@ async function run() {
     assert.ok(html.indexOf('taskSpeech.shortcutTimer = window.setTimeout') >= 0);
     assert.ok(html.indexOf('task-agent-monitor-usage') >= 0);
     assert.ok(html.indexOf('agentUsageHtml') >= 0);
+    assert.ok(html.indexOf('getCodexUsageColor') >= 0);
+    assert.ok(html.indexOf('getCodexUsageGradient') >= 0);
+    assert.ok(html.indexOf('task-agent-usage-progress') >= 0);
+    assert.ok(html.indexOf('task-agent-usage-progress-bar') >= 0);
     assert.strictEqual((html.match(/function loadAgentMonitor\(options\)/g) || []).length, 1);
     assert.strictEqual((html.match(/function agentMonitorHtml\(column\)/g) || []).length, 1);
     var monitorLoadStart = html.indexOf('function loadAgentMonitor(options)');
