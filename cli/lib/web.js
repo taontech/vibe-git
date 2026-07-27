@@ -6442,7 +6442,7 @@ function updateTaskTabBadge(count) {
   var badge = $('taskTabBadge');
   if (!badge) return;
   if (typeof count !== 'number') {
-    var taskList = (state.tasksLoaded || (state.repoTasks && state.repoTasks.length)) ? state.repoTasks : (state.tasks || []);
+    var taskList = state.repoTasks || [];
     count = (taskList || []).filter(function(t) { return t && t.status !== 'done'; }).length;
   }
   if (count > 0) {
@@ -8912,6 +8912,9 @@ function render(data) {
   
   state.tasks = data.tasks || [];
   updateTaskTabBadge();
+  if (!state.tasksLoaded && !state.taskLoading) {
+    loadRepositoryTasks();
+  }
   state.install = data.install || { hooks: true, webloc: true };
   renderInstallBanner();
   
