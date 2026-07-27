@@ -1859,6 +1859,17 @@ function escapeHtmlText(value) {
   });
 }
 
+function getRepoLastCommitTime(repoPath) {
+  try {
+    var raw = runGitOptional(repoPath, ['log', '-1', '--format=%ct']);
+    var sec = Number(raw);
+    if (!isNaN(sec) && sec > 0) {
+      return sec * 1000;
+    }
+  } catch (e) {}
+  return 0;
+}
+
 function readRecentRepositories() {
   var raw;
   try {
@@ -1879,13 +1890,20 @@ function readRecentRepositories() {
     .filter(function (item) { return item && item.path; })
     .map(function (item) {
       var repoPath = String(item.path);
+      var lastCommitTime = getRepoLastCommitTime(repoPath);
       return {
         name: String(item.name || repoName(repoPath)),
         path: repoPath,
-        lastVisited: Number(item.lastVisited) || 0
+        lastVisited: Number(item.lastVisited) || 0,
+        lastCommitTime: lastCommitTime
       };
     })
-    .sort(function (a, b) { return b.lastVisited - a.lastVisited; })
+    .sort(function (a, b) {
+      if (b.lastCommitTime !== a.lastCommitTime) {
+        return b.lastCommitTime - a.lastCommitTime;
+      }
+      return b.lastVisited - a.lastVisited;
+    })
     .slice(0, RECENT_REPOS_LIMIT);
 }
 
@@ -1895,7 +1913,7 @@ function writeRecentRepositories(repositories) {
   fs.writeFileSync(RECENT_REPOS_FILE, JSON.stringify({
     repositories: recent
   }, null, 2) + '\n');
-  return recent;
+  return readRecentRepositories();
 }
 
 function getCachedStatus(repoRoot) {
@@ -8015,7 +8033,7 @@ function renderSidebar() {
       '<div class="repo-item-body">' +
         '<div class="repo-item-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
         '<div class="repo-item-path" title="' + escapeHtml(item.path) + '">' + escapeHtml(item.path) + '</div>' +
-        '<div class="repo-item-time">' + escapeHtml(formatRepoVisit(item.lastVisited)) + '</div>' +
+        '<div class="repo-item-time">' + escapeHtml(formatRepoVisit(item.lastCommitTime || item.lastVisited)) + '</div>' +
       '</div>' +
       '<button class="repo-remove" type="button" title="' + escapeHtml(t('removeFromRecent')) + '" aria-label="' + escapeHtml(t('removeFromRecent') + ' ' + name + ' ' + t('removeFromRecentAriaSuffix')) + '" data-repo="' + escapeHtml(item.path) + '">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
