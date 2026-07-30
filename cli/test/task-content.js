@@ -41,6 +41,17 @@ async function run() {
       { content: 'Implement the UI.' },
       { content: 'Verify the behavior.' }
     ]);
+    var singleDecomposition = taskStatus.parseTaskDecomposition(JSON.stringify({
+      tasks: [
+        { content: 'Implement the UI.' }
+      ]
+    }));
+    assert.deepStrictEqual(singleDecomposition, [
+      { content: 'Implement the UI.' }
+    ]);
+    assert.throws(function () {
+      taskStatus.parseTaskDecomposition(JSON.stringify({ tasks: [] }));
+    }, /AI task decomposition must contain at least one task/);
     assert.deepStrictEqual(taskStatus.taskForPrompt({
       id: 'GMC-0001',
       title: 'Legacy title',

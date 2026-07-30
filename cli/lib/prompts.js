@@ -70,7 +70,7 @@ function taskDecompositionPrompt(requirement) {
     'Schema: {"tasks":[{"content":"concise task summary followed by implementation scope and acceptance criteria in Markdown"}]}',
     '',
     'Rules:',
-    '- Produce between 2 and 8 tasks. Never return a single restatement of the original requirement.',
+    '- Produce between 1 and 8 tasks.',
     '- Every generated task must be narrower than the original requirement and have a distinct implementation or verification scope.',
     '- Begin each task content with a concise standalone summary because tasks do not have a separate title field.',
     '- Prefer dividing tasks by type of work, such as UI, backend logic, algorithms, tests, or documentation.',
