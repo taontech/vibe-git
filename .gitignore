@@ -3,3 +3,7 @@
 /cli/node_modules/
 /agent-monitor/.venv/
 /agent-monitor/**/__pycache__/
+/cli/agent-monitor/collectors/__pycache__/__init__.cpython-314.pyc
+/cli/agent-monitor/collectors/__pycache__/agents.cpython-314.pyc
+/cli/agent-monitor/collectors/__pycache__/system.cpython-314.pyc
+/cli/agent-monitor/collectors/__pycache__/usage.cpython-314.pyc
