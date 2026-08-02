@@ -273,28 +273,50 @@ def _claude_session_needs_interaction(path: Path) -> bool:
 
         message = event.get("message")
         if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
+            if "role" in event:
+                message = event
+            else:
+                continue
 
-        if message.get("role") == "assistant":
-            for item in content:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "tool_use"
-                    and item.get("name") == "AskUserQuestion"
-                ):
-                    pending_questions.add(item.get("id") or event.get("uuid"))
-        elif message.get("role") == "user":
+        role = message.get("role")
+        content = message.get("content")
+
+        if role == "assistant":
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "tool_use":
+                        name = item.get("name") or ""
+                        name_lower = name.lower()
+                        if (
+                            name in ("AskUserQuestion", "AskFollowupQuestion", "AskQuestion")
+                            or name_lower in (
+                                "askuserquestion",
+                                "askfollowupquestion",
+                                "askquestion",
+                                "ask_user_question",
+                                "ask_followup_question",
+                                "ask_question",
+                            )
+                            or name.startswith("Ask")
+                            or "question" in name_lower
+                        ):
+                            pending_questions.add(
+                                item.get("id") or event.get("uuid") or f"ask-{len(pending_questions)}"
+                            )
+        elif role == "user":
             resolved = False
-            for item in content:
-                if not isinstance(item, dict) or item.get("type") != "tool_result":
-                    continue
-                pending_questions.discard(item.get("tool_use_id"))
-                resolved = True
-            if pending_questions and content and not resolved:
-                pending_questions.clear()
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "tool_result":
+                        tool_use_id = item.get("tool_use_id")
+                        if tool_use_id:
+                            pending_questions.discard(tool_use_id)
+                        resolved = True
+            if pending_questions:
+                if resolved:
+                    pass
+                elif content:
+                    pending_questions.clear()
 
     return bool(pending_questions)
 
@@ -326,6 +348,9 @@ def _claude_session_paths(pid: int) -> list[Path]:
     ):
         pass
 
+    if paths:
+        return sorted(set(paths), key=_path_mtime, reverse=True)
+
     projects_root = Path.home() / ".claude" / "projects"
     search_root = project_dir if project_dir and project_dir.is_dir() else projects_root
     try:
@@ -336,11 +361,12 @@ def _claude_session_paths(pid: int) -> list[Path]:
     except OSError:
         pass
 
-    return sorted(
+    sorted_paths = sorted(
         set(paths),
         key=_path_mtime,
         reverse=True,
     )
+    return sorted_paths[:1] if sorted_paths else []
 
 
 def _is_claude_code_paused(pid: int) -> bool:

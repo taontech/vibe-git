@@ -225,6 +225,23 @@ class CodexInteractionTests(unittest.TestCase):
 
         self.assertTrue(_claude_session_needs_interaction(Path(temp.name)))
 
+    def test_claude_ask_followup_question_is_paused(self):
+        temp = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+        temp.write(json.dumps({
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "question-2",
+                    "name": "AskFollowupQuestion",
+                }],
+            },
+        }) + "\n")
+        temp.close()
+        self.addCleanup(Path(temp.name).unlink)
+
+        self.assertTrue(_claude_session_needs_interaction(Path(temp.name)))
+
     def test_claude_tool_result_resolves_question(self):
         temp = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
         events = [
@@ -247,6 +264,33 @@ class CodexInteractionTests(unittest.TestCase):
                         "type": "tool_result",
                         "tool_use_id": "question-1",
                     }],
+                },
+            },
+        ]
+        for event in events:
+            temp.write(json.dumps(event) + "\n")
+        temp.close()
+        self.addCleanup(Path(temp.name).unlink)
+
+        self.assertFalse(_claude_session_needs_interaction(Path(temp.name)))
+
+    def test_claude_string_user_content_resolves_question(self):
+        temp = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+        events = [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "question-1",
+                        "name": "AskUserQuestion",
+                    }],
+                },
+            },
+            {
+                "message": {
+                    "role": "user",
+                    "content": "I prefer Option A",
                 },
             },
         ]
