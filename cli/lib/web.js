@@ -21,6 +21,7 @@ var GITWEB_VERSION = 2;
 var DIFF_LIMIT = 120000;
 var RELOAD_TOKEN = process.env.GMC_GITWEB_RELOAD_TOKEN || String(Date.now());
 var RECENT_REPOS_FILE = path.join(os.homedir(), '.config', 'gmc', 'recent-repos.json');
+var CONTRIBUTIONS_CACHE_FILE = path.join(os.homedir(), '.config', 'gmc', 'contributions-cache.json');
 var AUTH_TOKEN_FILE = path.join(os.homedir(), '.config', 'gmc', 'gitweb-token');
 var SECURITY_SETTINGS_FILE = path.join(os.homedir(), '.config', 'gmc', 'gitweb-security.json');
 var AUTH_QUERY_PARAM = 'gmc_auth';
@@ -1841,34 +1842,87 @@ function escapeHtmlText(value) {
   });
 }
 
+var repoContributionsCache = null;
+var lastCommitTimeCache = {};
+var recentReposCache = { at: 0, list: [] };
+
+function loadContributionsCache() {
+  if (repoContributionsCache !== null && typeof repoContributionsCache === 'object') {
+    return repoContributionsCache;
+  }
+  try {
+    if (fs.existsSync(CONTRIBUTIONS_CACHE_FILE)) {
+      var raw = JSON.parse(fs.readFileSync(CONTRIBUTIONS_CACHE_FILE, 'utf8'));
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        repoContributionsCache = raw;
+        return repoContributionsCache;
+      }
+    }
+  } catch (e) {}
+  repoContributionsCache = {};
+  return repoContributionsCache;
+}
+
+function saveContributionsCache() {
+  try {
+    if (!repoContributionsCache) return;
+    fs.mkdirSync(path.dirname(CONTRIBUTIONS_CACHE_FILE), { recursive: true });
+    fs.writeFileSync(CONTRIBUTIONS_CACHE_FILE, JSON.stringify(repoContributionsCache, null, 2) + '\n');
+  } catch (e) {}
+}
+
 function getRepoLastCommitTime(repoPath) {
   try {
+    if (!repoPath) return 0;
+    var cached = lastCommitTimeCache[repoPath];
+    var gitDir = path.join(repoPath, '.git');
+    var headFile = path.join(gitDir, 'HEAD');
+    var headMtime = 0;
+    try {
+      headMtime = fs.statSync(headFile).mtimeMs;
+    } catch (e) {}
+
+    if (cached && (headMtime === 0 || cached.headMtime === headMtime) && Date.now() - cached.checkedAt < 30000) {
+      return cached.time;
+    }
+
     var raw = runGitOptional(repoPath, ['log', '-1', '--format=%ct']);
     var sec = Number(raw);
-    if (!isNaN(sec) && sec > 0) {
-      return sec * 1000;
-    }
+    var commitTime = (!isNaN(sec) && sec > 0) ? sec * 1000 : 0;
+    lastCommitTimeCache[repoPath] = {
+      headMtime: headMtime,
+      time: commitTime,
+      checkedAt: Date.now()
+    };
+    return commitTime;
   } catch (e) {}
   return 0;
 }
 
-function readRecentRepositories() {
+function readRecentRepositories(force) {
+  if (!force && recentReposCache.list.length > 0 && Date.now() - recentReposCache.at < 5000) {
+    return recentReposCache.list;
+  }
+
   var raw;
   try {
     if (!fs.existsSync(RECENT_REPOS_FILE)) {
+      recentReposCache = { at: Date.now(), list: [] };
       return [];
     }
     raw = JSON.parse(fs.readFileSync(RECENT_REPOS_FILE, 'utf8'));
   } catch (e) {
+    recentReposCache = { at: Date.now(), list: [] };
     return [];
   }
 
   var repositories = Array.isArray(raw) ? raw : raw.repositories;
   if (!Array.isArray(repositories)) {
+    recentReposCache = { at: Date.now(), list: [] };
     return [];
   }
 
-  return repositories
+  var list = repositories
     .filter(function (item) { return item && item.path; })
     .map(function (item) {
       var repoPath = String(item.path);
@@ -1887,6 +1941,9 @@ function readRecentRepositories() {
       return b.lastVisited - a.lastVisited;
     })
     .slice(0, RECENT_REPOS_LIMIT);
+
+  recentReposCache = { at: Date.now(), list: list };
+  return list;
 }
 
 function writeRecentRepositories(repositories) {
@@ -1895,7 +1952,8 @@ function writeRecentRepositories(repositories) {
   fs.writeFileSync(RECENT_REPOS_FILE, JSON.stringify({
     repositories: recent
   }, null, 2) + '\n');
-  return readRecentRepositories();
+  recentReposCache.at = 0;
+  return readRecentRepositories(true);
 }
 
 function getCachedStatus(repoRoot) {
@@ -1913,12 +1971,25 @@ function setCachedStatus(repoRoot, data) {
 }
 
 function invalidateStatusCache(repoRoot) {
+  var cache = loadContributionsCache();
   if (repoRoot) {
     delete statusCache[repoRoot];
-    delete statusCache[git.repoRoot(repoRoot)];
+    delete lastCommitTimeCache[repoRoot];
+    try {
+      var rootKey = git.repoRoot(repoRoot);
+      delete statusCache[rootKey];
+      delete lastCommitTimeCache[rootKey];
+      delete cache[path.resolve(rootKey)];
+    } catch (e) {
+      delete cache[path.resolve(repoRoot)];
+    }
   } else {
     statusCache = {};
+    lastCommitTimeCache = {};
+    repoContributionsCache = {};
   }
+  recentReposCache.at = 0;
+  saveContributionsCache();
 }
 
 function recordRepositoryVisit(root) {
@@ -2389,7 +2460,7 @@ function isPathInside(parent, child) {
 function collectStatus(root) {
   var t0 = Date.now();
   var timings = {};
-  var t, statusOutput, worktreeStat, stagedStat, branchList, commitList, contribs, binding, taskList;
+  var t, statusOutput, worktreeStat, stagedStat, branchList, commitList, contribs, globalContribs, binding, taskList;
 
   t = Date.now();
   root = git.repoRoot(root);
@@ -2444,6 +2515,7 @@ function collectStatus(root) {
 
   t = Date.now();
   contribs = contributions(root);
+  globalContribs = globalContributions(root, contribs);
   timings.contributions = Date.now() - t;
 
   t = Date.now();
@@ -2484,6 +2556,7 @@ function collectStatus(root) {
     branches: branchList,
     commits: commitList,
     contributions: contribs,
+    globalContributions: globalContribs,
     binding: binding,
     tasks: taskList,
     install: installStatus,
@@ -3037,6 +3110,82 @@ function contributions(root) {
     if (d) counts[d] = (counts[d] || 0) + 1;
   });
   return counts;
+}
+
+function mergeContribCounts(target, source) {
+  if (!source) return;
+  Object.keys(source).forEach(function (day) {
+    target[day] = (target[day] || 0) + source[day];
+  });
+}
+
+function globalContributions(currentRoot, currentContribs) {
+  var cache = loadContributionsCache();
+  var repos = readRecentRepositories();
+  var globalCounts = {};
+  var currentNormalized = '';
+  try {
+    currentNormalized = currentRoot ? path.resolve(currentRoot) : '';
+  } catch (e) {
+    currentNormalized = currentRoot || '';
+  }
+
+  var dirty = false;
+
+  if (currentNormalized && currentContribs) {
+    var curCommitTime = getRepoLastCommitTime(currentNormalized);
+    if (!cache[currentNormalized] || cache[currentNormalized].lastCommitTime !== curCommitTime) {
+      cache[currentNormalized] = {
+        lastCommitTime: curCommitTime,
+        counts: currentContribs
+      };
+      dirty = true;
+    }
+  }
+
+  var processedCurrent = false;
+
+  repos.forEach(function (repo) {
+    if (!repo || !repo.path) return;
+    var repoPath = repo.path;
+    var normalizedPath = '';
+    try {
+      normalizedPath = path.resolve(repoPath);
+    } catch (e) {
+      normalizedPath = repoPath;
+    }
+
+    if (currentNormalized && normalizedPath === currentNormalized) {
+      processedCurrent = true;
+      mergeContribCounts(globalCounts, currentContribs || {});
+      return;
+    }
+
+    var cached = cache[normalizedPath];
+    if (cached && cached.lastCommitTime === repo.lastCommitTime && cached.counts) {
+      mergeContribCounts(globalCounts, cached.counts);
+      return;
+    }
+
+    if (!fs.existsSync(repoPath)) return;
+    var counts = contributions(repoPath);
+    cache[normalizedPath] = {
+      lastCommitTime: repo.lastCommitTime,
+      counts: counts
+    };
+    dirty = true;
+    mergeContribCounts(globalCounts, counts);
+  });
+
+  if (!processedCurrent && currentContribs) {
+    mergeContribCounts(globalCounts, currentContribs);
+  }
+
+  if (dirty) {
+    saveContributionsCache();
+  }
+
+  return globalCounts;
 }
 
 function commitDetails(root, oid) {
@@ -4266,6 +4415,22 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .calendar-col { display: flex; flex-direction: column; gap: var(--calendar-gap); flex: 0 0 var(--calendar-cell); }
 .calendar-cell { flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); height: var(--calendar-cell); border-radius: 2px; background: var(--line-soft); }
 .calendar-cell.empty { background: transparent; }
+.calendar-cell[data-global-level="1"] { background: #dbe2ea; }
+.calendar-cell[data-global-level="2"] { background: #cbd5e1; }
+.calendar-cell[data-global-level="3"] { background: #94a3b8; }
+.calendar-cell[data-global-level="4"] { background: #64748b; }
+html[data-theme="dark"] .calendar-cell[data-global-level="1"],
+html[data-theme="purple"] .calendar-cell[data-global-level="1"] { background: #334155; }
+html[data-theme="dark"] .calendar-cell[data-global-level="2"],
+html[data-theme="purple"] .calendar-cell[data-global-level="2"] { background: #475569; }
+html[data-theme="dark"] .calendar-cell[data-global-level="3"],
+html[data-theme="purple"] .calendar-cell[data-global-level="3"] { background: #64748b; }
+html[data-theme="dark"] .calendar-cell[data-global-level="4"],
+html[data-theme="purple"] .calendar-cell[data-global-level="4"] { background: #94a3b8; }
+html[data-theme="ocean"] .calendar-cell[data-global-level="1"] { background: #cbd5e1; }
+html[data-theme="ocean"] .calendar-cell[data-global-level="2"] { background: #94a3b8; }
+html[data-theme="ocean"] .calendar-cell[data-global-level="3"] { background: #64748b; }
+html[data-theme="ocean"] .calendar-cell[data-global-level="4"] { background: #475569; }
 .calendar-cell[data-level="1"] { background: #9be9a8; }
 .calendar-cell[data-level="2"] { background: #40c463; }
 .calendar-cell[data-level="3"] { background: #30a14e; }
@@ -4822,7 +4987,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -4984,6 +5149,8 @@ var I18N = {
     pushing: 'Push 中...',
     pulling: 'Pull 中...',
     commitsOn: '次提交于',
+    commitsGlobalOnly: '全部项目共 {global} 次提交于 {date}',
+    commitsCurrentAndGlobal: '当前项目 {current} 次提交（全部项目共 {global} 次）于 {date}',
     installHooksConfirm: 'GMC Git Hooks 尚未安装！\\n\\n安装 hooks 后，每次 git commit -m gmc 都会自动触发 AI 辅助生成 commit message。\\n\\n点击“确定”安装 hooks 后提交\\n点击“取消”则本次直接使用 AI 生成 commit message（较慢）',
     installingHooks: '正在安装 hooks...',
     hookInstallFailedPrefix: 'Hook 安装失败：',
@@ -5236,6 +5403,8 @@ var I18N = {
     pushing: 'Pushing...',
     pulling: 'Pulling...',
     commitsOn: 'commits on',
+    commitsGlobalOnly: '{global} commits across all repos on {date}',
+    commitsCurrentAndGlobal: '{current} commits in current repo ({global} in all repos) on {date}',
     installHooksConfirm: 'GMC Git Hooks is not installed!\\n\\nAfter installing hooks, each git commit -m gmc will automatically trigger AI-assisted commit message generation.\\n\\nClick "OK" to install hooks and commit\\nClick "Cancel" to use AI to generate a commit message directly this time (slower)',
     installingHooks: 'Installing hooks...',
     hookInstallFailedPrefix: 'Hook install failed: ',
@@ -5492,6 +5661,8 @@ I18N.ja = Object.assign({}, I18N.en, {
   pushing: 'Push 中...',
   pulling: 'Pull 中...',
   commitsOn: '回のコミット:',
+  commitsGlobalOnly: '全リポジトリで {global} 回のコミット: {date}',
+  commitsCurrentAndGlobal: '当プロジェクトで {current} 回（全体で {global} 回）のコミット: {date}',
   installHooksConfirm: 'GMC Git Hooks がインストールされていません！\\n\\nHooks をインストールすると、git commit -m gmc ごとに AI 支援の commit message 生成が自動で実行されます。\\n\\n「OK」で hooks をインストールしてコミットします\\n「キャンセル」で今回は AI による直接生成を使います（遅め）',
   installingHooks: 'Hooks をインストール中...',
   hookInstallFailedPrefix: 'Hook のインストールに失敗しました: ',
@@ -5718,6 +5889,8 @@ I18N.ko = Object.assign({}, I18N.en, {
   pushing: 'Push 중...',
   pulling: 'Pull 중...',
   commitsOn: '커밋:',
+  commitsGlobalOnly: '전체 저장소 총 {global}회 커밋: {date}',
+  commitsCurrentAndGlobal: '현재 프로젝트 {current}회 (전체 {global}회) 커밋: {date}',
   installHooksConfirm: 'GMC Git Hooks가 설치되어 있지 않습니다!\\n\\nHooks를 설치하면 git commit -m gmc마다 AI 지원 commit message 생성이 자동으로 실행됩니다.\\n\\n"확인"을 누르면 hooks를 설치하고 커밋합니다\\n"취소"를 누르면 이번에는 AI가 직접 commit message를 생성합니다(느림)',
   installingHooks: 'Hooks 설치 중...',
   hookInstallFailedPrefix: 'Hook 설치 실패: ',
@@ -5944,6 +6117,8 @@ I18N.es = Object.assign({}, I18N.en, {
   pushing: 'Haciendo push...',
   pulling: 'Haciendo pull...',
   commitsOn: 'commits el',
+  commitsGlobalOnly: '{global} commits en todos los repositorios el {date}',
+  commitsCurrentAndGlobal: '{current} commits en el repo actual ({global} en total) el {date}',
   installHooksConfirm: '¡GMC Git Hooks no está instalado!\\n\\nDespués de instalar hooks, cada git commit -m gmc activará automáticamente la generación asistida por IA del commit message.\\n\\nPulsa "Aceptar" para instalar hooks y hacer commit\\nPulsa "Cancelar" para generar el commit message directamente con IA esta vez (más lento)',
   installingHooks: 'Instalando hooks...',
   hookInstallFailedPrefix: 'Error al instalar hook: ',
@@ -8108,7 +8283,7 @@ function refreshLayoutSoon() {
 
 function refreshResponsiveContent() {
   if (state.commits.length) renderGraph(state.commits);
-  if (state.contributions) renderCalendar(state.contributions);
+  if (state.contributions || state.globalContributions) renderCalendar(state.contributions, state.globalContributions);
 }
 
 function initSidebar() {
@@ -8731,7 +8906,7 @@ $('btnInstall').addEventListener('click', installGmc);
 bindCommitDetailEvents();
 window.addEventListener('resize', function() {
   if (state.commits.length) renderGraph(state.commits);
-  if (state.contributions) renderCalendar(state.contributions);
+  if (state.contributions || state.globalContributions) renderCalendar(state.contributions, state.globalContributions);
 });
 window.addEventListener('beforeunload', function() {
   cancelTaskSpeech();
@@ -8834,6 +9009,7 @@ function statusSignature(data) {
     branches: data.branches,
     commits: data.commits,
     contributions: data.contributions,
+    globalContributions: data.globalContributions,
     binding: data.binding,
     tasks: data.tasks,
     install: data.install
@@ -8919,7 +9095,8 @@ function render(data) {
   renderInstallBanner();
   
   state.contributions = data.contributions || {};
-  renderCalendar(state.contributions);
+  state.globalContributions = data.globalContributions || {};
+  renderCalendar(state.contributions, state.globalContributions);
   renderFiles(data.status.files);
   
   processTopology(data);
@@ -8973,9 +9150,23 @@ function calendarDateKey(date) {
   return y + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
 }
 
-function renderCalendar(contributions) {
+function calendarTooltip(count, globalCount, ds) {
+  if (count > 0 && globalCount > count) {
+    var tmpl = t('commitsCurrentAndGlobal');
+    return tmpl.replace('{current}', count).replace('{global}', globalCount).replace('{date}', ds);
+  }
+  if (count === 0 && globalCount > 0) {
+    var tmpl = t('commitsGlobalOnly');
+    return tmpl.replace('{global}', globalCount).replace('{date}', ds);
+  }
+  return count + ' ' + t('commitsOn') + ' ' + ds;
+}
+
+function renderCalendar(contributions, globalContributions) {
   var cal = $('calendar');
-  if (!cal || !contributions) return;
+  if (!cal || (!contributions && !globalContributions)) return;
+  contributions = contributions || {};
+  globalContributions = globalContributions || {};
   var styles = window.getComputedStyle(cal);
   var cellSize = parseFloat(styles.getPropertyValue('--calendar-cell')) || 10;
   var gapSize = parseFloat(styles.getPropertyValue('--calendar-gap')) || 3;
@@ -9017,8 +9208,18 @@ function renderCalendar(contributions) {
       }
       var ds = calendarDateKey(d);
       var count = contributions[ds] || 0;
+      var globalCount = globalContributions[ds] != null ? globalContributions[ds] : count;
       var level = count > 10 ? 4 : count > 5 ? 3 : count > 2 ? 2 : count > 0 ? 1 : 0;
-      weeksHtml += '<div class="calendar-cell" data-level="' + level + '" title="' + count + ' ' + escapeHtml(t('commitsOn')) + ' ' + ds + '"></div>';
+      var globalLevel = globalCount > 10 ? 4 : globalCount > 5 ? 3 : globalCount > 2 ? 2 : globalCount > 0 ? 1 : 0;
+      var titleText = calendarTooltip(count, globalCount, ds);
+      var cellAttrs = 'class="calendar-cell"';
+      if (level > 0) {
+        cellAttrs += ' data-level="' + level + '"';
+      }
+      if (globalLevel > 0) {
+        cellAttrs += ' data-global-level="' + globalLevel + '"';
+      }
+      weeksHtml += '<div ' + cellAttrs + ' title="' + escapeHtml(titleText) + '"></div>';
     }
     weeksHtml += '</div>';
   }

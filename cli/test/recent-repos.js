@@ -68,7 +68,24 @@ async function run() {
     assert.strictEqual(json.repositories[0].path, repoA);
     assert.strictEqual(json.repositories[1].path, repoB);
 
-    console.log('Recent repository sorting by latest commit order tests passed.');
+    // Test /api/status returns both current contributions and aggregated globalContributions
+    var statusUrl = new URL('/api/status?repo=' + encodeURIComponent(repoA), info.url);
+    var statusRes = await fetch(statusUrl, {
+      headers: { 'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth') }
+    });
+    assert.strictEqual(statusRes.status, 200);
+    var statusJson = await statusRes.json();
+    assert.ok(statusJson.contributions, 'status should have contributions');
+    assert.ok(statusJson.globalContributions, 'status should have globalContributions');
+
+    // Find the date key for repoA's commit
+    var dateKeys = Object.keys(statusJson.contributions);
+    assert.ok(dateKeys.length >= 1, 'should have at least one contribution date');
+    var commitDate = dateKeys[0];
+    assert.strictEqual(statusJson.contributions[commitDate], 1, 'repoA has 1 commit');
+    assert.strictEqual(statusJson.globalContributions[commitDate], 2, 'repoA + repoB has 2 commits aggregated in globalContributions');
+
+    console.log('Recent repository sorting and global contributions tests passed.');
   } finally {
     os.homedir = originalHomedir;
     if (info && info.server) {
