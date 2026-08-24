@@ -1445,10 +1445,8 @@ function checkInstallStatus(root) {
     var pcPath = path.join(gitDirPath, 'hooks', 'post-commit');
     hooks.postCommit = verifyHookFile(pcPath);
   } catch (e) { /* ignore */ }
-  var weblocPath = path.join(repoRoot, 'git.webloc');
   return {
-    hooks: hooks.commitMsg && hooks.postCommit,
-    webloc: fs.existsSync(weblocPath)
+    hooks: hooks.commitMsg && hooks.postCommit
   };
 }
 
@@ -1469,22 +1467,6 @@ function installHooksAndWeb(repoRoot) {
     fs.writeFileSync(hookPath, script);
     fs.chmodSync(hookPath, 0o755);
   });
-  // create webloc
-  var port = normalizePort(process.env.GMC_GITWEB_PORT || DEFAULT_PORT);
-  var address = 'http://127.0.0.1:' + port + '/?name=' + encodeURIComponent(repoName(repoRoot));
-  var linkPath = path.join(repoRoot, 'git.webloc');
-  var content = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"',
-    '  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-    '<plist version="1.0">',
-    '<dict>',
-    '  <key>URL</key>',
-    '  <string>' + escapeXml(address) + '</string>',
-    '</dict>',
-    '</plist>'
-  ].join('\n') + '\n';
-  fs.writeFileSync(linkPath, content);
 }
 
 function hookScript(hookName, gmcBin) {
@@ -3473,7 +3455,7 @@ function gmcHelpText() {
     '  GMC_GITWEB_PORT overrides the default local GitWeb port.',
     '  GMC Web prints an authenticated URL. Remote browsers must use that URL',
     '    before GitWeb APIs can read or modify repositories.',
-    '  gmc install --all installs hooks and writes a repository-specific git.webloc.',
+    '  gmc install --all installs hooks.',
     '  gmc install-hooks sets up Git hooks for AI commit messages and task status updates.',
     '  gmc web serves the Git Web UI. If a server is already running, it will just',
     '    open the current repository in the browser.',
@@ -4472,7 +4454,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
       <div id="gitPage" class="view-page">
         <div id="installBanner" class="install-banner">
           <span class="install-text" data-i18n="installBanner"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
-          <button id="btnInstall" type="button" data-i18n="installHooks">Install Hooks and Webloc</button>
+          <button id="btnInstall" type="button" data-i18n="installHooks">Install Hooks</button>
         </div>
         <div id="dashboardPage">
   <section class="summary-panel">
@@ -4840,7 +4822,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true, webloc: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -4877,7 +4859,7 @@ var I18N = {
     themeOcean: '湛蓝海洋',
     themePurple: '魅紫风暴',
     installBanner: '⚠️ GMC Hooks 尚未安装。安装 Git hooks 后可以自动生成 commit message，git commit 可在任意位置使用。',
-    installHooks: '安装 Hooks 和 Webloc',
+    installHooks: '安装 Hooks',
     currentBranch: '当前分支',
     ahead: 'ahead',
     behind: 'behind',
@@ -5129,7 +5111,7 @@ var I18N = {
     settingsIntro: 'Manage GitWeb access control, AI agent preferences, and other global settings.',
     accessSettings: 'Access Settings',
     installBanner: '⚠️ GMC Hooks is not installed. Installing Git hooks can automatically generate commit messages, and git commit is available anywhere.',
-    installHooks: 'Install Hooks and Webloc',
+    installHooks: 'Install Hooks',
     currentBranch: 'Current Branch',
     ahead: 'ahead',
     behind: 'behind',
@@ -5389,7 +5371,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   settingsIntro: 'GitWeb のアクセス制御、AI エージェントの設定など全般設定を管理します。',
   accessSettings: 'アクセス設定',
   installBanner: '⚠️ GMC Hooks がインストールされていません。Git hooks をインストールすると commit message を自動生成でき、git commit をどこからでも使えます。',
-  installHooks: 'Hooks と Webloc をインストール',
+  installHooks: 'Hooks をインストール',
   currentBranch: '現在のブランチ',
   changedFiles: '変更されたファイル',
   workingTree: '作業ツリー',
@@ -5615,7 +5597,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   settingsIntro: 'GitWeb 접근 제어, AI 에이전트 설정 등 전역 설정을 관리합니다.',
   accessSettings: '접근 설정',
   installBanner: '⚠️ GMC Hooks가 설치되어 있지 않습니다. Git hooks를 설치하면 commit message를 자동으로 생성할 수 있고 git commit을 어디서나 사용할 수 있습니다.',
-  installHooks: 'Hooks 및 Webloc 설치',
+  installHooks: 'Hooks 설치',
   currentBranch: '현재 브랜치',
   changedFiles: '변경된 파일',
   workingTree: '작업 트리',
@@ -5841,7 +5823,7 @@ I18N.es = Object.assign({}, I18N.en, {
   settingsIntro: 'Gestiona el control de acceso de GitWeb, preferencias del agente de IA y otros ajustes globales.',
   accessSettings: 'Ajustes de acceso',
   installBanner: '⚠️ GMC Hooks no está instalado. Instalar Git hooks permite generar commit messages automáticamente y usar git commit desde cualquier lugar.',
-  installHooks: 'Instalar Hooks y Webloc',
+  installHooks: 'Instalar Hooks',
   currentBranch: 'Rama actual',
   changedFiles: 'archivos cambiados',
   workingTree: 'Árbol de trabajo',
@@ -6067,7 +6049,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   settingsIntro: 'Gérez le contrôle d’accès GitWeb, les préférences d’agent IA et d’autres paramètres globaux.',
   accessSettings: 'Paramètres d’accès',
   installBanner: '⚠️ GMC Hooks n’est pas installé. Installer les Git hooks permet de générer automatiquement les commit messages et d’utiliser git commit partout.',
-  installHooks: 'Installer Hooks et Webloc',
+  installHooks: 'Installer Hooks',
   currentBranch: 'Branche actuelle',
   changedFiles: 'fichiers modifiés',
   workingTree: 'Arbre de travail',
@@ -8933,7 +8915,7 @@ function render(data) {
   if (!state.tasksLoaded && !state.taskLoading) {
     loadRepositoryTasks();
   }
-  state.install = data.install || { hooks: true, webloc: true };
+  state.install = data.install || { hooks: true };
   renderInstallBanner();
   
   state.contributions = data.contributions || {};
@@ -8954,7 +8936,7 @@ function render(data) {
 function renderInstallBanner() {
   var banner = $('installBanner');
   if (!banner) return;
-  var needsInstall = !state.install.hooks || !state.install.webloc;
+  var needsInstall = !state.install.hooks;
   if (needsInstall) {
     banner.classList.add('visible');
   } else {
@@ -8968,7 +8950,7 @@ function installGmc() {
   fetch('/api/install?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
     .then(function(res) { return res.json().then(function(data) { if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
     .then(function(data) {
-      state.install = data.install || { hooks: true, webloc: true };
+      state.install = data.install || { hooks: true };
       renderInstallBanner();
       if (btn) { btn.textContent = t('installed'); }
     })
@@ -9268,7 +9250,7 @@ function commitSelectedFiles(source) {
       fetch('/api/install?repo=' + encodeURIComponent(targetRepo), { method: 'POST' })
         .then(function(res) { return res.json().then(function(data) { if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status); return data; }); })
         .then(function(data) {
-          state.install = data.install || { hooks: true, webloc: true };
+          state.install = data.install || { hooks: true };
           renderInstallBanner();
           if (btn) { btn.textContent = t('installed'); }
           doCommit(files, source);

@@ -52,7 +52,7 @@ cli/              # npm package (single package, not a monorepo)
 ## Daily workflow
 
 ```sh
-gmc install --all     # one-time: installs hooks + macOS .webloc
+gmc install --all     # one-time: installs hooks
 git add .
 git commit -m gmc     # returns immediately; AI rewrites in background
 gmc status            # check background task status

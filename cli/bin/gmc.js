@@ -314,12 +314,7 @@ async function installCommand(flags) {
   }
   var root = git.repoRoot(process.cwd());
   installHooks(root);
-  var port = await web.resolveWeblocPort(flags.port || process.env.GMC_GITWEB_PORT || web.DEFAULT_PORT);
-  var linkPath = web.createWebloc(root, {
-    port: port
-  });
   console.log('Installed gmc hooks in ' + git.gitDir(root) + '/hooks.');
-  console.log('Created GitWeb link: ' + linkPath);
 }
 
 function installHooks(root) {
@@ -378,12 +373,8 @@ async function gitWebCommand(flags) {
       var address = web.authenticatedUrl(root, {
         port: port
       });
-      var linkPath = web.createWebloc(root, {
-        port: port
-      });
       console.log('GMC Web is already running on port ' + port + '.');
       console.log('Opening ' + address);
-      console.log('GitWeb link: ' + linkPath);
       if (!flags.noOpen) {
         web.openBrowser(address);
       }
@@ -434,11 +425,7 @@ async function gitWebCommand(flags) {
   process.once('SIGTERM', stopWebForSignal);
   console.log('GMC Web: ' + started.url);
   if (root) {
-    var createdLinkPath = web.createWebloc(root, {
-      port: started.port
-    });
     console.log('Repository: ' + root);
-    console.log('GitWeb link: ' + createdLinkPath);
   } else {
     console.log('Started in global mode (no repository found).');
   }
@@ -785,7 +772,7 @@ function printHelp() {
     '  GMC_CODEX_MODEL overrides the model used for commit message generation.',
     '  GMC_CODEX_TIMEOUT_MS overrides the Codex generation timeout.',
     '  GMC_GITWEB_PORT overrides the default local GitWeb port.',
-    '  gmc install --all installs hooks and writes a repository-specific git.webloc.',
+    '  gmc install --all installs hooks.',
     '  gmc install-hooks sets up Git hooks for AI commit messages and task status updates.',
     '  gmc web serves the Git Web UI. If a server is already running, it will just open the current repository in the browser.',
     '  gmc web --start starts the Git Web UI in the background as a daemon.',

@@ -61,7 +61,7 @@ GMC_GITWEB_PORT=4277 gmc web
 gmc install --all
 ```
 
-This installs GMC commit hooks and writes a repository-specific `git.webloc` link on macOS. After that, the short commit loop is:
+This installs GMC commit hooks. After that, the short commit loop is:
 
 ```sh
 git add .

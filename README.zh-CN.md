@@ -61,7 +61,7 @@ GMC_GITWEB_PORT=4277 gmc web
 gmc install --all
 ```
 
-这个命令会安装 GMC commit hooks，并在 macOS 上写入仓库专属的 `git.webloc` 链接。之后日常提交可以简化成：
+这个命令会安装 GMC commit hooks。之后日常提交可以简化成：
 
 ```sh
 git add .
