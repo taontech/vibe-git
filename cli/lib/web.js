@@ -243,6 +243,14 @@ function handleRequest(req, res) {
         handleInstall(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/open-app') {
+        handleOpenApp(req, res);
+        return;
+      }
+      if (parsed.pathname === '/api/git-config') {
+        handleUpdateGitConfig(req, res);
+        return;
+      }
       if (parsed.pathname === '/api/open-repository') {
         handleOpenRepository(req, res, parsed.query.repo);
         return;
@@ -339,6 +347,11 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/repositories') {
       sendJson(res, { repositories: readRecentRepositories() });
+      return;
+    }
+
+    if (parsed.pathname === '/api/git-overview') {
+      handleGetGitOverview(req, res);
       return;
     }
 
@@ -1202,6 +1215,195 @@ function handleOpenIde(req, res, targetRepo) {
   }
 }
 
+function handleOpenApp(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Opening applications is only available from 127.0.0.1.');
+  }
+  readJsonBody(req).then(function (body) {
+    body = body || {};
+    var app = String(body.app || '').toLowerCase();
+    var result;
+    var env = Object.assign({}, process.env);
+
+    if (process.platform === 'darwin') {
+      switch (app) {
+        case 'xcode':
+          result = childProcess.spawnSync('open', ['-b', 'com.apple.dt.Xcode'], { env: env, encoding: 'utf8' });
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('open', ['-a', 'Xcode'], { env: env, encoding: 'utf8' });
+          }
+          break;
+        case 'android-studio':
+        case 'studio':
+          result = childProcess.spawnSync('open', ['-b', 'com.google.android.studio'], { env: env, encoding: 'utf8' });
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('open', ['-a', 'Android Studio'], { env: env, encoding: 'utf8' });
+          }
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('studio', [], { env: env, encoding: 'utf8' });
+          }
+          break;
+        case 'vscode':
+        case 'code':
+          result = childProcess.spawnSync('open', ['-b', 'com.microsoft.VSCode'], { env: env, encoding: 'utf8' });
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('open', ['-a', 'Visual Studio Code'], { env: env, encoding: 'utf8' });
+          }
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('code', [], { env: env, encoding: 'utf8' });
+          }
+          break;
+        case 'sublime':
+        case 'subl':
+          result = childProcess.spawnSync('open', ['-b', 'com.sublimetext.4'], { env: env, encoding: 'utf8' });
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('open', ['-b', 'com.sublimetext.3'], { env: env, encoding: 'utf8' });
+          }
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('open', ['-a', 'Sublime Text'], { env: env, encoding: 'utf8' });
+          }
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('subl', [], { env: env, encoding: 'utf8' });
+          }
+          break;
+        case 'cursor':
+          result = childProcess.spawnSync('open', ['-b', 'com.todesktop.230313mzl4w4u92'], { env: env, encoding: 'utf8' });
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('open', ['-a', 'Cursor'], { env: env, encoding: 'utf8' });
+          }
+          if (result.error || result.status !== 0) {
+            result = childProcess.spawnSync('cursor', [], { env: env, encoding: 'utf8' });
+          }
+          break;
+        case 'terminal':
+          result = childProcess.spawnSync('open', ['-a', 'Terminal'], { env: env, encoding: 'utf8' });
+          break;
+        default:
+          throwHttpError('Unknown application: ' + app);
+      }
+    } else {
+      switch (app) {
+        case 'code':
+        case 'vscode':
+          result = childProcess.spawnSync('code', [], { env: env, encoding: 'utf8' });
+          break;
+        case 'sublime':
+        case 'subl':
+          result = childProcess.spawnSync('subl', [], { env: env, encoding: 'utf8' });
+          break;
+        case 'cursor':
+          result = childProcess.spawnSync('cursor', [], { env: env, encoding: 'utf8' });
+          break;
+        case 'terminal':
+          result = childProcess.spawnSync('x-terminal-emulator', [], { env: env, encoding: 'utf8' });
+          break;
+        default:
+          throwHttpError('App launching is not supported for ' + app);
+      }
+    }
+
+    if (result && (result.error || result.status !== 0)) {
+      var err = (result.stderr || '').trim() || (result.error && result.error.message) || ('Exit code ' + result.status);
+      throwHttpError(err || 'Failed to launch ' + app);
+    }
+    sendJson(res, { status: 'ok', app: app });
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function getGlobalGitConfig() {
+  var raw = runGitOptional(process.cwd(), ['config', '--global', '--list']);
+  var list = [];
+  var map = {};
+  if (raw) {
+    var lines = raw.split(/\r?\n/);
+    lines.forEach(function (line) {
+      if (!line) return;
+      var eq = line.indexOf('=');
+      if (eq >= 0) {
+        var key = line.slice(0, eq).trim();
+        var val = line.slice(eq + 1).trim();
+        if (key) {
+          list.push({ key: key, value: val });
+          map[key] = val;
+        }
+      }
+    });
+  }
+  return { list: list, map: map };
+}
+
+function collectGitOverview() {
+  var version = runGitOptional(process.cwd(), ['--version']) || 'git version unknown';
+  var execPath = runGitOptional(process.cwd(), ['--exec-path']) || '';
+  var gitBin = '';
+  try {
+    if (process.platform === 'darwin' || process.platform === 'linux') {
+      var whichRes = childProcess.spawnSync('which', ['git'], { encoding: 'utf8' });
+      if (whichRes.status === 0 && whichRes.stdout) {
+        gitBin = whichRes.stdout.trim();
+      }
+    }
+  } catch (e) {}
+
+  var globalCfg = getGlobalGitConfig();
+  var repos = readRecentRepositories();
+  var globalContribs = globalContributions(null, null);
+
+  return {
+    version: version,
+    execPath: execPath,
+    gitBin: gitBin || execPath || 'git',
+    userName: git.getGlobalConfig('user.name') || '',
+    userEmail: git.getGlobalConfig('user.email') || '',
+    coreEditor: git.getGlobalConfig('core.editor') || '',
+    defaultBranch: git.getGlobalConfig('init.defaultBranch') || '',
+    pullRebase: git.getGlobalConfig('pull.rebase') || '',
+    configs: globalCfg.list,
+    configMap: globalCfg.map,
+    repositories: repos,
+    repositoriesCount: repos.length,
+    globalContributions: globalContribs
+  };
+}
+
+function handleGetGitOverview(req, res) {
+  try {
+    sendJson(res, collectGitOverview());
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleUpdateGitConfig(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Editing Git config is only available from 127.0.0.1.');
+  }
+  readJsonBody(req).then(function (body) {
+    body = body || {};
+    if (body.entries && typeof body.entries === 'object') {
+      Object.keys(body.entries).forEach(function (key) {
+        var val = body.entries[key];
+        if (val === null || val === '') {
+          git.runGit(['config', '--global', '--unset', key], { allowFailure: true });
+        } else {
+          git.setGlobalConfig(key, String(val).trim());
+        }
+      });
+    } else if (body.key) {
+      if (body.value === null || body.value === '') {
+        git.runGit(['config', '--global', '--unset', body.key], { allowFailure: true });
+      } else {
+        git.setGlobalConfig(body.key, String(body.value).trim());
+      }
+    }
+    sendJson(res, { status: 'ok', overview: collectGitOverview() });
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
 function handleOpenAgent(req, res, targetRepo, agent) {
   if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
   if (!agent) return sendJsonError(res, 400, 'Missing agent parameter');
@@ -1886,7 +2088,10 @@ function getRepoLastCommitTime(repoPath) {
       return cached.time;
     }
 
-    var raw = runGitOptional(repoPath, ['log', '-1', '--format=%ct']);
+    var raw = runGitOptional(repoPath, ['log', '-1', '--format=%at']);
+    if (!raw) {
+      raw = runGitOptional(repoPath, ['log', '-1', '--format=%ct']);
+    }
     var sec = Number(raw);
     var commitTime = (!isNaN(sec) && sec > 0) ? sec * 1000 : 0;
     lastCommitTimeCache[repoPath] = {
@@ -3994,7 +4199,8 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 1; color: #fff; box-sizing: border-box; margin-left: 2px; }
 .tab-badge-git { background-color: #ef4444; }
 .tab-badge-task { background-color: #f97316; }
-.view-page[hidden], .task-page[hidden] { display: none; }
+.view-tabs[hidden] { display: none !important; }
+.view-page[hidden], .task-page[hidden], .settings-page[hidden], .home-page[hidden] { display: none !important; }
 .language-wrap { position: relative; }
 .language-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .language-button svg { width: 16px; height: 16px; pointer-events: none; }
@@ -4406,13 +4612,13 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 #graph path:hover { stroke-width: 3; opacity: 1 !important; }
 #graph circle.node { transition: r 0.16s, stroke-width 0.16s; pointer-events: auto; }
 #graph circle.node:hover { r: 4.8; stroke-width: 2.4; }
-.calendar-grid { --calendar-cell: 10px; --calendar-gap: 3px; --calendar-label-width: 24px; display: grid; grid-template-columns: var(--calendar-label-width) minmax(0, 1fr); grid-template-rows: 13px auto; column-gap: 6px; row-gap: 4px; flex: 0 1 min(674px, 78%); width: min(674px, 78%); justify-content: flex-end; align-items: start; max-width: 100%; min-width: 0; overflow: hidden; }
-.calendar-months { grid-column: 2; grid-row: 1; display: flex; gap: var(--calendar-gap); overflow: hidden; min-width: 0; }
-.calendar-month { flex: 0 0 var(--calendar-cell); height: 13px; color: var(--muted); font-size: 10px; line-height: 12px; white-space: nowrap; overflow: visible; }
+.calendar-grid { --calendar-cell: 10px; --calendar-gap: 3px; --calendar-label-width: 24px; display: grid; grid-template-columns: var(--calendar-label-width) minmax(0, 1fr); grid-template-rows: 13px auto; column-gap: 6px; row-gap: 4px; flex: 0 1 min(674px, 78%); width: min(674px, 78%); justify-content: flex-end; align-items: start; max-width: 100%; min-width: 0; }
+.calendar-months { grid-column: 2; grid-row: 1; display: flex; gap: var(--calendar-gap); overflow: visible; min-width: 0; }
+.calendar-month { flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); min-width: 0; max-width: var(--calendar-cell); height: 13px; color: var(--muted); font-size: 10px; line-height: 12px; white-space: nowrap; overflow: visible; box-sizing: border-box; }
 .calendar-weekdays { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; gap: var(--calendar-gap); }
 .calendar-weekday { height: var(--calendar-cell); color: var(--muted); font-size: 10px; line-height: var(--calendar-cell); text-align: right; white-space: nowrap; }
-.calendar-weeks { grid-column: 2; grid-row: 2; display: flex; gap: var(--calendar-gap); align-items: flex-start; overflow: hidden; min-width: 0; }
-.calendar-col { display: flex; flex-direction: column; gap: var(--calendar-gap); flex: 0 0 var(--calendar-cell); }
+.calendar-weeks { grid-column: 2; grid-row: 2; display: flex; gap: var(--calendar-gap); align-items: flex-start; overflow: visible; min-width: 0; }
+.calendar-col { display: flex; flex-direction: column; gap: var(--calendar-gap); flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); min-width: 0; max-width: var(--calendar-cell); box-sizing: border-box; }
 .calendar-cell { flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); height: var(--calendar-cell); border-radius: 2px; background: var(--line-soft); }
 .calendar-cell.empty { background: transparent; }
 .calendar-cell[data-global-level="1"] { background: #dbe2ea; }
@@ -4540,9 +4746,553 @@ html[data-theme="ocean"] .calendar-cell[data-global-level="4"] { background: #47
 .qa-btn svg, .qa-icon { width: 20px; height: 20px; flex-shrink: 0; pointer-events: none; }
 .qa-icon { display: block; object-fit: contain; }
 .qa-btn span { font-size: 9px; font-weight: 650; line-height: 1.1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.qa-ide-btn { position: relative; }
-.qa-ide-btn[hidden] { display: none; }
 .qa-ide-btn:hover { color: #7c3aed; border-color: #7c3aed; background: #f5f3ff; }
+
+/* Close Repository Button in Topbar (matches repo-remove style) */
+.topbar-close-btn, .close-repo-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 1;
+  transition: color .15s, background .15s, border-color .15s, transform .15s;
+  flex: 0 0 auto;
+}
+.topbar-close-btn:hover, .close-repo-button:hover {
+  color: var(--rose);
+  background: rgba(248, 113, 113, 0.15);
+  border-color: var(--rose);
+  transform: scale(1.06);
+}
+.topbar-close-btn svg, .close-repo-button svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+.topbar-close-btn[hidden], .close-repo-button[hidden] {
+  display: none !important;
+}
+
+/* Home Overview Page */
+.home-page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding-bottom: 40px;
+  animation: fadeIn .22s ease-out;
+}
+.home-page[hidden] { display: none !important; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.home-hero {
+  position: relative;
+  padding: 22px 26px;
+  background: var(--hero-bg);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.home-hero-glow {
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 260px;
+  height: 260px;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  opacity: 0.15;
+  pointer-events: none;
+  filter: blur(40px);
+}
+.home-hero-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: center;
+}
+@media (max-width: 1080px) {
+  .home-hero-layout {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}
+.home-hero-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.home-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  align-self: flex-start;
+}
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  animation: pulseGlow 2s infinite;
+}
+@keyframes pulseGlow {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+.home-hero-title {
+  margin: 0 0 14px;
+  font-size: 21px;
+  font-weight: 750;
+  letter-spacing: -0.4px;
+  color: var(--text);
+  line-height: 1.2;
+}
+.home-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 8px 12px;
+}
+.home-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  min-width: 0;
+  transition: border-color .15s;
+}
+.home-meta-item:hover {
+  border-color: var(--line);
+}
+.home-meta-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.home-meta-icon svg {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  max-width: 14px;
+  max-height: 14px;
+}
+.home-meta-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.home-meta-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  line-height: 1.1;
+}
+.home-meta-val {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+  line-height: 1.2;
+}
+
+/* Right Column: Calendar Card */
+.home-hero-calendar-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 10px 14px 8px;
+  backdrop-filter: blur(10px);
+}
+.home-hero-cal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.home-hero-cal-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.home-hero-cal-title svg {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.home-calendar-wrap {
+  overflow-x: auto;
+  padding: 2px 0;
+  width: 100%;
+}
+.home-calendar-grid {
+  --calendar-cell: 10px;
+  --calendar-gap: 3px;
+  --calendar-label-width: 22px;
+  width: 100% !important;
+  max-width: 100% !important;
+  justify-content: flex-start !important;
+}
+.home-calendar-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.home-calendar-meta strong {
+  color: var(--text);
+}
+
+/* Home Page Sections */
+.home-section {
+  padding: 22px 26px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.03);
+}
+.home-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.home-section-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.home-section-icon {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  max-width: 20px;
+  max-height: 20px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.home-section-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.home-section-desc {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.home-calendar-wrap {
+  overflow-x: auto;
+  padding: 10px 0 4px;
+}
+.home-calendar-grid {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: 1 1 100% !important;
+  justify-content: flex-start !important;
+}
+.home-calendar-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.home-calendar-meta strong {
+  color: var(--text);
+}
+
+/* Developer Tools Grid */
+.home-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 14px;
+}
+.home-tool-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 18px 14px 14px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  transition: transform .18s, border-color .18s, box-shadow .18s, background .18s;
+}
+.home-tool-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+  background: var(--panel);
+}
+.home-tool-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  margin-bottom: 10px;
+  transition: transform .18s;
+}
+.home-tool-card:hover .home-tool-icon-wrap {
+  transform: scale(1.08);
+}
+.home-tool-icon {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+.home-tool-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.home-tool-desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 12px;
+  min-height: 16px;
+}
+.home-tool-launch-btn {
+  width: 100%;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.home-tool-launch-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.home-tool-launch-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.home-tool-launch-btn.working {
+  opacity: 0.7;
+  pointer-events: none;
+}
+.home-tool-launch-btn.success {
+  background: var(--green) !important;
+  border-color: var(--green) !important;
+  color: #fff !important;
+}
+
+/* Global Config Form & Table */
+.home-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.home-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+.home-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.home-config-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.home-config-input, .home-config-select {
+  height: 36px;
+  padding: 0 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color .15s, box-shadow .15s;
+}
+.home-config-input:focus, .home-config-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.home-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+.home-status-pill {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+  min-height: 18px;
+}
+.home-all-configs-details {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+.home-all-configs-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.home-all-configs-summary:hover {
+  color: var(--text);
+}
+.home-all-configs-summary .chevron {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  max-width: 16px;
+  max-height: 16px;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform .16s;
+}
+details[open] > .home-all-configs-summary .chevron {
+  transform: rotate(180deg);
+}
+.home-all-configs-body {
+  margin-top: 14px;
+}
+.home-configs-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin-bottom: 14px;
+}
+.home-config-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  font-size: 12px;
+}
+.home-config-row-key {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.home-config-row-val {
+  font-family: ui-monospace, monospace;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-grow: 1;
+  text-align: right;
+}
+.home-config-del-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: color .15s, background .15s;
+}
+.home-config-del-btn:hover {
+  color: var(--rose);
+  background: var(--diff-del-bg);
+}
+.home-add-config-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.home-add-config-row input {
+  flex: 1;
+  height: 32px;
+  font-size: 12px;
+}
+.home-add-config-row button {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -4580,7 +5330,7 @@ html[data-theme="ocean"] .calendar-cell[data-global-level="4"] { background: #47
           </div>
         </div>
         <div class="topbar-tools">
-          <nav class="view-tabs" aria-label="GMC views">
+          <nav class="view-tabs" aria-label="GMC views" hidden>
             <button id="gitViewTab" class="view-tab active" type="button" data-view-tab="git">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M8.6 7.8 15.4 16.2"></path><path d="M6 9v6"></path></svg>
               <span data-i18n="gitView">Git</span>
@@ -4611,11 +5361,240 @@ html[data-theme="ocean"] .calendar-cell[data-global-level="4"] { background: #47
                 <button type="button" data-lang-option="fr">Français</button>
               </div>
             </div>
+            <button id="closeRepoBtn" class="topbar-close-btn" type="button" title="退出仓库回到主页" data-i18n-title="closeRepoTitle" aria-label="Close Repository" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
           </div>
         </div>
       </div>
     </header>
     <div class="shell-inner">
+      <div id="homePage" class="home-page" hidden>
+        <div class="home-hero">
+          <div class="home-hero-glow" aria-hidden="true"></div>
+          <div class="home-hero-content">
+            <div class="home-hero-layout">
+              <div class="home-hero-info">
+                <div class="home-hero-badge">
+                  <span class="pulse-dot" aria-hidden="true"></span>
+                  <span data-i18n="homeBadge">Git System Hub</span>
+                </div>
+                <h2 class="home-hero-title" data-i18n="homeHeroTitle">全局 Git 概览与工作台</h2>
+
+                <div class="home-meta-grid">
+                  <div class="home-meta-item">
+                    <span class="home-meta-icon">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>
+                    </span>
+                    <div class="home-meta-text">
+                      <span class="home-meta-label" data-i18n="gitVersion">Git 版本</span>
+                      <span id="homeGitVersion" class="home-meta-val">Loading...</span>
+                    </div>
+                  </div>
+
+                  <div class="home-meta-item">
+                    <span class="home-meta-icon">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    </span>
+                    <div class="home-meta-text">
+                      <span class="home-meta-label" data-i18n="gitPath">Git 路径</span>
+                      <span id="homeGitPath" class="home-meta-val" title="...">Loading...</span>
+                    </div>
+                  </div>
+
+                  <div class="home-meta-item">
+                    <span class="home-meta-icon">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                    </span>
+                    <div class="home-meta-text">
+                      <span class="home-meta-label" data-i18n="globalIdentity">全局身份</span>
+                      <span id="homeGlobalIdentity" class="home-meta-val">-</span>
+                    </div>
+                  </div>
+
+                  <div class="home-meta-item">
+                    <span class="home-meta-icon">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path></svg>
+                    </span>
+                    <div class="home-meta-text">
+                      <span class="home-meta-label" data-i18n="trackedRepos">已追踪仓库</span>
+                      <span id="homeTrackedCount" class="home-meta-val">0</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="home-hero-calendar-card">
+                <div class="home-hero-cal-head">
+                  <div class="home-hero-cal-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                    <span data-i18n="globalCalendar">全局提交贡献日历</span>
+                  </div>
+                  <div id="homeCalendarMeta" class="home-calendar-meta"></div>
+                </div>
+                <div class="home-calendar-wrap">
+                  <div id="homeCalendar" class="calendar-grid home-calendar-grid"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Developer Tools Section -->
+        <section class="home-section">
+          <div class="home-section-head">
+            <div class="home-section-title-wrap">
+              <svg class="home-section-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+              <div>
+                <h3 data-i18n="devTools">常用开发工具</h3>
+                <p class="home-section-desc" data-i18n="devToolsDesc">一键启动本地安装的常用开发环境与编辑器</p>
+              </div>
+            </div>
+          </div>
+          <div class="home-tools-grid">
+            <div class="home-tool-card" data-tool="vscode">
+              <div class="home-tool-icon-wrap">
+                <img class="home-tool-icon" src="/icons/vscode.svg" alt="VS Code">
+              </div>
+              <div class="home-tool-name">VS Code</div>
+              <div class="home-tool-desc">Visual Studio Code</div>
+              <button class="home-tool-launch-btn" type="button" data-launch-app="vscode">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span data-i18n="launchApp">启动</span>
+              </button>
+            </div>
+
+            <div class="home-tool-card" data-tool="xcode">
+              <div class="home-tool-icon-wrap">
+                <img class="home-tool-icon" src="/icons/xcode.svg" alt="Xcode">
+              </div>
+              <div class="home-tool-name">Xcode</div>
+              <div class="home-tool-desc">Apple Developer IDE</div>
+              <button class="home-tool-launch-btn" type="button" data-launch-app="xcode">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span data-i18n="launchApp">启动</span>
+              </button>
+            </div>
+
+            <div class="home-tool-card" data-tool="android-studio">
+              <div class="home-tool-icon-wrap">
+                <img class="home-tool-icon" src="/icons/android-studio.svg" alt="Android Studio">
+              </div>
+              <div class="home-tool-name">Android Studio</div>
+              <div class="home-tool-desc">Google Android IDE</div>
+              <button class="home-tool-launch-btn" type="button" data-launch-app="android-studio">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span data-i18n="launchApp">启动</span>
+              </button>
+            </div>
+
+            <div class="home-tool-card" data-tool="sublime">
+              <div class="home-tool-icon-wrap">
+                <img class="home-tool-icon" src="/icons/sublime.svg" alt="Sublime Text">
+              </div>
+              <div class="home-tool-name">Sublime Text</div>
+              <div class="home-tool-desc">Text &amp; Code Editor</div>
+              <button class="home-tool-launch-btn" type="button" data-launch-app="sublime">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span data-i18n="launchApp">启动</span>
+              </button>
+            </div>
+
+            <div class="home-tool-card" data-tool="cursor">
+              <div class="home-tool-icon-wrap">
+                <img class="home-tool-icon" src="/icons/cursor.svg" alt="Cursor">
+              </div>
+              <div class="home-tool-name">Cursor</div>
+              <div class="home-tool-desc">AI Code Editor</div>
+              <button class="home-tool-launch-btn" type="button" data-launch-app="cursor">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span data-i18n="launchApp">启动</span>
+              </button>
+            </div>
+
+            <div class="home-tool-card" data-tool="terminal">
+              <div class="home-tool-icon-wrap">
+                <img class="home-tool-icon" src="/icons/terminal.svg" alt="Terminal">
+              </div>
+              <div class="home-tool-name">Terminal</div>
+              <div class="home-tool-desc">Command Line</div>
+              <button class="home-tool-launch-btn" type="button" data-launch-app="terminal">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span data-i18n="launchApp">启动</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Git Global Configuration Section -->
+        <section class="home-section">
+          <div class="home-section-head">
+            <div class="home-section-title-wrap">
+              <svg class="home-section-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              <div>
+                <h3 data-i18n="gitSystemInfo">全局 Git 配置管理</h3>
+                <p class="home-section-desc" data-i18n="gitSystemInfoDesc">查看与修改 ~/.gitconfig 中的系统全局配置</p>
+              </div>
+            </div>
+          </div>
+          <div class="home-config-card">
+            <form id="globalConfigForm" class="home-config-form">
+              <div class="home-config-grid">
+                <div class="home-config-field">
+                  <label for="cfgUserName" data-i18n="userName">用户名 (user.name)</label>
+                  <input type="text" id="cfgUserName" class="home-config-input" placeholder="例如：John Doe">
+                </div>
+                <div class="home-config-field">
+                  <label for="cfgUserEmail" data-i18n="userEmail">邮箱 (user.email)</label>
+                  <input type="email" id="cfgUserEmail" class="home-config-input" placeholder="例如：john@example.com">
+                </div>
+                <div class="home-config-field">
+                  <label for="cfgCoreEditor" data-i18n="coreEditor">默认编辑器 (core.editor)</label>
+                  <input type="text" id="cfgCoreEditor" class="home-config-input" placeholder="例如：code --wait, vim">
+                </div>
+                <div class="home-config-field">
+                  <label for="cfgDefaultBranch" data-i18n="defaultBranch">新建分支默认名 (init.defaultBranch)</label>
+                  <input type="text" id="cfgDefaultBranch" class="home-config-input" placeholder="例如：main">
+                </div>
+                <div class="home-config-field">
+                  <label for="cfgPullRebase" data-i18n="pullRebase">Pull 策略 (pull.rebase)</label>
+                  <select id="cfgPullRebase" class="home-config-select">
+                    <option value="">默认 (false)</option>
+                    <option value="true">true (Rebase)</option>
+                    <option value="false">false (Merge)</option>
+                    <option value="merges">merges</option>
+                  </select>
+                </div>
+              </div>
+              <div class="home-config-actions">
+                <button id="btnSaveConfig" class="commit-button" type="submit">
+                  <span data-i18n="saveConfig">保存全局配置</span>
+                </button>
+                <span id="configSaveStatus" class="home-status-pill"></span>
+              </div>
+            </form>
+
+            <details class="home-all-configs-details">
+              <summary class="home-all-configs-summary">
+                <span data-i18n="allGlobalConfigs">所有全局配置项 (全量列表)</span>
+                <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+              </summary>
+              <div class="home-all-configs-body">
+                <div id="homeAllConfigsTable" class="home-configs-table"></div>
+                <div class="home-add-config-row">
+                  <input type="text" id="newConfigKey" class="home-config-input" placeholder="配置键名 (如 core.autocrlf)">
+                  <input type="text" id="newConfigVal" class="home-config-input" placeholder="配置值 (如 input)">
+                  <button id="btnAddConfigKey" class="copy-button" type="button" data-i18n="addConfigKey">+ 添加</button>
+                </div>
+              </div>
+            </details>
+          </div>
+        </section>
+      </div>
+
       <div id="gitPage" class="view-page">
         <div id="installBanner" class="install-banner">
           <span class="install-text" data-i18n="installBanner"> ⚠️ GMC Hooks is not installed - Installing git hooks can automatically generate commit messages. Git commit is available anywhere.</span>
@@ -4987,7 +5966,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -5265,7 +6244,35 @@ var I18N = {
     taskAgentSettingHelp: '作为仓库任务自动分解时的默认 Agent。',
     repositoryTaskAgentSetting: '任务分解 Agent',
     agentSettingSaved: 'Agent 设置已保存',
-    agentSettingSaveFailed: 'Agent 设置保存失败：'
+    agentSettingSaveFailed: 'Agent 设置保存失败：',
+    homeTitle: '全局 Git 概览',
+    homeBadge: 'Git 全局工作台',
+    homeHeroTitle: '全局 Git 概览与工作台',
+    homeHeroSubtitle: '查看全局代码提交热力图、管理系统 Git 配置，并一键启动常用开发工具。',
+    closeRepo: '关闭仓库',
+    closeRepoTitle: '退出当前仓库，回到全局概览主页',
+    globalCalendar: '全局提交贡献日历',
+    globalCalendarDesc: '已追踪的所有本地仓库在过去一年的全景提交热力图',
+    devTools: '常用开发工具',
+    devToolsDesc: '一键启动本地安装的常用开发环境与编辑器',
+    gitSystemInfo: '全局 Git 配置管理',
+    gitSystemInfoDesc: '查看与修改 ~/.gitconfig 中的系统全局配置',
+    gitVersion: 'Git 版本',
+    gitPath: 'Git 路径',
+    globalIdentity: '全局身份',
+    trackedRepos: '已追踪仓库',
+    userName: '用户名 (user.name)',
+    userEmail: '邮箱 (user.email)',
+    coreEditor: '默认编辑器 (core.editor)',
+    defaultBranch: '新建分支默认名 (init.defaultBranch)',
+    pullRebase: 'Pull 策略 (pull.rebase)',
+    saveConfig: '保存全局配置',
+    configSaved: '全局配置已保存',
+    launchApp: '启动',
+    appLaunched: '已启动',
+    allGlobalConfigs: '所有全局配置项 (全量列表)',
+    addConfigKey: '添加配置',
+    notSet: '未设置'
   },
   en: {
     language: 'Language',
@@ -5526,7 +6533,35 @@ var I18N = {
     themeDefault: 'Classic Emerald',
     themeDark: 'Dark Slate',
     themeOcean: 'Ocean Blue',
-    themePurple: 'Midnight Violet'
+    themePurple: 'Midnight Violet',
+    homeTitle: 'Git Overview',
+    homeBadge: 'Git System Hub',
+    homeHeroTitle: 'Git Overview & Developer Hub',
+    homeHeroSubtitle: 'View global commit heatmaps, manage system Git config, and launch developer tools with one click.',
+    closeRepo: 'Close Repo',
+    closeRepoTitle: 'Close current repository and return to overview',
+    globalCalendar: 'Global Contributions Calendar',
+    globalCalendarDesc: 'Aggregated commit heatmap across all tracked repositories over the past year',
+    devTools: 'Developer Tools',
+    devToolsDesc: 'Quick launch local code editors and IDEs',
+    gitSystemInfo: 'Global Git Configuration',
+    gitSystemInfoDesc: 'View and edit global configuration entries in ~/.gitconfig',
+    gitVersion: 'Git Version',
+    gitPath: 'Git Path',
+    globalIdentity: 'Global Identity',
+    trackedRepos: 'Tracked Repos',
+    userName: 'User Name (user.name)',
+    userEmail: 'Email (user.email)',
+    coreEditor: 'Default Editor (core.editor)',
+    defaultBranch: 'Default Branch (init.defaultBranch)',
+    pullRebase: 'Pull Strategy (pull.rebase)',
+    saveConfig: 'Save Global Config',
+    configSaved: 'Global config saved',
+    launchApp: 'Launch',
+    appLaunched: 'Launched',
+    allGlobalConfigs: 'All Global Configurations (Full List)',
+    addConfigKey: 'Add Config',
+    notSet: 'Not set'
   }
 };
 I18N.ja = Object.assign({}, I18N.en, {
@@ -6520,6 +7555,8 @@ function applyLanguage() {
     renderFileTree();
     renderCommits(state.commits || []);
     window.setTimeout(function() { renderGraph(state.commits || []); }, 0);
+  } else if (state.gitOverview) {
+    renderGitOverview(state.gitOverview);
   }
 }
 
@@ -6572,6 +7609,17 @@ function bindViewTabs() {
 }
 
 function setActiveView(view) {
+  if (!targetRepo) {
+    if ($('homePage')) $('homePage').hidden = false;
+    if ($('gitPage')) $('gitPage').hidden = true;
+    if ($('taskPage')) $('taskPage').hidden = true;
+    if ($('settingsPage')) $('settingsPage').hidden = true;
+    var tabs = document.querySelector('.view-tabs');
+    if (tabs) tabs.hidden = true;
+    var closeBtn = $('closeRepoBtn');
+    if (closeBtn) closeBtn.hidden = true;
+    return;
+  }
   view = view === 'tasks' ? 'tasks' : 'git';
   if (view !== 'tasks') cancelTaskSpeech();
   state.settingsOpen = false;
@@ -6579,9 +7627,12 @@ function setActiveView(view) {
   var gitPage = $('gitPage');
   var taskPage = $('taskPage');
   var accessPage = $('settingsPage');
-  var tabs = document.querySelector('.view-tabs');
+  var tabs2 = document.querySelector('.view-tabs');
+  var closeBtn2 = $('closeRepoBtn');
+  if ($('homePage')) $('homePage').hidden = true;
   if (accessPage) accessPage.hidden = true;
-  if (tabs) tabs.hidden = false;
+  if (tabs2) tabs2.hidden = false;
+  if (closeBtn2) closeBtn2.hidden = false;
   if (gitPage) gitPage.hidden = view !== 'git';
   if (taskPage) taskPage.hidden = view !== 'tasks';
   document.querySelectorAll('[data-view-tab]').forEach(function(button) {
@@ -6964,6 +8015,7 @@ function loadRepositoryTasks(options) {
   }
 
   performance.mark('gmc-tasks-api-start');
+  var repoAtStart = targetRepo;
   state.taskLoading = true;
   renderTaskBoard();
   return fetch('/api/tasks?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
@@ -6977,6 +8029,7 @@ function loadRepositoryTasks(options) {
       });
     })
     .then(function(data) {
+      if (targetRepo !== repoAtStart) return state.repoTasks;
       state.repoTasks = data.tasks || [];
       state.tasksLoaded = true;
       var storage = $('taskStoragePath');
@@ -6993,11 +8046,13 @@ function loadRepositoryTasks(options) {
       return state.repoTasks;
     })
     .catch(function(error) {
+      if (targetRepo !== repoAtStart) return state.repoTasks;
       setTaskError(t('taskLoadFailed') + error.message);
       renderTaskBoard();
       return state.repoTasks;
     })
     .finally(function() {
+      if (targetRepo !== repoAtStart) return;
       state.taskLoading = false;
       renderTaskBoard();
       if (state.pendingTaskReload) {
@@ -8182,6 +9237,7 @@ function renderSidebar() {
     return;
   }
 
+  var prevScroll = list.scrollTop;
   list.innerHTML = history.map(function(item) {
     var name = item.name || repoDisplayName(item.path);
     var active = item.path === targetRepo ? ' active' : '';
@@ -8197,6 +9253,21 @@ function renderSidebar() {
       '</button>' +
     '</div>';
   }).join('');
+  list.scrollTop = prevScroll;
+}
+
+function updateSidebarActive() {
+  var list = $('repoList');
+  if (!list) return;
+  var items = list.querySelectorAll('.repo-item');
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item.getAttribute('data-repo') === targetRepo) {
+      item.classList.add('active');
+    } else {
+      item.classList.remove('active');
+    }
+  }
 }
 
 function bindSidebarEvents() {
@@ -8237,7 +9308,431 @@ function bindSidebarEvents() {
 
 function openRepoFromHistory(repoPath) {
   if (!repoPath) return;
-  window.location.href = '?repo=' + encodeURIComponent(repoPath);
+  switchRepository(repoPath);
+}
+
+function exitToHome(options) {
+  switchRepository('', options);
+}
+
+function switchRepository(repoPath, options) {
+  options = options || {};
+  repoPath = repoPath || '';
+  if (repoPath === targetRepo && !options.force) return;
+
+  targetRepo = repoPath;
+
+  try {
+    var nextUrl = new URL(window.location.href);
+    if (repoPath) {
+      nextUrl.searchParams.set('repo', repoPath);
+    } else {
+      nextUrl.searchParams.delete('repo');
+    }
+    if (!options.skipHistory && window.history && window.history.pushState) {
+      window.history.pushState({ repo: repoPath }, '', nextUrl.pathname + (nextUrl.search ? nextUrl.search : ''));
+    }
+  } catch (e) {}
+
+  updateSidebarActive();
+
+  clearTimeout(state.timer);
+  clearTimeout(state.graphTimer);
+  state.loading = false;
+  state.pendingForceLoad = false;
+  state.statusSignature = null;
+  state.repoHistoryNeedsRefresh = false;
+  closeCommitDetail();
+  hideTaskDetail();
+  cancelTaskSpeech();
+
+  if ($('fileDetailPage')) $('fileDetailPage').hidden = true;
+  if ($('diffDetailPage')) $('diffDetailPage').hidden = true;
+
+  if (!targetRepo) {
+    setPageTitle('');
+    updateRepoLink(t('repoRunning'), null);
+    if ($('homePage')) $('homePage').hidden = false;
+    if ($('gitPage')) $('gitPage').hidden = true;
+    if ($('taskPage')) $('taskPage').hidden = true;
+    if ($('closeRepoBtn')) $('closeRepoBtn').hidden = true;
+    var viewTabsEl = document.querySelector('.view-tabs');
+    if (viewTabsEl) viewTabsEl.hidden = true;
+    if (state.taskEvents) {
+      try { state.taskEvents.close(); } catch (e) {}
+      state.taskEvents = null;
+    }
+    loadGitOverview({ force: true });
+    return;
+  }
+
+  setPageTitle(targetRepo);
+  updateRepoLink(targetRepo, targetRepo);
+  updateReadmeLink();
+  if ($('homePage')) $('homePage').hidden = true;
+  if ($('closeRepoBtn')) $('closeRepoBtn').hidden = false;
+  var viewTabsEl2 = document.querySelector('.view-tabs');
+  if (viewTabsEl2) viewTabsEl2.hidden = false;
+
+  if (state.activeView === 'tasks') {
+    if ($('gitPage')) $('gitPage').hidden = true;
+    if ($('taskPage')) $('taskPage').hidden = false;
+  } else {
+    if ($('taskPage')) $('taskPage').hidden = true;
+    if ($('gitPage')) $('gitPage').hidden = false;
+    if ($('dashboardPage')) $('dashboardPage').hidden = false;
+  }
+
+  state.commits = [];
+  state.files = [];
+  state.selectedModified = {};
+  state.selectedStaged = {};
+  state.tasks = [];
+  state.repoTasks = [];
+  state.tasksLoaded = false;
+  state.taskLoading = false;
+  state.pendingTaskReload = false;
+  state.activeTaskId = '';
+  state.taskDetailEditing = false;
+  state.repoBrowserLoaded = false;
+  state.repoBrowserEntries = [];
+  state.repoBrowserPath = '';
+  state.fileTree = null;
+  state.fileTreeLoading = false;
+  state.fileTreeExpanded = {};
+  state.fileViewPath = '';
+  state.fileViewType = '';
+  state.diffViewPath = '';
+  state.readmeLoaded = false;
+  state.branchSwitching = false;
+
+  connectTaskEvents();
+
+  var branchText = $('branchText');
+  if (branchText) branchText.textContent = t('loading');
+  var upstreamEl = $('upstream');
+  if (upstreamEl) {
+    upstreamEl.textContent = '';
+    upstreamEl.dataset.empty = 'true';
+  }
+  var aheadEl = $('ahead');
+  if (aheadEl) aheadEl.textContent = '0';
+  var behindEl = $('behind');
+  if (behindEl) behindEl.textContent = '0';
+  var dirtyEl = $('dirty');
+  if (dirtyEl) dirtyEl.textContent = '0';
+  var btnPush = $('btnPush');
+  if (btnPush) btnPush.style.display = 'none';
+
+  updateGitTabBadge(0);
+  updateTaskTabBadge(0);
+
+  var fileList = $('fileList');
+  if (fileList) fileList.innerHTML = '<div class="file-empty">' + escapeHtml(t('loading')) + '</div>';
+  var branchesTree = $('branchesTree');
+  if (branchesTree) branchesTree.innerHTML = '';
+  var commitGraph = $('commitGraph');
+  if (commitGraph) commitGraph.innerHTML = '';
+
+  if (state.activeView === 'tasks') {
+    renderTaskBoard();
+    loadRepositoryTasks({ force: true });
+    loadRepositoryTaskAgent();
+  }
+
+  load({ force: true });
+}
+
+function loadGitOverview(options) {
+  options = options || {};
+  if (state.gitOverviewLoading && !options.force) return;
+  state.gitOverviewLoading = true;
+
+  fetch('/api/git-overview', { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      state.gitOverviewLoading = false;
+      state.gitOverview = data;
+      renderGitOverview(data);
+    })
+    .catch(function(err) {
+      state.gitOverviewLoading = false;
+      console.error('loadGitOverview error:', err);
+    });
+}
+
+function renderGitOverview(data) {
+  if (!data) return;
+
+  var verEl = $('homeGitVersion');
+  if (verEl) verEl.textContent = data.version || 'Unknown';
+
+  var pathEl = $('homeGitPath');
+  if (pathEl) {
+    var p = data.gitBin || data.execPath || '-';
+    pathEl.textContent = p;
+    pathEl.title = p;
+  }
+
+  var identityEl = $('homeGlobalIdentity');
+  if (identityEl) {
+    var idStr = '';
+    if (data.userName && data.userEmail) {
+      idStr = data.userName + ' <' + data.userEmail + '>';
+    } else if (data.userName) {
+      idStr = data.userName;
+    } else if (data.userEmail) {
+      idStr = data.userEmail;
+    } else {
+      idStr = t('notSet');
+    }
+    identityEl.textContent = idStr;
+  }
+
+  var countEl = $('homeTrackedCount');
+  if (countEl) {
+    countEl.textContent = String(data.repositoriesCount || (state.repoHistory || []).length || 0);
+  }
+
+  var uNameInput = $('cfgUserName');
+  if (uNameInput && document.activeElement !== uNameInput) uNameInput.value = data.userName || '';
+  var uEmailInput = $('cfgUserEmail');
+  if (uEmailInput && document.activeElement !== uEmailInput) uEmailInput.value = data.userEmail || '';
+  var cEditorInput = $('cfgCoreEditor');
+  if (cEditorInput && document.activeElement !== cEditorInput) cEditorInput.value = data.coreEditor || '';
+  var dBranchInput = $('cfgDefaultBranch');
+  if (dBranchInput && document.activeElement !== dBranchInput) dBranchInput.value = data.defaultBranch || '';
+  var pRebaseSelect = $('cfgPullRebase');
+  if (pRebaseSelect && document.activeElement !== pRebaseSelect) pRebaseSelect.value = data.pullRebase || '';
+
+  renderGlobalConfigTable(data.configs || []);
+
+  if (data.globalContributions) {
+    renderHomeCalendar(data.globalContributions);
+  }
+}
+
+function renderHomeCalendar(globalContribs) {
+  globalContribs = globalContribs || {};
+  renderCalendar(globalContribs, globalContribs, 'homeCalendar');
+
+  var metaEl = $('homeCalendarMeta');
+  if (!metaEl) return;
+
+  var total = 0;
+  var activeDays = 0;
+  Object.keys(globalContribs).forEach(function(k) {
+    var val = globalContribs[k] || 0;
+    total += val;
+    if (val > 0) activeDays++;
+  });
+
+  metaEl.innerHTML = '<span>' + escapeHtml(t('totalCommits')) + ': <strong>' + total + '</strong></span>' +
+    '<span>' + escapeHtml(t('activeDays')) + ': <strong>' + activeDays + '</strong></span>';
+}
+
+function renderGlobalConfigTable(configs) {
+  var container = $('homeAllConfigsTable');
+  if (!container) return;
+
+  if (!configs || !configs.length) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px;">' + escapeHtml(t('notSet')) + '</div>';
+    return;
+  }
+
+  var html = '';
+  configs.forEach(function(item) {
+    if (!item || !item.key) return;
+    html += '<div class="home-config-row" data-key="' + escapeHtml(item.key) + '">' +
+      '<span class="home-config-row-key">' + escapeHtml(item.key) + '</span>' +
+      '<span class="home-config-row-val" title="' + escapeHtml(item.value || '') + '">' + escapeHtml(item.value || '') + '</span>' +
+      '<button class="home-config-del-btn" type="button" title="' + escapeHtml(t('delete')) + '" data-delete-key="' + escapeHtml(item.key) + '">✕</button>' +
+      '</div>';
+  });
+
+  container.innerHTML = html;
+}
+
+function bindHomePageEvents() {
+  var form = $('globalConfigForm');
+  if (form && form.dataset.bound !== 'true') {
+    form.dataset.bound = 'true';
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      var btn = $('btnSaveConfig');
+      var statusEl = $('configSaveStatus');
+      if (btn) btn.disabled = true;
+      if (statusEl) {
+        statusEl.textContent = t('saving');
+        statusEl.style.color = '';
+      }
+
+      var entries = {
+        'user.name': $('cfgUserName') ? $('cfgUserName').value.trim() : '',
+        'user.email': $('cfgUserEmail') ? $('cfgUserEmail').value.trim() : '',
+        'core.editor': $('cfgCoreEditor') ? $('cfgCoreEditor').value.trim() : '',
+        'init.defaultBranch': $('cfgDefaultBranch') ? $('cfgDefaultBranch').value.trim() : '',
+        'pull.rebase': $('cfgPullRebase') ? $('cfgPullRebase').value : ''
+      };
+
+      fetch('/api/git-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: entries })
+      })
+        .then(function(res) {
+          if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+          return res.json();
+        })
+        .then(function(data) {
+          if (btn) btn.disabled = false;
+          if (statusEl) {
+            statusEl.textContent = '✓ ' + t('configSaved');
+            statusEl.style.color = 'var(--green)';
+            setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
+          }
+          if (data && data.overview) {
+            state.gitOverview = data.overview;
+            renderGitOverview(data.overview);
+          } else {
+            loadGitOverview({ force: true });
+          }
+        })
+        .catch(function(err) {
+          if (btn) btn.disabled = false;
+          if (statusEl) {
+            statusEl.textContent = '✕ ' + (err.message || 'Save failed');
+            statusEl.style.color = 'var(--rose)';
+            setTimeout(function() {
+              if (statusEl) {
+                statusEl.textContent = '';
+                statusEl.style.color = '';
+              }
+            }, 4000);
+          }
+        });
+    });
+  }
+
+  var btnAdd = $('btnAddConfigKey');
+  if (btnAdd && btnAdd.dataset.bound !== 'true') {
+    btnAdd.dataset.bound = 'true';
+    btnAdd.addEventListener('click', function() {
+      var keyInput = $('newConfigKey');
+      var valInput = $('newConfigVal');
+      var key = keyInput ? keyInput.value.trim() : '';
+      var val = valInput ? valInput.value.trim() : '';
+      if (!key) {
+        if (keyInput) keyInput.focus();
+        return;
+      }
+
+      fetch('/api/git-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key, value: val })
+      })
+        .then(function(res) {
+          if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+          return res.json();
+        })
+        .then(function(data) {
+          if (keyInput) keyInput.value = '';
+          if (valInput) valInput.value = '';
+          if (data && data.overview) {
+            state.gitOverview = data.overview;
+            renderGitOverview(data.overview);
+          } else {
+            loadGitOverview({ force: true });
+          }
+        })
+        .catch(function(err) {
+          alert('Failed to set config: ' + err.message);
+        });
+    });
+  }
+
+  var allConfigsTable = $('homeAllConfigsTable');
+  if (allConfigsTable && allConfigsTable.dataset.bound !== 'true') {
+    allConfigsTable.dataset.bound = 'true';
+    allConfigsTable.addEventListener('click', function(e) {
+      var delBtn = e.target.closest('[data-delete-key]');
+      if (!delBtn) return;
+      var key = delBtn.getAttribute('data-delete-key');
+      if (!key) return;
+
+      fetch('/api/git-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key, value: null })
+      })
+        .then(function(res) {
+          if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+          return res.json();
+        })
+        .then(function(data) {
+          if (data && data.overview) {
+            state.gitOverview = data.overview;
+            renderGitOverview(data.overview);
+          } else {
+            loadGitOverview({ force: true });
+          }
+        })
+        .catch(function(err) {
+          alert('Failed to delete config: ' + err.message);
+        });
+    });
+  }
+
+  var homePageEl = $('homePage');
+  if (homePageEl && homePageEl.dataset.bound !== 'true') {
+    homePageEl.dataset.bound = 'true';
+    homePageEl.addEventListener('click', function(e) {
+      var launchBtn = e.target.closest('[data-launch-app]');
+      if (!launchBtn) return;
+      var app = launchBtn.getAttribute('data-launch-app');
+      if (!app) return;
+
+      var origHtml = launchBtn.innerHTML;
+      launchBtn.classList.add('working');
+      launchBtn.innerHTML = '<span>' + escapeHtml(t('working')) + '</span>';
+
+      fetch('/api/open-app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app: app })
+      })
+        .then(function(res) {
+          if (!res.ok) return res.json().then(function(j) { throw new Error(j.message || 'Launch failed'); });
+          return res.json();
+        })
+        .then(function() {
+          launchBtn.classList.remove('working');
+          launchBtn.classList.add('success');
+          launchBtn.innerHTML = '<span>✓ ' + escapeHtml(t('appLaunched')) + '</span>';
+          setTimeout(function() {
+            launchBtn.classList.remove('success');
+            launchBtn.innerHTML = origHtml;
+          }, 2000);
+        })
+        .catch(function(err) {
+          launchBtn.classList.remove('working');
+          launchBtn.innerHTML = origHtml;
+          alert(t('launchFailed') + (err.message || 'Unknown error'));
+        });
+    });
+  }
+
+  var closeBtn = $('closeRepoBtn');
+  if (closeBtn && closeBtn.dataset.bound !== 'true') {
+    closeBtn.dataset.bound = 'true';
+    closeBtn.addEventListener('click', function() {
+      exitToHome();
+    });
+  }
 }
 
 function removeRepoHistory(repoPath) {
@@ -8310,7 +9805,11 @@ function initSidebar() {
           .then(function(data) {
             if (data.status === 'cancelled') return;
             if (data.error) { alert(data.error); return; }
-            if (data.path) window.location.href = '?repo=' + encodeURIComponent(data.path);
+            if (data.path) {
+              loadRepoHistory().then(function() {
+                switchRepository(data.path);
+              });
+            }
           })
           .catch(function(err) { alert('Failed: ' + err.message); })
           .finally(function() { addBtn.disabled = false; });
@@ -8450,9 +9949,12 @@ function openSettings() {
   cancelTaskSpeech();
   state.settingsOpen = true;
   stopAgentMonitorPolling();
-  state.previousViewBeforeSettings = state.activeView || 'git';
+  state.previousViewBeforeSettings = !targetRepo ? 'home' : (state.activeView || 'git');
   var tabs = document.querySelector('.view-tabs');
   if (tabs) tabs.hidden = true;
+  var closeBtn = $('closeRepoBtn');
+  if (closeBtn) closeBtn.hidden = true;
+  if ($('homePage')) $('homePage').hidden = true;
   if ($('gitPage')) $('gitPage').hidden = true;
   if ($('taskPage')) $('taskPage').hidden = true;
   $('settingsPage').hidden = false;
@@ -8465,7 +9967,24 @@ function openSettings() {
 function closeSettings() {
   state.settingsOpen = false;
   $('settingsPage').hidden = true;
-  setActiveView(state.previousViewBeforeSettings || 'git');
+  if (!targetRepo) {
+    if ($('homePage')) $('homePage').hidden = false;
+    if ($('gitPage')) $('gitPage').hidden = true;
+    if ($('taskPage')) $('taskPage').hidden = true;
+    var tabs = document.querySelector('.view-tabs');
+    if (tabs) tabs.hidden = true;
+    var closeBtn = $('closeRepoBtn');
+    if (closeBtn) closeBtn.hidden = true;
+    if (state.gitOverview) {
+      renderGitOverview(state.gitOverview);
+    } else {
+      loadGitOverview({ force: true });
+    }
+  } else {
+    var closeBtn2 = $('closeRepoBtn');
+    if (closeBtn2) closeBtn2.hidden = false;
+    setActiveView(state.previousViewBeforeSettings === 'home' ? 'git' : (state.previousViewBeforeSettings || 'git'));
+  }
 }
 
 function loadSecuritySettings() {
@@ -8715,17 +10234,20 @@ function loadRepositoryTaskAgent() {
   if (!targetRepo) {
     return Promise.resolve(null);
   }
+  var repoAtStart = targetRepo;
   return fetch('/api/agent?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
     .then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
     })
     .then(function(data) {
+      if (targetRepo !== repoAtStart) return null;
       state.repositoryTaskAgent = data.repositoryTaskAgent || data.taskAgent || data.agent || 'codex';
       renderAgentOptions('repositoryTask');
       return state.repositoryTaskAgent;
     })
     .catch(function(error) {
+      if (targetRepo !== repoAtStart) return null;
       var status = $('repositoryTaskAgentStatus');
       if (status) status.textContent = t('agentSettingSaveFailed') + error.message;
       renderAgentOptions('repositoryTask');
@@ -8867,12 +10389,26 @@ applyLanguage();
 initSecurityControls();
 initThemeControls();
 
+bindHomePageEvents();
+
 if (!targetRepo) {
+  setPageTitle('');
   updateRepoLink(t('repoRunning'), null);
-  $('branchText').textContent = t('noRepositorySelected');
+  if ($('homePage')) $('homePage').hidden = false;
+  if ($('gitPage')) $('gitPage').hidden = true;
+  if ($('taskPage')) $('taskPage').hidden = true;
+  if ($('closeRepoBtn')) $('closeRepoBtn').hidden = true;
+  var viewTabsEl = document.querySelector('.view-tabs');
+  if (viewTabsEl) viewTabsEl.hidden = true;
   initSidebar();
+  loadGitOverview();
 } else {
   updateRepoLink(targetRepo, targetRepo);
+  if ($('homePage')) $('homePage').hidden = true;
+  if ($('gitPage')) $('gitPage').hidden = false;
+  if ($('closeRepoBtn')) $('closeRepoBtn').hidden = false;
+  var viewTabsEl = document.querySelector('.view-tabs');
+  if (viewTabsEl) viewTabsEl.hidden = false;
   initSidebar();
   connectTaskEvents();
   load();
@@ -8907,6 +10443,16 @@ bindCommitDetailEvents();
 window.addEventListener('resize', function() {
   if (state.commits.length) renderGraph(state.commits);
   if (state.contributions || state.globalContributions) renderCalendar(state.contributions, state.globalContributions);
+  if (!targetRepo && state.gitOverview && state.gitOverview.globalContributions) {
+    renderHomeCalendar(state.gitOverview.globalContributions);
+  }
+});
+window.addEventListener('popstate', function() {
+  var params = new URLSearchParams(window.location.search);
+  var repo = params.get('repo') || '';
+  if (repo !== targetRepo) {
+    switchRepository(repo, { skipHistory: true, force: true });
+  }
 });
 window.addEventListener('beforeunload', function() {
   cancelTaskSpeech();
@@ -8953,6 +10499,7 @@ function load(options) {
     if (options.force) state.pendingForceLoad = true;
     return Promise.resolve(false);
   }
+  var repoAtStart = targetRepo;
   performance.mark('gmc-status-start');
   state.loading = true;
   return fetch('/api/status?repo=' + encodeURIComponent(targetRepo), { cache: 'no-store' })
@@ -8961,6 +10508,7 @@ function load(options) {
       return res.json(); 
     })
     .then(function(data) {
+      if (targetRepo !== repoAtStart) return false;
       performance.mark('gmc-status-end');
       performance.measure('gmc-status', 'gmc-status-start', 'gmc-status-end');
       var apiTime = getPerfMeasure('gmc-status');
@@ -8980,16 +10528,12 @@ function load(options) {
       render(data);
       return true;
     })
-    .then(function(didRender) {
-      if (didRender && state.repoHistoryNeedsRefresh) {
-        state.repoHistoryNeedsRefresh = false;
-        return loadRepoHistory();
-      }
-    })
     .catch(function(error) {
+      if (targetRepo !== repoAtStart) return;
       updateRepoLink(t('loadingStatusErrorPrefix') + error.message, null);
     })
     .finally(function() {
+      if (targetRepo !== repoAtStart) return;
       state.loading = false;
       if (state.pendingForceLoad) {
         state.pendingForceLoad = false;
@@ -9162,8 +10706,8 @@ function calendarTooltip(count, globalCount, ds) {
   return count + ' ' + t('commitsOn') + ' ' + ds;
 }
 
-function renderCalendar(contributions, globalContributions) {
-  var cal = $('calendar');
+function renderCalendar(contributions, globalContributions, elementId) {
+  var cal = $(elementId || 'calendar');
   if (!cal || (!contributions && !globalContributions)) return;
   contributions = contributions || {};
   globalContributions = globalContributions || {};
@@ -9171,9 +10715,9 @@ function renderCalendar(contributions, globalContributions) {
   var cellSize = parseFloat(styles.getPropertyValue('--calendar-cell')) || 10;
   var gapSize = parseFloat(styles.getPropertyValue('--calendar-gap')) || 3;
   var labelWidth = parseFloat(styles.getPropertyValue('--calendar-label-width')) || 24;
-  var availableWidth = cal.clientWidth || cal.parentElement && cal.parentElement.clientWidth || 0;
-  var maxColumns = Math.floor((availableWidth - labelWidth - 6 + gapSize) / (cellSize + gapSize));
-  var columns = Math.max(8, Math.min(54, maxColumns || 54));
+  var availableWidth = cal.clientWidth || (cal.parentElement && cal.parentElement.clientWidth) || 0;
+  var maxColumns = availableWidth > 0 ? Math.floor((availableWidth - labelWidth - 6 + gapSize) / (cellSize + gapSize)) : 48;
+  var columns = Math.max(10, Math.min(53, maxColumns || 48));
   var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var weekdays = ['Sun', '', '', 'Wed', '', '', 'Sat'];
   var now = new Date();
@@ -9188,13 +10732,17 @@ function renderCalendar(contributions, globalContributions) {
     weekdayHtml += '<div class="calendar-weekday">' + day + '</div>';
   });
 
+  var lastMonthCol = -4;
   for (var c = 0; c < columns; c++) {
     var weekStart = addCalendarDays(start, c * 7);
     var monthLabel = '';
     for (var mr = 0; mr < 7; mr++) {
       var md = addCalendarDays(weekStart, mr);
       if ((c === 0 && mr === 0) || md.getDate() === 1) {
-        monthLabel = monthNames[md.getMonth()];
+        if (c - lastMonthCol >= 3) {
+          monthLabel = monthNames[md.getMonth()];
+          lastMonthCol = c;
+        }
         break;
       }
     }
@@ -9792,6 +11340,7 @@ function loadRepositoryBrowser(options) {
     renderRepositoryBrowser();
     return Promise.resolve(true);
   }
+  var repoAtStart = targetRepo;
   state.repoBrowserLoading = true;
   renderRepositoryBrowser();
   return fetch('/api/repository-tree?repo=' + encodeURIComponent(targetRepo) + '&path=' + encodeURIComponent(state.repoBrowserPath || ''), { cache: 'no-store' })
@@ -9802,6 +11351,7 @@ function loadRepositoryBrowser(options) {
       });
     })
     .then(function(data) {
+      if (targetRepo !== repoAtStart) return false;
       state.currentBranch = data.branch || state.currentBranch;
       state.repoBrowserPath = data.path || '';
       state.repoBrowserEntries = data.entries || [];
@@ -9811,10 +11361,12 @@ function loadRepositoryBrowser(options) {
       return true;
     })
     .catch(function(error) {
+      if (targetRepo !== repoAtStart) return false;
       setRepoBrowserStatus(t('fileLoadFailed') + error.message, true);
       return false;
     })
     .finally(function() {
+      if (targetRepo !== repoAtStart) return;
       state.repoBrowserLoading = false;
       renderRepositoryBrowser();
     });

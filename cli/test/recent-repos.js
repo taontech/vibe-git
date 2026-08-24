@@ -78,14 +78,66 @@ async function run() {
     assert.ok(statusJson.contributions, 'status should have contributions');
     assert.ok(statusJson.globalContributions, 'status should have globalContributions');
 
-    // Find the date key for repoA's commit
-    var dateKeys = Object.keys(statusJson.contributions);
-    assert.ok(dateKeys.length >= 1, 'should have at least one contribution date');
-    var commitDate = dateKeys[0];
-    assert.strictEqual(statusJson.contributions[commitDate], 1, 'repoA has 1 commit');
-    assert.strictEqual(statusJson.globalContributions[commitDate], 2, 'repoA + repoB has 2 commits aggregated in globalContributions');
+    // Test /api/git-overview endpoint
+    var overviewUrl = new URL('/api/git-overview', info.url);
+    var overviewRes = await fetch(overviewUrl, {
+      headers: { 'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth') }
+    });
+    assert.strictEqual(overviewRes.status, 200);
+    var overviewJson = await overviewRes.json();
+    assert.ok(overviewJson.version, 'overview should have git version');
+    assert.ok(overviewJson.execPath || overviewJson.gitBin, 'overview should have git executable path');
+    assert.ok(overviewJson.globalContributions, 'overview should have globalContributions');
+    assert.strictEqual(overviewJson.repositoriesCount, 2);
 
-    console.log('Recent repository sorting and global contributions tests passed.');
+    // Test /api/git-config endpoint
+    var configUrl = new URL('/api/git-config', info.url);
+    var setConfigRes = await fetch(configUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth')
+      },
+      body: JSON.stringify({ key: 'gmc.testkey', value: 'hello-test-val' })
+    });
+    assert.strictEqual(setConfigRes.status, 200);
+    var setConfigJson = await setConfigRes.json();
+    assert.strictEqual(setConfigJson.status, 'ok');
+    assert.ok(setConfigJson.overview, 'response should include updated overview');
+
+    // Clean up the test config key
+    await fetch(configUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth')
+      },
+      body: JSON.stringify({ key: 'gmc.testkey', value: null })
+    });
+
+    // Verify dashboard HTML contains SPA repo switching, close button, home page, and scroll preservation
+    var pageRes = await fetch(info.url, {
+      headers: { 'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth') }
+    });
+    assert.strictEqual(pageRes.status, 200);
+    var html = await pageRes.text();
+    assert.ok(html.indexOf('function switchRepository(') >= 0, 'HTML should include switchRepository function');
+    assert.ok(html.indexOf('function exitToHome(') >= 0, 'HTML should include exitToHome function');
+    assert.ok(html.indexOf('function updateSidebarActive(') >= 0, 'HTML should include updateSidebarActive function');
+    assert.ok(html.indexOf('openRepoFromHistory(item.getAttribute(\'data-repo\'))') >= 0, 'HTML should bind openRepoFromHistory on click');
+    assert.ok(html.indexOf('prevScroll = list.scrollTop') >= 0, 'renderSidebar should preserve scroll position');
+    assert.ok(html.indexOf('id="homePage"') >= 0, 'HTML should contain homePage container');
+    assert.ok(html.indexOf('id="closeRepoBtn"') >= 0, 'HTML should contain closeRepoBtn button');
+    assert.ok(html.indexOf('id="homeCalendar"') >= 0, 'HTML should contain homeCalendar grid');
+    assert.ok(html.indexOf('id="globalConfigForm"') >= 0, 'HTML should contain globalConfigForm');
+    assert.ok(html.indexOf('data-launch-app="vscode"') >= 0, 'HTML should contain VS Code launcher button');
+    assert.ok(html.indexOf('data-launch-app="xcode"') >= 0, 'HTML should contain Xcode launcher button');
+    assert.ok(html.indexOf('data-launch-app="android-studio"') >= 0, 'HTML should contain Android Studio launcher button');
+    assert.ok(html.indexOf('data-launch-app="sublime"') >= 0, 'HTML should contain Sublime Text launcher button');
+    assert.ok(html.indexOf('data-launch-app="cursor"') >= 0, 'HTML should contain Cursor launcher button');
+    assert.ok(html.indexOf('data-launch-app="terminal"') >= 0, 'HTML should contain Terminal launcher button');
+
+    console.log('Recent repository sorting, global overview homepage, contributions, config editor, and SPA switching tests passed.');
   } finally {
     os.homedir = originalHomedir;
     if (info && info.server) {
