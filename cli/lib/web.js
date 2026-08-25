@@ -38,6 +38,8 @@ var TASK_AGENT_STATUSES = ['codex', 'claude', 'antigravity'];
 var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
 var statusCache = {};
+var repoQuickStatusCache = {};
+var REPO_STATUS_CACHE_TTL_MS = 20000;
 var taskEventChannels = Object.create(null);
 var agentMonitorRuntime = null;
 var shutdownHandler = null;
@@ -346,12 +348,14 @@ function handleRequest(req, res) {
     }
 
     if (parsed.pathname === '/api/repositories') {
-      sendJson(res, { repositories: readRecentRepositories() });
+      var forceRepos = Boolean(parsed.query && parsed.query.force === '1');
+      var repoList = readRecentRepositories(forceRepos);
+      sendJson(res, { repositories: attachRepoStatus(repoList, forceRepos) });
       return;
     }
 
     if (parsed.pathname === '/api/git-overview') {
-      handleGetGitOverview(req, res);
+      handleGetGitOverview(req, res, parsed);
       return;
     }
 
@@ -1334,7 +1338,7 @@ function getGlobalGitConfig() {
   return { list: list, map: map };
 }
 
-function collectGitOverview() {
+function collectGitOverview(force) {
   var version = runGitOptional(process.cwd(), ['--version']) || 'git version unknown';
   var execPath = runGitOptional(process.cwd(), ['--exec-path']) || '';
   var gitBin = '';
@@ -1348,7 +1352,8 @@ function collectGitOverview() {
   } catch (e) {}
 
   var globalCfg = getGlobalGitConfig();
-  var repos = readRecentRepositories();
+  var rawRepos = readRecentRepositories(force);
+  var repos = attachRepoStatus(rawRepos, force);
   var globalContribs = globalContributions(null, null);
 
   return {
@@ -1368,9 +1373,10 @@ function collectGitOverview() {
   };
 }
 
-function handleGetGitOverview(req, res) {
+function handleGetGitOverview(req, res, parsed) {
   try {
-    sendJson(res, collectGitOverview());
+    var force = Boolean(parsed && parsed.query && parsed.query.force === '1');
+    sendJson(res, collectGitOverview(force));
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
@@ -2161,6 +2167,61 @@ function writeRecentRepositories(repositories) {
   return readRecentRepositories(true);
 }
 
+function getRepoQuickStatus(repoPath, force) {
+  if (!repoPath) return null;
+  var resolved = path.resolve(repoPath);
+  if (!force && repoQuickStatusCache[resolved] && (Date.now() - repoQuickStatusCache[resolved].at < REPO_STATUS_CACHE_TTL_MS)) {
+    return repoQuickStatusCache[resolved].status;
+  }
+
+  try {
+    if (!fs.existsSync(resolved)) {
+      return null;
+    }
+    var root = git.repoRoot(resolved);
+    if (!root) {
+      return null;
+    }
+
+    var branch = git.currentBranch(root) || 'HEAD';
+    var upstream = runGitOptional(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    var aheadBehind = upstream ? parseAheadBehind(runGitOptional(root, ['rev-list', '--left-right', '--count', 'HEAD...@{u}'])) : { ahead: 0, behind: 0 };
+    var statusRaw = runGitOptional(root, ['status', '--porcelain=v1', '-b', '-z']);
+    var parsedStatus = parseStatusOutput(statusRaw);
+
+    var isClean = parsedStatus.clean && (aheadBehind.ahead === 0) && (aheadBehind.behind === 0);
+
+    var result = {
+      branch: branch,
+      upstream: upstream || null,
+      ahead: aheadBehind.ahead || 0,
+      behind: aheadBehind.behind || 0,
+      clean: isClean,
+      staged: parsedStatus.staged || 0,
+      unstaged: parsedStatus.unstaged || 0,
+      untracked: parsedStatus.untracked || 0
+    };
+
+    repoQuickStatusCache[resolved] = { at: Date.now(), status: result };
+    return result;
+  } catch (e) {
+    return null;
+  }
+}
+
+function attachRepoStatus(repositories, force) {
+  if (!Array.isArray(repositories)) return [];
+  return repositories.map(function (item) {
+    return {
+      name: item.name,
+      path: item.path,
+      lastVisited: item.lastVisited,
+      lastCommitTime: item.lastCommitTime,
+      status: getRepoQuickStatus(item.path, force)
+    };
+  });
+}
+
 function getCachedStatus(repoRoot) {
   var entry = statusCache[repoRoot];
   if (!entry) return null;
@@ -2180,10 +2241,14 @@ function invalidateStatusCache(repoRoot) {
   if (repoRoot) {
     delete statusCache[repoRoot];
     delete lastCommitTimeCache[repoRoot];
+    delete repoQuickStatusCache[repoRoot];
+    delete repoQuickStatusCache[path.resolve(repoRoot)];
     try {
       var rootKey = git.repoRoot(repoRoot);
       delete statusCache[rootKey];
       delete lastCommitTimeCache[rootKey];
+      delete repoQuickStatusCache[rootKey];
+      delete repoQuickStatusCache[path.resolve(rootKey)];
       delete cache[path.resolve(rootKey)];
     } catch (e) {
       delete cache[path.resolve(repoRoot)];
@@ -2192,6 +2257,7 @@ function invalidateStatusCache(repoRoot) {
     statusCache = {};
     lastCommitTimeCache = {};
     repoContributionsCache = {};
+    repoQuickStatusCache = {};
   }
   recentReposCache.at = 0;
   saveContributionsCache();
@@ -4129,9 +4195,22 @@ body { background: linear-gradient(180deg, var(--bg-top) 0, var(--bg) 280px); }
   font-size: 13px;
 }
 .repo-item-body { min-width: 0; padding-right: 22px; }
-.repo-item-name { font-weight: 750; font-size: 13.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo-item-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.repo-item-name { font-weight: 750; font-size: 13.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.repo-branch-pill { display: inline-flex; align-items: center; gap: 3px; max-width: 90px; font-size: 10px; font-weight: 600; color: var(--muted); background: var(--panel); border: 1px solid var(--line-soft); border-radius: 999px; padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.repo-branch-icon { width: 10px; height: 10px; flex-shrink: 0; }
+.repo-branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-item-path { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; opacity: 0.86; }
-.repo-item-time { font-size: 10.5px; color: var(--muted); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo-item-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; min-width: 0; }
+.repo-item-time { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.repo-pills-wrap { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow: hidden; flex-shrink: 0; }
+.repo-pill { display: inline-flex; align-items: center; font-size: 10px; font-weight: 700; line-height: 1; padding: 2px 5px; border-radius: 4px; font-family: ui-monospace, monospace; }
+.repo-pill-unstaged { color: var(--amber); background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.28); }
+.repo-pill-staged { color: var(--emerald); background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.28); }
+.repo-pill-untracked { color: var(--muted); background: rgba(148, 163, 184, 0.12); border: 1px solid rgba(148, 163, 184, 0.28); }
+.repo-pill-ahead { color: var(--accent); background: rgba(59, 130, 246, 0.12); border: 1px solid rgba(59, 130, 246, 0.28); }
+.repo-pill-behind { color: var(--purple); background: rgba(168, 85, 247, 0.12); border: 1px solid rgba(168, 85, 247, 0.28); }
+.repo-pill-clean { display: inline-flex; align-items: center; font-size: 10px; font-weight: 600; color: var(--muted); opacity: 0.75; }
 .repo-item.active .repo-item-name { color: var(--accent); }
 .repo-item.active .repo-item-path { color: var(--muted); opacity: 0.7; }
 .repo-remove {
@@ -5055,6 +5134,171 @@ html[data-theme="ocean"] .calendar-cell[data-global-level="4"] { background: #47
   color: var(--text);
 }
 
+/* Home Needs Attention Matrix Section */
+.home-matrix-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.home-matrix-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--amber);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.home-matrix-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--panel-soft);
+  color: var(--text);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.home-matrix-refresh-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.home-matrix-refresh-btn.spinning svg {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+.home-repo-matrix-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 4px;
+}
+.home-matrix-card {
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: transform .18s, border-color .18s, box-shadow .18s;
+  cursor: pointer;
+  position: relative;
+}
+.home-matrix-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: 0 10px 25px rgba(15, 23, 42, .08);
+}
+.home-matrix-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.home-matrix-card-title {
+  font-size: 14.5px;
+  font-weight: 750;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-matrix-card-title svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.home-matrix-card-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-matrix-card-path {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.home-matrix-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background: var(--panel);
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+}
+.home-matrix-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  font-family: ui-monospace, monospace;
+}
+.home-matrix-stat-item.active-amber {
+  color: var(--amber);
+  font-weight: 700;
+}
+.home-matrix-stat-item.active-emerald {
+  color: var(--emerald);
+  font-weight: 700;
+}
+.home-matrix-stat-item.active-blue {
+  color: var(--accent);
+  font-weight: 700;
+}
+.home-matrix-stat-item.active-purple {
+  color: var(--purple);
+  font-weight: 700;
+}
+.home-matrix-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 4px;
+}
+.home-matrix-time {
+  font-size: 11px;
+  color: var(--muted);
+}
+.home-matrix-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.home-matrix-card:hover .home-matrix-open-btn {
+  background: var(--accent-soft);
+}
+
 /* Developer Tools Grid */
 .home-tools-grid {
   display: grid;
@@ -5442,6 +5686,29 @@ details[open] > .home-all-configs-summary .chevron {
             </div>
           </div>
         </div>
+
+        <!-- Needs Attention / Repo Health Board Section -->
+        <section id="homeRepoMatrixSection" class="home-section" style="margin-bottom:24px;" hidden>
+          <div class="home-section-head">
+            <div class="home-section-title-wrap">
+              <svg class="home-section-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--amber);"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <h3 data-i18n="needsAttentionTitle">待处理与变动仓库</h3>
+                  <span id="homeRepoMatrixBadge" class="home-matrix-badge"></span>
+                </div>
+                <p class="home-section-desc" data-i18n="needsAttentionDesc">包含未暂存代码、待提交修改或未与远程分支同步的本地项目</p>
+              </div>
+            </div>
+            <div class="home-matrix-header-actions">
+              <button id="btnRefreshRepoMatrix" class="home-matrix-refresh-btn" type="button" title="刷新所有仓库状态">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                <span data-i18n="refreshStatus">刷新状态</span>
+              </button>
+            </div>
+          </div>
+          <div id="homeRepoMatrixGrid" class="home-repo-matrix-grid"></div>
+        </section>
 
         <!-- Developer Tools Section -->
         <section class="home-section">
@@ -6272,7 +6539,23 @@ var I18N = {
     appLaunched: '已启动',
     allGlobalConfigs: '所有全局配置项 (全量列表)',
     addConfigKey: '添加配置',
-    notSet: '未设置'
+    notSet: '未设置',
+    needsAttentionTitle: '待处理与变动仓库',
+    needsAttentionDesc: '包含未暂存代码、待提交修改或未与远程分支同步的本地项目',
+    reposNeedingAttentionCount: '个项目需关注',
+    refreshStatus: '刷新状态',
+    enterRepo: '进入工作台',
+    clean: '干净',
+    unstaged: '未暂存',
+    staged: '待提交',
+    aheadLabel: '待推送',
+    behindLabel: '待拉取',
+    repoCleanTooltip: '工作区干净，已与远程同步',
+    unstagedFilesTooltip: '个文件已修改 (未暂存)',
+    stagedFilesTooltip: '个文件已暂存 (待提交)',
+    untrackedFilesTooltip: '个未跟踪新文件',
+    aheadCommitsTooltip: '个本地领先提交 (待推送)',
+    behindCommitsTooltip: '个远程落后提交 (待拉取)'
   },
   en: {
     language: 'Language',
@@ -6561,7 +6844,23 @@ var I18N = {
     appLaunched: 'Launched',
     allGlobalConfigs: 'All Global Configurations (Full List)',
     addConfigKey: 'Add Config',
-    notSet: 'Not set'
+    notSet: 'Not set',
+    needsAttentionTitle: 'Repositories Needing Attention',
+    needsAttentionDesc: 'Local repositories with unstaged changes, uncommitted files, or unsynced commits',
+    reposNeedingAttentionCount: 'need attention',
+    refreshStatus: 'Refresh',
+    enterRepo: 'Open',
+    clean: 'Clean',
+    unstaged: 'Unstaged',
+    staged: 'Staged',
+    aheadLabel: 'Ahead',
+    behindLabel: 'Behind',
+    repoCleanTooltip: 'Working tree clean, in sync with upstream',
+    unstagedFilesTooltip: 'modified files (unstaged)',
+    stagedFilesTooltip: 'staged files (ready to commit)',
+    untrackedFilesTooltip: 'untracked files',
+    aheadCommitsTooltip: 'commits ahead (ready to push)',
+    behindCommitsTooltip: 'commits behind (ready to pull)'
   }
 };
 I18N.ja = Object.assign({}, I18N.en, {
@@ -6790,7 +7089,23 @@ I18N.ja = Object.assign({}, I18N.en, {
   taskAgentSettingHelp: 'リポジトリタスクの自動分解に使う既定の Agent です。',
   repositoryTaskAgentSetting: 'タスク分解 Agent',
   agentSettingSaved: 'Agent 設定を保存しました',
-  agentSettingSaveFailed: 'Agent 設定の保存に失敗しました: '
+  agentSettingSaveFailed: 'Agent 設定の保存に失敗しました: ',
+  needsAttentionTitle: '対応が必要なリポジトリ',
+  needsAttentionDesc: '未ステージの変更、未コミット、または未同期のローカルリポジトリ',
+  reposNeedingAttentionCount: '件の要確認',
+  refreshStatus: '状態更新',
+  enterRepo: 'ワークスペースへ',
+  clean: 'クリーン',
+  unstaged: '未ステージ',
+  staged: 'ステージ済',
+  aheadLabel: '先行',
+  behindLabel: '遅延',
+  repoCleanTooltip: '作業ツリーはクリーンでリモートと同期済み',
+  unstagedFilesTooltip: '個の変更ファイル (未ステージ)',
+  stagedFilesTooltip: '個のステージ済みファイル',
+  untrackedFilesTooltip: '個の未追跡ファイル',
+  aheadCommitsTooltip: 'コミット先行 (プッシュ可能)',
+  behindCommitsTooltip: 'コミット遅延 (プル可能)'
 });
 I18N.ko = Object.assign({}, I18N.en, {
   language: '언어',
@@ -7018,7 +7333,23 @@ I18N.ko = Object.assign({}, I18N.en, {
   taskAgentSettingHelp: '저장소 작업 자동 분해의 기본 Agent로 사용합니다.',
   repositoryTaskAgentSetting: '작업 분해 Agent',
   agentSettingSaved: 'Agent 설정이 저장되었습니다',
-  agentSettingSaveFailed: 'Agent 설정 저장 실패: '
+  agentSettingSaveFailed: 'Agent 설정 저장 실패: ',
+  needsAttentionTitle: '확인이 필요한 저장소',
+  needsAttentionDesc: '미스테이징 변경, 미커밋 또는 동기화되지 않은 로컬 저장소',
+  reposNeedingAttentionCount: '개 확인 필요',
+  refreshStatus: '상태 새로고침',
+  enterRepo: '작업 공간 열기',
+  clean: '정상',
+  unstaged: '미스테이징',
+  staged: '스테이징됨',
+  aheadLabel: '앞섬',
+  behindLabel: '뒤처짐',
+  repoCleanTooltip: '작업 공간이 깨끗하고 원격과 동기화됨',
+  unstagedFilesTooltip: '개 파일 수정됨 (미스테이징)',
+  stagedFilesTooltip: '개 파일 스테이징됨',
+  untrackedFilesTooltip: '개 추적 안 된 파일',
+  aheadCommitsTooltip: '개 커밋 앞섬 (푸시 필요)',
+  behindCommitsTooltip: '개 커밋 뒤처짐 (풀 필요)'
 });
 I18N.es = Object.assign({}, I18N.en, {
   language: 'Idioma',
@@ -7543,6 +7874,9 @@ function applyLanguage() {
   updateReadmeLink();
   updateRepoLink(state.repoPathText || targetRepo || t('repoRunning'), targetRepo);
   renderSidebar();
+  if (!targetRepo) {
+    renderHomeRepoMatrix(state.repoHistory || []);
+  }
   renderSecurityControls();
   renderThemeControls();
   renderTaskBoard();
@@ -9209,8 +9543,9 @@ function canOpenRepositoryLocally() {
     window.location.hostname === '[::1]';
 }
 
-function loadRepoHistory() {
-  return fetch('/api/repositories', { cache: 'no-store' })
+function loadRepoHistory(force) {
+  var url = '/api/repositories' + (force ? '?force=1' : '');
+  return fetch(url, { cache: 'no-store' })
     .then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
@@ -9218,13 +9553,53 @@ function loadRepoHistory() {
     .then(function(data) {
       state.repoHistory = data.repositories || [];
       renderSidebar();
+      if (!targetRepo) {
+        renderHomeRepoMatrix(state.repoHistory);
+      }
       return state.repoHistory;
     })
     .catch(function() {
       state.repoHistory = [];
       renderSidebar();
+      if (!targetRepo) {
+        renderHomeRepoMatrix([]);
+      }
       return state.repoHistory;
     });
+}
+
+function renderRepoBranchBadge(status) {
+  if (!status || !status.branch) return '';
+  return '<span class="repo-branch-pill" title="' + escapeHtml(t('currentBranch') + ': ' + status.branch) + '">' +
+    '<svg class="repo-branch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>' +
+    '<span class="repo-branch-name">' + escapeHtml(status.branch) + '</span>' +
+  '</span>';
+}
+
+function renderRepoStatusPills(status) {
+  if (!status) return '';
+  if (status.clean) {
+    return '<span class="repo-pill-clean" title="' + escapeHtml(t('repoCleanTooltip')) + '">✓ ' + escapeHtml(t('clean')) + '</span>';
+  }
+
+  var html = '<div class="repo-pills-wrap">';
+  if (status.unstaged > 0) {
+    html += '<span class="repo-pill repo-pill-unstaged" title="' + escapeHtml(status.unstaged + ' ' + t('unstagedFilesTooltip')) + '">● ' + status.unstaged + '</span>';
+  }
+  if (status.staged > 0) {
+    html += '<span class="repo-pill repo-pill-staged" title="' + escapeHtml(status.staged + ' ' + t('stagedFilesTooltip')) + '">+ ' + status.staged + '</span>';
+  }
+  if (status.untracked > 0 && status.unstaged === 0) {
+    html += '<span class="repo-pill repo-pill-untracked" title="' + escapeHtml(status.untracked + ' ' + t('untrackedFilesTooltip')) + '">? ' + status.untracked + '</span>';
+  }
+  if (status.ahead > 0) {
+    html += '<span class="repo-pill repo-pill-ahead" title="' + escapeHtml(status.ahead + ' ' + t('aheadCommitsTooltip')) + '">↑ ' + status.ahead + '</span>';
+  }
+  if (status.behind > 0) {
+    html += '<span class="repo-pill repo-pill-behind" title="' + escapeHtml(status.behind + ' ' + t('behindCommitsTooltip')) + '">↓ ' + status.behind + '</span>';
+  }
+  html += '</div>';
+  return html;
 }
 
 function renderSidebar() {
@@ -9241,12 +9616,22 @@ function renderSidebar() {
   list.innerHTML = history.map(function(item) {
     var name = item.name || repoDisplayName(item.path);
     var active = item.path === targetRepo ? ' active' : '';
+    var st = item.status;
+    var branchBadge = renderRepoBranchBadge(st);
+    var statusPills = renderRepoStatusPills(st);
+
     return '<div class="repo-item' + active + '" role="link" tabindex="0" data-repo="' + escapeHtml(item.path) + '">' +
       '<div class="repo-item-icon" aria-hidden="true">' + escapeHtml(repoInitial(name)) + '</div>' +
       '<div class="repo-item-body">' +
-        '<div class="repo-item-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
+        '<div class="repo-item-header">' +
+          '<div class="repo-item-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
+          branchBadge +
+        '</div>' +
         '<div class="repo-item-path" title="' + escapeHtml(item.path) + '">' + escapeHtml(item.path) + '</div>' +
-        '<div class="repo-item-time">' + escapeHtml(formatRepoVisit(item.lastCommitTime || item.lastVisited)) + '</div>' +
+        '<div class="repo-item-footer">' +
+          '<div class="repo-item-time">' + escapeHtml(formatRepoVisit(item.lastCommitTime || item.lastVisited)) + '</div>' +
+          statusPills +
+        '</div>' +
       '</div>' +
       '<button class="repo-remove" type="button" title="' + escapeHtml(t('removeFromRecent')) + '" aria-label="' + escapeHtml(t('removeFromRecent') + ' ' + name + ' ' + t('removeFromRecentAriaSuffix')) + '" data-repo="' + escapeHtml(item.path) + '">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
@@ -9445,10 +9830,11 @@ function switchRepository(repoPath, options) {
 
 function loadGitOverview(options) {
   options = options || {};
-  if (state.gitOverviewLoading && !options.force) return;
+  if (state.gitOverviewLoading && !options.force) return Promise.resolve();
   state.gitOverviewLoading = true;
 
-  fetch('/api/git-overview', { cache: 'no-store' })
+  var url = '/api/git-overview' + (options.force ? '?force=1' : '');
+  return fetch(url, { cache: 'no-store' })
     .then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
@@ -9457,6 +9843,7 @@ function loadGitOverview(options) {
       state.gitOverviewLoading = false;
       state.gitOverview = data;
       renderGitOverview(data);
+      return data;
     })
     .catch(function(err) {
       state.gitOverviewLoading = false;
@@ -9466,6 +9853,11 @@ function loadGitOverview(options) {
 
 function renderGitOverview(data) {
   if (!data) return;
+
+  if (data.repositories) {
+    state.repoHistory = data.repositories;
+    renderSidebar();
+  }
 
   var verEl = $('homeGitVersion');
   if (verEl) verEl.textContent = data.version || 'Unknown';
@@ -9508,11 +9900,88 @@ function renderGitOverview(data) {
   var pRebaseSelect = $('cfgPullRebase');
   if (pRebaseSelect && document.activeElement !== pRebaseSelect) pRebaseSelect.value = data.pullRebase || '';
 
+  renderHomeRepoMatrix(data.repositories || state.repoHistory || []);
+
   renderGlobalConfigTable(data.configs || []);
 
   if (data.globalContributions) {
     renderHomeCalendar(data.globalContributions);
   }
+}
+
+function renderHomeRepoMatrix(repositories) {
+  var section = $('homeRepoMatrixSection');
+  var grid = $('homeRepoMatrixGrid');
+  var badge = $('homeRepoMatrixBadge');
+  if (!section || !grid) return;
+
+  repositories = repositories || state.repoHistory || [];
+
+  var attentionRepos = repositories.filter(function(item) {
+    if (!item || !item.status) return false;
+    var st = item.status;
+    return !st.clean || (st.unstaged > 0) || (st.staged > 0) || (st.untracked > 0) || (st.ahead > 0) || (st.behind > 0);
+  });
+
+  if (attentionRepos.length === 0) {
+    section.hidden = true;
+    grid.innerHTML = '';
+    return;
+  }
+
+  section.hidden = false;
+  if (badge) {
+    badge.textContent = attentionRepos.length + ' ' + t('reposNeedingAttentionCount');
+  }
+
+  var html = attentionRepos.map(function(item) {
+    var name = item.name || repoDisplayName(item.path);
+    var st = item.status || {};
+    var branch = st.branch || 'HEAD';
+    var timeStr = formatRepoVisit(item.lastCommitTime || item.lastVisited);
+
+    var unstagedClass = (st.unstaged > 0) ? ' active-amber' : '';
+    var stagedClass = (st.staged > 0) ? ' active-emerald' : '';
+    var aheadClass = (st.ahead > 0) ? ' active-blue' : '';
+    var behindClass = (st.behind > 0) ? ' active-purple' : '';
+
+    return '<div class="home-matrix-card" data-repo="' + escapeHtml(item.path) + '">' +
+      '<div class="home-matrix-card-head">' +
+        '<div class="home-matrix-card-title" title="' + escapeHtml(name) + '">' +
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' +
+          '<span>' + escapeHtml(name) + '</span>' +
+        '</div>' +
+        '<span class="repo-branch-pill">' +
+          '<svg class="repo-branch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>' +
+          '<span class="repo-branch-name">' + escapeHtml(branch) + '</span>' +
+        '</span>' +
+      '</div>' +
+      '<div class="home-matrix-card-path" title="' + escapeHtml(item.path) + '">' + escapeHtml(item.path) + '</div>' +
+      '<div class="home-matrix-stats-grid">' +
+        '<div class="home-matrix-stat-item' + unstagedClass + '">' +
+          '<span>●</span><span>' + (st.unstaged || 0) + ' ' + escapeHtml(t('unstaged')) + '</span>' +
+        '</div>' +
+        '<div class="home-matrix-stat-item' + stagedClass + '">' +
+          '<span>+</span><span>' + (st.staged || 0) + ' ' + escapeHtml(t('staged')) + '</span>' +
+        '</div>' +
+        '<div class="home-matrix-stat-item' + aheadClass + '">' +
+          '<span>↑</span><span>' + (st.ahead || 0) + ' ' + escapeHtml(t('aheadLabel')) + '</span>' +
+        '</div>' +
+        '<div class="home-matrix-stat-item' + behindClass + '">' +
+          '<span>↓</span><span>' + (st.behind || 0) + ' ' + escapeHtml(t('behindLabel')) + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="home-matrix-card-foot">' +
+        '<span class="home-matrix-time">🕒 ' + escapeHtml(timeStr) + '</span>' +
+        '<button class="home-matrix-open-btn" type="button">' +
+          '<span>' + escapeHtml(t('enterRepo')) + '</span>' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  grid.innerHTML = html;
 }
 
 function renderHomeCalendar(globalContribs) {
@@ -9557,6 +10026,34 @@ function renderGlobalConfigTable(configs) {
 }
 
 function bindHomePageEvents() {
+  var matrixGrid = $('homeRepoMatrixGrid');
+  if (matrixGrid && matrixGrid.dataset.bound !== 'true') {
+    matrixGrid.dataset.bound = 'true';
+    matrixGrid.addEventListener('click', function(e) {
+      var card = e.target.closest('.home-matrix-card');
+      if (card) {
+        var repoPath = card.getAttribute('data-repo');
+        if (repoPath) {
+          openRepoFromHistory(repoPath);
+        }
+      }
+    });
+  }
+
+  var refreshBtn = $('btnRefreshRepoMatrix');
+  if (refreshBtn && refreshBtn.dataset.bound !== 'true') {
+    refreshBtn.dataset.bound = 'true';
+    refreshBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      refreshBtn.classList.add('spinning');
+      loadGitOverview({ force: true }).then(function() {
+        refreshBtn.classList.remove('spinning');
+      }).catch(function() {
+        refreshBtn.classList.remove('spinning');
+      });
+    });
+  }
+
   var form = $('globalConfigForm');
   if (form && form.dataset.bound !== 'true') {
     form.dataset.bound = 'true';

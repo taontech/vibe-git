@@ -67,6 +67,9 @@ async function run() {
     // Even though Repo B has larger lastVisited (2000 vs 1000), Repo A should be first due to latest commit order.
     assert.strictEqual(json.repositories[0].path, repoA);
     assert.strictEqual(json.repositories[1].path, repoB);
+    assert.ok(json.repositories[0].status, 'repository should have quick status');
+    assert.ok(typeof json.repositories[0].status.clean === 'boolean', 'status should have clean boolean');
+    assert.ok(json.repositories[0].status.branch, 'status should have branch');
 
     // Test /api/status returns both current contributions and aggregated globalContributions
     var statusUrl = new URL('/api/status?repo=' + encodeURIComponent(repoA), info.url);
