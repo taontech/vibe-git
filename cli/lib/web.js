@@ -4154,13 +4154,10 @@ body { background: linear-gradient(180deg, var(--bg-top) 0, var(--bg) 280px); }
 }
 .repo-item {
   position: relative;
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
+  display: block;
   width: 100%;
   min-width: 0;
-  padding: 11px 12px;
+  padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
   margin-bottom: 8px;
@@ -4182,28 +4179,16 @@ body { background: linear-gradient(180deg, var(--bg-top) 0, var(--bg) 280px); }
   background: var(--accent-soft);
   box-shadow: inset 3px 0 0 var(--accent), 0 10px 24px rgba(15,23,42,.10);
 }
-.repo-item-icon {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--line-soft);
-  font-weight: 800;
-  font-size: 13px;
-}
-.repo-item-body { min-width: 0; padding-right: 22px; }
-.repo-item-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.repo-item-body { width: 100%; min-width: 0; padding-right: 0; }
+.repo-item-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-right: 18px; }
 .repo-item-name { font-weight: 750; font-size: 13.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .repo-branch-pill { display: inline-flex; align-items: center; gap: 3px; max-width: 90px; font-size: 10px; font-weight: 600; color: var(--muted); background: var(--panel); border: 1px solid var(--line-soft); border-radius: 999px; padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
 .repo-branch-icon { width: 10px; height: 10px; flex-shrink: 0; }
 .repo-branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.repo-item-path { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; opacity: 0.86; }
-.repo-item-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; min-width: 0; }
+.repo-item-path { width: 100%; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; opacity: 0.86; }
+.repo-item-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; width: 100%; min-width: 0; }
 .repo-item-time { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-.repo-pills-wrap { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow: hidden; flex-shrink: 0; }
+.repo-pills-wrap { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; margin-left: auto; flex-shrink: 0; }
 .repo-pill { display: inline-flex; align-items: center; font-size: 10px; font-weight: 700; line-height: 1; padding: 2px 5px; border-radius: 4px; font-family: ui-monospace, monospace; }
 .repo-pill-unstaged { color: var(--amber); background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.28); }
 .repo-pill-staged { color: var(--emerald); background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.28); }
@@ -4215,12 +4200,12 @@ body { background: linear-gradient(180deg, var(--bg-top) 0, var(--bg) 280px); }
 .repo-item.active .repo-item-path { color: var(--muted); opacity: 0.7; }
 .repo-remove {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 7px;
+  right: 7px;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 1px solid var(--line-soft);
   border-radius: 999px;
@@ -4230,6 +4215,7 @@ body { background: linear-gradient(180deg, var(--bg-top) 0, var(--bg) 280px); }
   transform: scale(.92);
   cursor: pointer;
   transition: opacity .14s, transform .14s, color .14s, background .14s, border-color .14s;
+  z-index: 2;
 }
 .repo-item:hover .repo-remove,
 .repo-item:focus-within .repo-remove,
@@ -9621,7 +9607,6 @@ function renderSidebar() {
     var statusPills = renderRepoStatusPills(st);
 
     return '<div class="repo-item' + active + '" role="link" tabindex="0" data-repo="' + escapeHtml(item.path) + '">' +
-      '<div class="repo-item-icon" aria-hidden="true">' + escapeHtml(repoInitial(name)) + '</div>' +
       '<div class="repo-item-body">' +
         '<div class="repo-item-header">' +
           '<div class="repo-item-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
