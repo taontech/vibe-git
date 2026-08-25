@@ -4,7 +4,7 @@ import psutil
 
 
 def collect_system_info() -> dict:
-    cpu = psutil.cpu_percent(interval=0.1)
+    cpu = psutil.cpu_percent(interval=None)
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
     boot_time = psutil.boot_time()

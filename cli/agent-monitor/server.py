@@ -68,7 +68,7 @@ STATUS_VERSION = int(time.time() * 1000)
 STATUS_CACHE: dict | None = None
 STATUS_BUILD_LOCK = threading.Lock()
 STATUS_WEBSOCKETS: set[WebSocket] = set()
-STATUS_BROADCAST_INTERVAL = 0.5
+STATUS_BROADCAST_INTERVAL = 1.5
 
 PAIRING_TOKENS: dict[str, tuple[float, str]] = {}
 PAIRED_DEVICES: dict[str, dict] = {}
@@ -106,8 +106,12 @@ def hash_status(data: dict) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
-def _build_status_snapshot_unlocked(agent_id: Optional[str] = None) -> dict:
+def _build_status_snapshot_unlocked(agent_id: Optional[str] = None, force: bool = False) -> dict:
     global STATUS_VERSION, STATUS_CACHE
+
+    now = time.time()
+    if not force and STATUS_CACHE and (now - STATUS_CACHE.get("timestamp", 0) < 1.0) and agent_id is None:
+        return STATUS_CACHE
 
     agents = collect_agent_status(agent_id)
     system = collect_system_info()
@@ -159,26 +163,27 @@ def _build_status_snapshot_unlocked(agent_id: Optional[str] = None) -> dict:
     return snapshot
 
 
-def build_status_snapshot(agent_id: Optional[str] = None) -> dict:
+def build_status_snapshot(agent_id: Optional[str] = None, force: bool = False) -> dict:
     with STATUS_BUILD_LOCK:
-        return _build_status_snapshot_unlocked(agent_id)
+        return _build_status_snapshot_unlocked(agent_id, force=force)
 
 
 async def status_broadcast_loop():
     last_version = 0
     while True:
         try:
-            snapshot = await asyncio.to_thread(build_status_snapshot)
-            if snapshot["version"] != last_version:
-                last_version = snapshot["version"]
-                disconnected = []
-                for websocket in list(STATUS_WEBSOCKETS):
-                    try:
-                        await websocket.send_json(snapshot)
-                    except Exception:
-                        disconnected.append(websocket)
-                for websocket in disconnected:
-                    STATUS_WEBSOCKETS.discard(websocket)
+            if STATUS_WEBSOCKETS:
+                snapshot = await asyncio.to_thread(build_status_snapshot)
+                if snapshot["version"] != last_version:
+                    last_version = snapshot["version"]
+                    disconnected = []
+                    for websocket in list(STATUS_WEBSOCKETS):
+                        try:
+                            await websocket.send_json(snapshot)
+                        except Exception:
+                            disconnected.append(websocket)
+                    for websocket in disconnected:
+                        STATUS_WEBSOCKETS.discard(websocket)
         except Exception:
             pass
         await asyncio.sleep(STATUS_BROADCAST_INTERVAL)

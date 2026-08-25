@@ -171,15 +171,66 @@ def _find_agent_processes(keywords: list[str], exclude_keywords: list[str] | Non
     return found
 
 
+def _find_all_agent_processes(agent_id_filter: Optional[str] = None) -> dict[str, list[psutil.Process]]:
+    found: dict[str, list[psutil.Process]] = {d["id"]: [] for d in AGENT_DEFINITIONS if not agent_id_filter or d["id"] == agent_id_filter}
+    active_defns = [d for d in AGENT_DEFINITIONS if not agent_id_filter or d["id"] == agent_id_filter]
+
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            cmdline_parts = proc.cmdline()
+            cmdline = " ".join(cmdline_parts).lower()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, SystemError):
+            continue
+
+        if not cmdline:
+            continue
+
+        for defn in active_defns:
+            exclude_keywords = defn.get("exclude_keywords")
+            if exclude_keywords and any(kw.lower() in cmdline for kw in exclude_keywords):
+                continue
+
+            matched = False
+            for kw in defn["keywords"]:
+                kw_lower = kw.lower()
+                if kw_lower in ("agy", "claude", "claude-code"):
+                    if any(
+                        p.lower() == kw_lower or p.lower().endswith("/" + kw_lower)
+                        for p in cmdline_parts
+                    ):
+                        matched = True
+                        break
+                else:
+                    if kw_lower in cmdline:
+                        matched = True
+                        break
+            if matched:
+                found[defn["id"]].append(proc)
+                break
+    return found
+
+
+_file_lines_cache: dict[str, tuple[float, int, list[str]]] = {}
+
+
 def _read_recent_lines(path: Path) -> list[str]:
+    path_str = str(path)
     try:
+        stat = path.stat()
+        mtime, size = stat.st_mtime, stat.st_size
+        cached = _file_lines_cache.get(path_str)
+        if cached and cached[0] == mtime and cached[1] == size:
+            return cached[2]
+
         with path.open("rb") as f:
             f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - AGENT_INTERACTION_TAIL_BYTES))
-            if size > AGENT_INTERACTION_TAIL_BYTES:
+            f_size = f.tell()
+            f.seek(max(0, f_size - AGENT_INTERACTION_TAIL_BYTES))
+            if f_size > AGENT_INTERACTION_TAIL_BYTES:
                 f.readline()
-            return f.read().decode("utf-8", errors="ignore").splitlines()
+            lines = f.read().decode("utf-8", errors="ignore").splitlines()
+            _file_lines_cache[path_str] = (mtime, size, lines)
+            return lines
     except OSError:
         return []
 
@@ -643,12 +694,20 @@ def _is_codex_app_paused() -> bool:
 
 
 def collect_agent_status(agent_id: Optional[str] = None) -> list[AgentStatus]:
+    if agent_id:
+        procs_by_agent = {agent_id: []}
+        defn = next((d for d in AGENT_DEFINITIONS if d["id"] == agent_id), None)
+        if defn:
+            procs_by_agent[agent_id] = _find_agent_processes(defn["keywords"], defn.get("exclude_keywords"))
+    else:
+        procs_by_agent = _find_all_agent_processes()
+
     results = []
     for defn in AGENT_DEFINITIONS:
         if agent_id and defn["id"] != agent_id:
             continue
 
-        procs = _find_agent_processes(defn["keywords"], defn.get("exclude_keywords"))
+        procs = procs_by_agent.get(defn["id"], [])
         if not procs:
             continue
 
@@ -660,7 +719,7 @@ def collect_agent_status(agent_id: Optional[str] = None) -> list[AgentStatus]:
                     cmdline = " ".join(cmdline_parts)
                 except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, SystemError):
                     cmdline = ""
-                cpu = proc.cpu_percent(interval=0.1)
+                cpu = proc.cpu_percent(interval=None)
                 mem = proc.memory_info().rss / 1024 / 1024
                 uptime = _get_process_uptime(proc)
                 snapshots.append(AgentSnapshot(
