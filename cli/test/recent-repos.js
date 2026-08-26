@@ -92,6 +92,20 @@ async function run() {
     assert.ok(overviewJson.execPath || overviewJson.gitBin, 'overview should have git executable path');
     assert.ok(overviewJson.globalContributions, 'overview should have globalContributions');
     assert.strictEqual(overviewJson.repositoriesCount, 2);
+    assert.ok(Array.isArray(overviewJson.cityData), 'overview should have cityData array');
+    assert.strictEqual(overviewJson.cityData.length, 2);
+    assert.ok(overviewJson.cityData[0].totalFiles >= 1, 'city repo should have totalFiles');
+    assert.ok(overviewJson.cityData[0].tallest, 'city repo should have tallest file');
+
+    // Test /api/city-data endpoint
+    var cityDataUrl = new URL('/api/city-data', info.url);
+    var cityDataRes = await fetch(cityDataUrl, {
+      headers: { 'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth') }
+    });
+    assert.strictEqual(cityDataRes.status, 200);
+    var cityDataJson = await cityDataRes.json();
+    assert.ok(Array.isArray(cityDataJson.cityData), 'cityData endpoint should return cityData array');
+    assert.strictEqual(cityDataJson.cityData.length, 2);
 
     // Test /api/git-config endpoint
     var configUrl = new URL('/api/git-config', info.url);

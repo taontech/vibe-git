@@ -359,6 +359,11 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname === '/api/city-data') {
+      handleGetCityData(req, res, parsed);
+      return;
+    }
+
     if (parsed.pathname === '/api/repositories/resolve') {
       sendJson(res, { repository: findRecentRepositoryByName(parsed.query.name) });
       return;
@@ -1369,7 +1374,8 @@ function collectGitOverview(force) {
     configMap: globalCfg.map,
     repositories: repos,
     repositoriesCount: repos.length,
-    globalContributions: globalContribs
+    globalContributions: globalContribs,
+    cityData: collectAllReposCityData(rawRepos, force)
   };
 }
 
@@ -2222,6 +2228,175 @@ function attachRepoStatus(repositories, force) {
   });
 }
 
+var repoCityDataCache = {};
+var REPO_CITY_DATA_CACHE_TTL_MS = 25000;
+
+var BINARY_EXTENSIONS = {
+  png: 1, jpg: 1, jpeg: 1, gif: 1, webp: 1, ico: 1, bmp: 1, tiff: 1, tif: 1, avif: 1, heic: 1, psd: 1, ai: 1,
+  mp4: 1, webm: 1, mov: 1, avi: 1, mkv: 1, mp3: 1, wav: 1, ogg: 1, flac: 1, aac: 1, m4a: 1,
+  zip: 1, tar: 1, gz: 1, tgz: 1, '7z': 1, rar: 1, bz2: 1, xz: 1,
+  pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1,
+  exe: 1, dll: 1, so: 1, dylib: 1, class: 1, jar: 1, war: 1, wasm: 1, bin: 1, dat: 1, db: 1, sqlite: 1, sqlite3: 1,
+  ttf: 1, otf: 1, woff: 1, woff2: 1, eot: 1,
+  blend: 1, fbx: 1, obj: 1, glb: 1, gltf: 1, ply: 1, splat: 1, usdz: 1, xyz: 1,
+  onnx: 1, pt: 1, pth: 1, tflite: 1, pb: 1, pkl: 1, h5: 1, weights: 1,
+  apk: 1, ipa: 1, car: 1, a: 1, o: 1, lib: 1, dex: 1, xcuserstate: 1, zst: 1, iso: 1, dmg: 1
+};
+
+function unquoteGitPath(p) {
+  p = (p || '').trim();
+  if (p.startsWith('"') && p.endsWith('"')) {
+    p = p.slice(1, -1).replace(/\\([0-7]{1,3})/g, function (m, oct) {
+      return String.fromCharCode(parseInt(oct, 8));
+    }).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return p;
+}
+
+function scanRepoFiles(repoRoot, maxFiles) {
+  maxFiles = maxFiles || 200;
+  var textFiles = [];
+  var nonTextCount = 0;
+  var maxFile = null;
+  var total = 0;
+
+  function walk(dir) {
+    if (total >= maxFiles * 3) return;
+    var entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      return;
+    }
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.gmc') continue;
+      var fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        total++;
+        var relPath = path.relative(repoRoot, fullPath);
+        var ext = path.extname(entry.name).slice(1).toLowerCase();
+        var size = 0;
+        try {
+          size = fs.statSync(fullPath).size;
+        } catch (e) {}
+        if (BINARY_EXTENSIONS[ext]) {
+          nonTextCount++;
+        } else {
+          var fileObj = { name: entry.name, path: relPath, size: size, ext: ext };
+          textFiles.push(fileObj);
+          if (!maxFile || size > maxFile.size) {
+            maxFile = fileObj;
+          }
+        }
+      }
+    }
+  }
+
+  walk(repoRoot);
+  return {
+    total: total,
+    textFiles: textFiles,
+    nonTextCount: nonTextCount,
+    maxFile: maxFile
+  };
+}
+
+function getRepoCityData(repoPath, repoName, force) {
+  if (!repoPath) return null;
+  var resolved = path.resolve(repoPath);
+  if (!force && repoCityDataCache[resolved] && (Date.now() - repoCityDataCache[resolved].at < REPO_CITY_DATA_CACHE_TTL_MS)) {
+    return repoCityDataCache[resolved].data;
+  }
+
+  try {
+    if (!fs.existsSync(resolved)) return null;
+    var root = git.repoRoot(resolved);
+    if (!root) return null;
+
+    var raw = runGitOptional(root, ['ls-tree', '-r', '-l', 'HEAD']);
+    var textFiles = [];
+    var nonTextCount = 0;
+    var maxFile = null;
+    var totalFiles = 0;
+
+    if (raw && raw.trim()) {
+      var lines = raw.trim().split(/\r?\n/);
+      totalFiles = lines.length;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line) continue;
+        var tabIdx = line.indexOf('\t');
+        if (tabIdx < 0) continue;
+        var filePath = unquoteGitPath(line.slice(tabIdx + 1));
+        var meta = line.slice(0, tabIdx).trim().split(/\s+/);
+        var size = parseInt(meta[3], 10) || 0;
+        var ext = path.extname(filePath).slice(1).toLowerCase();
+
+        if (BINARY_EXTENSIONS[ext]) {
+          nonTextCount++;
+        } else {
+          var item = { name: path.basename(filePath), path: filePath, size: size, ext: ext };
+          textFiles.push(item);
+          if (!maxFile || size > maxFile.size) {
+            maxFile = item;
+          }
+        }
+      }
+    } else {
+      var fallback = scanRepoFiles(root, 200);
+      totalFiles = fallback.total;
+      textFiles = fallback.textFiles;
+      nonTextCount = fallback.nonTextCount;
+      maxFile = fallback.maxFile;
+    }
+
+    textFiles.sort(function (a, b) { return b.size - a.size; });
+    var sampled = textFiles.slice(0, 150);
+
+    var data = {
+      name: repoName || path.basename(root),
+      path: root,
+      totalFiles: totalFiles,
+      textCount: textFiles.length,
+      nonTextCount: nonTextCount,
+      tallest: maxFile || (textFiles[0] || { name: 'index', path: 'index', size: 1000 }),
+      buildings: sampled
+    };
+
+    repoCityDataCache[resolved] = { at: Date.now(), data: data };
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
+function collectAllReposCityData(repositories, force) {
+  if (!Array.isArray(repositories)) return [];
+  var list = [];
+  for (var i = 0; i < repositories.length; i++) {
+    var item = repositories[i];
+    if (!item || !item.path) continue;
+    var data = getRepoCityData(item.path, item.name, force);
+    if (data) {
+      list.push(data);
+    }
+  }
+  return list;
+}
+
+function handleGetCityData(req, res, parsed) {
+  try {
+    var force = Boolean(parsed && parsed.query && parsed.query.force === '1');
+    var rawRepos = readRecentRepositories(force);
+    sendJson(res, { cityData: collectAllReposCityData(rawRepos, force) });
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
 function getCachedStatus(repoRoot) {
   var entry = statusCache[repoRoot];
   if (!entry) return null;
@@ -2243,12 +2418,16 @@ function invalidateStatusCache(repoRoot) {
     delete lastCommitTimeCache[repoRoot];
     delete repoQuickStatusCache[repoRoot];
     delete repoQuickStatusCache[path.resolve(repoRoot)];
+    delete repoCityDataCache[repoRoot];
+    delete repoCityDataCache[path.resolve(repoRoot)];
     try {
       var rootKey = git.repoRoot(repoRoot);
       delete statusCache[rootKey];
       delete lastCommitTimeCache[rootKey];
       delete repoQuickStatusCache[rootKey];
       delete repoQuickStatusCache[path.resolve(rootKey)];
+      delete repoCityDataCache[rootKey];
+      delete repoCityDataCache[path.resolve(rootKey)];
       delete cache[path.resolve(rootKey)];
     } catch (e) {
       delete cache[path.resolve(repoRoot)];
@@ -2258,6 +2437,7 @@ function invalidateStatusCache(repoRoot) {
     lastCommitTimeCache = {};
     repoContributionsCache = {};
     repoQuickStatusCache = {};
+    repoCityDataCache = {};
   }
   recentReposCache.at = 0;
   saveContributionsCache();
@@ -4230,9 +4410,10 @@ body { background: linear-gradient(180deg, var(--bg-top) 0, var(--bg) 280px); }
 }
 .repo-remove svg { width: 14px; height: 14px; pointer-events: none; }
 
-.shell { min-width: 0; min-height: 100vh; margin-left: var(--sidebar-w); padding: 82px 32px 32px; transition: margin-left 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.shell { min-width: 0; min-height: 100vh; margin-left: var(--sidebar-w); padding: 82px 32px 32px; transition: margin-left 0.4s cubic-bezier(0.16, 1, 0.3, 1); pointer-events: none; }
 .sidebar.collapsed + .shell { margin-left: 0; }
 .shell-inner { width: min(1480px, 100%); margin: 0 auto; }
+.shell-inner > *, .view-page, .task-page, .settings-page, .home-page, .topbar { pointer-events: auto; }
 .topbar { position: fixed; left: var(--sidebar-w); right: 0; top: 0; z-index: var(--z-navbar); padding: 0 32px; background: var(--topbar-bg); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-bottom: 1px solid var(--topbar-border); box-shadow: 0 1px 2px rgba(15, 23, 42, .04); transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
 .sidebar.collapsed + .shell .topbar { left: 0; }
 .topbar-inner { width: min(1480px, 100%); min-height: 64px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; }
@@ -5523,8 +5704,251 @@ details[open] > .home-all-configs-summary .chevron {
   font-size: 12px;
   flex-shrink: 0;
 }
+
+/* 3D City Background Scene */
+.city-3d-container {
+  position: fixed;
+  top: 0;
+  left: var(--sidebar-w);
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: auto;
+  transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity .35s ease;
+}
+.sidebar.collapsed ~ .city-3d-container,
+body.sidebar-collapsed .city-3d-container {
+  left: 0;
+}
+@media (max-width: 960px) {
+  .city-3d-container {
+    left: 0;
+  }
+}
+.city-3d-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  outline: none;
+}
+.city-3d-canvas:active {
+  cursor: grabbing;
+}
+.city-3d-hud {
+  pointer-events: none;
+}
+.city-3d-hud-left {
+  position: fixed;
+  top: 76px;
+  left: calc(var(--sidebar-w) + 24px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 100;
+  pointer-events: auto;
+  transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar.collapsed + .shell .city-3d-hud-left,
+body.sidebar-collapsed .city-3d-hud-left {
+  left: 24px;
+}
+@media (max-width: 960px) {
+  .city-3d-hud-left {
+    left: 24px;
+  }
+}
+.city-3d-hud-right {
+  position: fixed;
+  top: 76px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: auto;
+}
+@media (max-width: 960px) {
+  .city-3d-hud-right {
+    right: 14px;
+  }
+}
+.city-3d-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--topbar-bg);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.city-3d-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green);
+  animation: pulseDot 2s infinite ease-in-out;
+}
+.city-3d-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--topbar-bg);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  transition: all .18s ease;
+  white-space: nowrap;
+}
+.city-3d-btn:hover {
+  background: var(--panel-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateX(-4px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.city-3d-btn-highlight {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.city-3d-btn-highlight:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+.city-3d-repo-card {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 300px;
+  background: var(--topbar-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  pointer-events: auto;
+  z-index: 120;
+  animation: slideUp .2s ease-out;
+}
+.city-3d-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.city-3d-card-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--accent);
+  min-width: 0;
+}
+.city-3d-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 210px;
+}
+.city-3d-card-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+.city-3d-card-close:hover {
+  color: var(--text);
+}
+.city-3d-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.city-3d-card-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+.city-3d-card-label {
+  color: var(--muted);
+}
+.city-3d-card-val {
+  font-weight: 600;
+  color: var(--text);
+}
+.city-3d-enter-btn {
+  width: 100%;
+  height: 34px;
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.city-3d-enter-btn:hover {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+.home-page {
+  position: relative;
+  z-index: 5;
+  margin-top: 400px;
+  transition: opacity .3s ease, transform .3s ease;
+}
+.home-page.zen-mode {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: scale(0.98);
+}
+.city-3d-container.zen-mode {
+  pointer-events: auto;
+}
+.home-hero {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.home-section {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 <div class="app-container">
@@ -5543,6 +5967,60 @@ details[open] > .home-all-configs-summary .chevron {
     </div>
     <div id="repoList" class="repo-list"></div>
   </aside>
+
+  <div id="city3dContainer" class="city-3d-container">
+    <canvas id="city3dCanvas" class="city-3d-canvas"></canvas>
+    <div class="city-3d-hud">
+      <div class="city-3d-hud-left">
+        <div class="city-3d-status-pill">
+          <span class="city-3d-pulse-dot"></span>
+          <span id="city3dCurrentRepoBadge" class="city-3d-repo-badge">City 3D Tour</span>
+        </div>
+      </div>
+      <div class="city-3d-hud-right">
+        <button id="city3dFlightBtn" class="city-3d-btn" type="button" title="暂停/继续巡航" data-i18n-title="city3dCruise">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          <span id="city3dFlightText">巡航中</span>
+        </button>
+        <button id="city3dDayNightBtn" class="city-3d-btn" type="button" title="昼夜切换" data-i18n-title="city3dDay">
+          <span id="city3dDayNightIcon">☀️</span>
+          <span id="city3dDayNightText">白天</span>
+        </button>
+        <button id="city3dZenBtn" class="city-3d-btn city-3d-btn-highlight" type="button" title="全屏沉浸/显示概览" data-i18n-title="city3dZenMode">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+          <span id="city3dZenText">全景沉浸</span>
+        </button>
+      </div>
+    </div>
+    <div id="city3dRepoCard" class="city-3d-repo-card" hidden>
+      <div class="city-3d-card-header">
+        <div class="city-3d-card-title-wrap">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+          <span id="city3dCardRepoName" class="city-3d-card-title">repo</span>
+        </div>
+        <button id="city3dCardCloseBtn" class="city-3d-card-close" type="button">×</button>
+      </div>
+      <div class="city-3d-card-body">
+        <div class="city-3d-card-stat">
+          <span class="city-3d-card-label" data-i18n="city3dBuildings">建筑数量 (文本文件)</span>
+          <span id="city3dCardBuildings" class="city-3d-card-val">-</span>
+        </div>
+        <div class="city-3d-card-stat">
+          <span class="city-3d-card-label" data-i18n="city3dGreenSpace">绿化区域 (非文本文件)</span>
+          <span id="city3dCardGreens" class="city-3d-card-val">-</span>
+        </div>
+        <div class="city-3d-card-stat">
+          <span class="city-3d-card-label" data-i18n="city3dTallest">最高建筑 (最大文件)</span>
+          <span id="city3dCardTallest" class="city-3d-card-val">-</span>
+        </div>
+      </div>
+      <div class="city-3d-card-foot">
+        <button id="city3dCardEnterBtn" class="city-3d-enter-btn" type="button">
+          <span data-i18n="city3dEnterRepo">进入此仓库</span> →
+        </button>
+      </div>
+    </div>
+  </div>
 
   <main class="shell">
     <header class="topbar">
@@ -6541,7 +7019,18 @@ var I18N = {
     stagedFilesTooltip: '个文件已暂存 (待提交)',
     untrackedFilesTooltip: '个未跟踪新文件',
     aheadCommitsTooltip: '个本地领先提交 (待推送)',
-    behindCommitsTooltip: '个远程落后提交 (待拉取)'
+    behindCommitsTooltip: '个远程落后提交 (待拉取)',
+    city3dTitle: '3D 城市视角',
+    city3dCruise: '巡航飞行',
+    city3dCruisePaused: '已暂停飞行',
+    city3dDay: '白天模式',
+    city3dNight: '夜间模式',
+    city3dZenMode: '全景沉浸',
+    city3dOverviewMode: '恢复概览',
+    city3dEnterRepo: '进入此仓库',
+    city3dBuildings: '建筑数量 (文本文件)',
+    city3dGreenSpace: '绿化区域 (非文本文件)',
+    city3dTallest: '最高建筑 (最大文件)'
   },
   en: {
     language: 'Language',
@@ -6846,7 +7335,18 @@ var I18N = {
     stagedFilesTooltip: 'staged files (ready to commit)',
     untrackedFilesTooltip: 'untracked files',
     aheadCommitsTooltip: 'commits ahead (ready to push)',
-    behindCommitsTooltip: 'commits behind (ready to pull)'
+    behindCommitsTooltip: 'commits behind (ready to pull)',
+    city3dTitle: '3D City Aerial Tour',
+    city3dCruise: 'Auto Cruise',
+    city3dCruisePaused: 'Flight Paused',
+    city3dDay: 'Day Mode',
+    city3dNight: 'Night Mode',
+    city3dZenMode: 'Zen 3D View',
+    city3dOverviewMode: 'Show Overview',
+    city3dEnterRepo: 'Enter Repository',
+    city3dBuildings: 'Buildings (Text Files)',
+    city3dGreenSpace: 'Green Space (Assets)',
+    city3dTallest: 'Tallest Building (Largest File)'
   }
 };
 I18N.ja = Object.assign({}, I18N.en, {
@@ -9723,6 +10223,8 @@ function switchRepository(repoPath, options) {
     setPageTitle('');
     updateRepoLink(t('repoRunning'), null);
     if ($('homePage')) $('homePage').hidden = false;
+    if ($('city3dContainer')) $('city3dContainer').hidden = false;
+    if (typeof City3DEngine !== 'undefined') City3DEngine.resume();
     if ($('gitPage')) $('gitPage').hidden = true;
     if ($('taskPage')) $('taskPage').hidden = true;
     if ($('closeRepoBtn')) $('closeRepoBtn').hidden = true;
@@ -9740,6 +10242,8 @@ function switchRepository(repoPath, options) {
   updateRepoLink(targetRepo, targetRepo);
   updateReadmeLink();
   if ($('homePage')) $('homePage').hidden = true;
+  if ($('city3dContainer')) $('city3dContainer').hidden = true;
+  if (typeof City3DEngine !== 'undefined') City3DEngine.pause();
   if ($('closeRepoBtn')) $('closeRepoBtn').hidden = false;
   var viewTabsEl2 = document.querySelector('.view-tabs');
   if (viewTabsEl2) viewTabsEl2.hidden = false;
@@ -9891,6 +10395,10 @@ function renderGitOverview(data) {
 
   if (data.globalContributions) {
     renderHomeCalendar(data.globalContributions);
+  }
+
+  if (data.cityData && typeof City3DEngine !== 'undefined') {
+    City3DEngine.buildCity(data.cityData);
   }
 }
 
@@ -10366,6 +10874,9 @@ function applyTheme(themeId) {
   } catch (e) {}
   state.currentTheme = validId;
   renderThemeControls();
+  if (typeof City3DEngine !== 'undefined' && City3DEngine.syncWithTheme) {
+    City3DEngine.syncWithTheme(validId);
+  }
 }
 
 function renderThemeControls() {
@@ -10437,6 +10948,8 @@ function openSettings() {
   var closeBtn = $('closeRepoBtn');
   if (closeBtn) closeBtn.hidden = true;
   if ($('homePage')) $('homePage').hidden = true;
+  if ($('city3dContainer')) $('city3dContainer').hidden = true;
+  if (typeof City3DEngine !== 'undefined') City3DEngine.pause();
   if ($('gitPage')) $('gitPage').hidden = true;
   if ($('taskPage')) $('taskPage').hidden = true;
   $('settingsPage').hidden = false;
@@ -10451,6 +10964,8 @@ function closeSettings() {
   $('settingsPage').hidden = true;
   if (!targetRepo) {
     if ($('homePage')) $('homePage').hidden = false;
+    if ($('city3dContainer')) $('city3dContainer').hidden = false;
+    if (typeof City3DEngine !== 'undefined') City3DEngine.resume();
     if ($('gitPage')) $('gitPage').hidden = true;
     if ($('taskPage')) $('taskPage').hidden = true;
     var tabs = document.querySelector('.view-tabs');
@@ -10856,6 +11371,1549 @@ function formatRepoVisit(timestamp) {
   return new Date(time).toLocaleDateString();
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  var k = 1024;
+  var sizes = ['B', 'KB', 'MB', 'GB'];
+  var i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+  });
+}
+
+/* =========================================================================
+ * City3DEngine: 3D Aerial City Map from Managed Repositories
+ * ========================================================================= */
+var City3DEngine = (function() {
+  var containerEl = null;
+  var canvasEl = null;
+  var repoCardEl = null;
+  var renderer = null;
+  var scene = null;
+  var camera = null;
+  var animationId = null;
+  var isInitialized = false;
+  var isRunning = false;
+
+  // Scene Objects
+  var cityGroup = null;
+  var skyGroup = null;
+  var sunLight = null;
+  var moonLight = null;
+  var ambientLight = null;
+  var hemiLight = null;
+  var starField = null;
+  var trafficGroup = null;
+  var repoBadges = [];
+  var districtData = [];
+  var trafficCars = [];
+  var beaconMeshes = [];
+
+  // Textures & Materials
+  var windowTexDay = null;
+  var windowTexNight = null;
+  var windowTexEmissive = null;
+  var buildingMaterials = [];
+
+  // Day & Night Transition State
+  var dayNightMode = 'night';
+  var targetMode = 'night';
+  var modeTransition = 1.0; // 0 = day, 1 = night
+  var manualModeOverride = false;
+
+  // Airplane Cruise Flight
+  var isAutoCruising = true;
+  var cruiseSpeed = 1.0;
+  var cruiseProgress = 0.0;
+  var flightSpline = null;
+  var bankAngle = 0;
+  var targetBankAngle = 0;
+  var currentLookAt = null;
+  var targetLookAt = null;
+
+  // Free Orbit Controls
+  var isDragging = false;
+  var previousPointer = { x: 0, y: 0 };
+  var orbit = { theta: 0.8, phi: 0.62, radius: 240, target: { x: 0, y: 15, z: 0 } };
+  var userInteractionTimer = null;
+  var raycaster = null;
+  var mouse = null;
+  var hoveredBadge = null;
+
+  // Data cache
+  var cachedCityData = null;
+
+  // Zen Mode
+  var isZenMode = false;
+  var lastTimestamp = 0;
+  var totalElapsedTime = 0;
+
+  function init() {
+    if (isInitialized) {
+      resume();
+      return;
+    }
+
+    containerEl = document.getElementById('city3dContainer');
+    canvasEl = document.getElementById('city3dCanvas');
+    repoCardEl = document.getElementById('city3dRepoCard');
+    if (!containerEl || !canvasEl) return;
+
+    if (typeof THREE === 'undefined') {
+      loadThreeScript(function() {
+        init();
+      });
+      return;
+    }
+
+    try {
+      var isSidebarCollapsed = document.body.classList.contains('sidebar-collapsed');
+      var width = containerEl.clientWidth || (window.innerWidth - (isSidebarCollapsed ? 0 : 260));
+      if (window.innerWidth <= 960) width = window.innerWidth;
+      var height = containerEl.clientHeight || window.innerHeight;
+      if (width <= 0) width = window.innerWidth;
+      if (height <= 0) height = window.innerHeight;
+
+      renderer = new THREE.WebGLRenderer({
+        canvas: canvasEl,
+        antialias: true,
+        alpha: true,
+        powerPreference: 'high-performance'
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(width, height);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.1;
+
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x060914);
+      scene.fog = new THREE.FogExp2(0x070b18, 0.0022);
+
+      camera = new THREE.PerspectiveCamera(52, width / height, 1, 3500);
+      camera.position.set(160, 140, 220);
+
+      currentLookAt = new THREE.Vector3(0, 15, 0);
+      targetLookAt = new THREE.Vector3(0, 15, 0);
+
+      raycaster = new THREE.Raycaster();
+      mouse = new THREE.Vector2(-999, -999);
+
+      setupLighting();
+      setupSkyAndStars();
+      createWindowTextures();
+
+      cityGroup = new THREE.Group();
+      scene.add(cityGroup);
+
+      trafficGroup = new THREE.Group();
+      scene.add(trafficGroup);
+
+      bindEvents();
+      bindHudControls();
+
+      var currentTheme = (function() {
+        try { return localStorage.getItem('gmc_theme') || 'default'; } catch(e) { return 'default'; }
+      })();
+      syncWithTheme(currentTheme);
+
+      isInitialized = true;
+      isRunning = true;
+      lastTimestamp = performance.now();
+      requestAnimationFrame(animate);
+
+      if (cachedCityData && cachedCityData.length) {
+        buildCity(cachedCityData);
+      } else if (typeof state !== 'undefined' && state.gitOverview && state.gitOverview.cityData) {
+        buildCity(state.gitOverview.cityData);
+      } else {
+        buildCity(null);
+        fetchCityData();
+      }
+    } catch (err) {
+      console.warn('City3DEngine init failed:', err);
+    }
+  }
+
+  function loadThreeScript(cb) {
+    if (typeof THREE !== 'undefined') {
+      if (typeof cb === 'function') cb();
+      return;
+    }
+    var existing = document.querySelector('script[src*="three"]');
+    if (existing) {
+      existing.addEventListener('load', function() {
+        if (typeof cb === 'function') cb();
+      });
+      existing.addEventListener('error', function() {
+        var s2 = document.createElement('script');
+        s2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js';
+        s2.onload = function() { if (typeof cb === 'function') cb(); };
+        document.head.appendChild(s2);
+      });
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s.onload = function() { if (typeof cb === 'function') cb(); };
+    s.onerror = function() {
+      var s2 = document.createElement('script');
+      s2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js';
+      s2.onload = function() { if (typeof cb === 'function') cb(); };
+      document.head.appendChild(s2);
+    };
+    document.head.appendChild(s);
+  }
+
+  function setupLighting() {
+    ambientLight = new THREE.AmbientLight(0x475569, 0.75);
+    scene.add(ambientLight);
+
+    hemiLight = new THREE.HemisphereLight(0x94a3b8, 0x1e293b, 0.55);
+    scene.add(hemiLight);
+
+    sunLight = new THREE.DirectionalLight(0xfff5e0, 1.35);
+    sunLight.position.set(220, 320, 180);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 1024;
+    sunLight.shadow.mapSize.height = 1024;
+    sunLight.shadow.camera.near = 10;
+    sunLight.shadow.camera.far = 800;
+    sunLight.shadow.camera.left = -260;
+    sunLight.shadow.camera.right = 260;
+    sunLight.shadow.camera.top = 260;
+    sunLight.shadow.camera.bottom = -260;
+    sunLight.shadow.bias = -0.0005;
+    scene.add(sunLight);
+
+    moonLight = new THREE.DirectionalLight(0x818cf8, 0.55);
+    moonLight.position.set(-180, 260, -140);
+    scene.add(moonLight);
+  }
+
+  function setupSkyAndStars() {
+    skyGroup = new THREE.Group();
+    scene.add(skyGroup);
+
+    var starCount = 1400;
+    var starGeo = new THREE.BufferGeometry();
+    var starPositions = new Float32Array(starCount * 3);
+    var starColors = new Float32Array(starCount * 3);
+
+    for (var i = 0; i < starCount; i++) {
+      var u = Math.random();
+      var v = Math.random();
+      var theta = u * 2.0 * Math.PI;
+      var phi = Math.acos(2.0 * v - 1.0);
+      var r = 1200 + Math.random() * 400;
+      var x = r * Math.sin(phi) * Math.cos(theta);
+      var y = Math.abs(r * Math.cos(phi)) + 60;
+      var z = r * Math.sin(phi) * Math.sin(theta);
+
+      starPositions[i * 3] = x;
+      starPositions[i * 3 + 1] = y;
+      starPositions[i * 3 + 2] = z;
+
+      var colType = Math.random();
+      if (colType > 0.8) {
+        starColors[i * 3] = 0.6; starColors[i * 3 + 1] = 0.8; starColors[i * 3 + 2] = 1.0;
+      } else if (colType > 0.6) {
+        starColors[i * 3] = 1.0; starColors[i * 3 + 1] = 0.9; starColors[i * 3 + 2] = 0.6;
+      } else {
+        starColors[i * 3] = 0.95; starColors[i * 3 + 1] = 0.95; starColors[i * 3 + 2] = 1.0;
+      }
+    }
+
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+    starGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+
+    var starMat = new THREE.PointsMaterial({
+      size: 3.2,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false
+    });
+    starField = new THREE.Points(starGeo, starMat);
+    skyGroup.add(starField);
+  }
+
+  function createWindowTextures() {
+    // 1. Day Window Texture (Reflective architectural glass with frame grid)
+    var canvasDay = document.createElement('canvas');
+    canvasDay.width = 256;
+    canvasDay.height = 256;
+    var ctxD = canvasDay.getContext('2d');
+    ctxD.fillStyle = '#64748b';
+    ctxD.fillRect(0, 0, 256, 256);
+
+    for (var r = 0; r < 16; r++) {
+      for (var c = 0; c < 16; c++) {
+        var x = c * 16 + 2;
+        var y = r * 16 + 2;
+        ctxD.fillStyle = (r % 2 === 0) ? '#93c5fd' : '#bfdbfe';
+        ctxD.fillRect(x, y, 12, 11);
+        ctxD.fillStyle = 'rgba(255,255,255,0.45)';
+        ctxD.fillRect(x, y, 12, 3);
+      }
+    }
+    windowTexDay = new THREE.CanvasTexture(canvasDay);
+    windowTexDay.wrapS = THREE.RepeatWrapping;
+    windowTexDay.wrapT = THREE.RepeatWrapping;
+
+    // 2. Night Diffuse Texture
+    var canvasNight = document.createElement('canvas');
+    canvasNight.width = 256;
+    canvasNight.height = 256;
+    var ctxN = canvasNight.getContext('2d');
+    ctxN.fillStyle = '#0f172a';
+    ctxN.fillRect(0, 0, 256, 256);
+
+    for (var r2 = 0; r2 < 16; r2++) {
+      for (var c2 = 0; c2 < 16; c2++) {
+        var x2 = c2 * 16 + 2;
+        var y2 = r2 * 16 + 2;
+        ctxN.fillStyle = '#1e293b';
+        ctxN.fillRect(x2, y2, 12, 11);
+      }
+    }
+    windowTexNight = new THREE.CanvasTexture(canvasNight);
+    windowTexNight.wrapS = THREE.RepeatWrapping;
+    windowTexNight.wrapT = THREE.RepeatWrapping;
+
+    // 3. Night Emissive Texture (Random lit floors and office lights glowing in dark)
+    var canvasEmissive = document.createElement('canvas');
+    canvasEmissive.width = 256;
+    canvasEmissive.height = 256;
+    var ctxE = canvasEmissive.getContext('2d');
+    ctxE.fillStyle = '#000000'; // Unlit windows do not glow
+    ctxE.fillRect(0, 0, 256, 256);
+
+    for (var r3 = 0; r3 < 16; r3++) {
+      var floorActive = Math.random();
+      for (var c3 = 0; c3 < 16; c3++) {
+        var x3 = c3 * 16 + 2;
+        var y3 = r3 * 16 + 2;
+        var isLit = (floorActive > 0.72) ? (Math.random() > 0.22) : (Math.random() > 0.58);
+        if (isLit) {
+          var lightType = Math.random();
+          if (lightType > 0.65) {
+            ctxE.fillStyle = '#ffbe3b'; // Warm golden incandescent
+          } else if (lightType > 0.35) {
+            ctxE.fillStyle = '#fef08a'; // Bright warm yellow
+          } else if (lightType > 0.15) {
+            ctxE.fillStyle = '#e0f2fe'; // Cool bright office white
+          } else {
+            ctxE.fillStyle = '#38bdf8'; // Cyan cyberpunk LED
+          }
+          ctxE.fillRect(x3, y3, 12, 11);
+          ctxE.fillStyle = 'rgba(255,255,255,0.7)';
+          ctxE.fillRect(x3 + 2, y3 + 2, 8, 7);
+        }
+      }
+    }
+    windowTexEmissive = new THREE.CanvasTexture(canvasEmissive);
+    windowTexEmissive.wrapS = THREE.RepeatWrapping;
+    windowTexEmissive.wrapT = THREE.RepeatWrapping;
+  }
+
+  function hashStr(str) {
+    var hash = 5381;
+    var s = String(str || '');
+    for (var i = 0; i < s.length; i++) {
+      hash = ((hash << 5) + hash) + s.charCodeAt(i);
+      hash = hash & hash;
+    }
+    return Math.abs(hash);
+  }
+
+  function computeBuildingHeight(fileSize, jitter) {
+    var size = fileSize || 100;
+    var logS = Math.log(size + 10) / Math.LN10;
+    var h = Math.max(5, Math.min(110, 4.0 + Math.pow(logS, 2.08) * 3.8 + Math.sqrt(size) * 0.032));
+    if (jitter != null) {
+      h *= (1 + (jitter - 0.5) * 0.24);
+    }
+    return Math.max(4.5, h);
+  }
+
+  function clusterBuildings(files, tallestFile) {
+    if (!files || !files.length) return [];
+    var tallestName = tallestFile ? (tallestFile.name || tallestFile.path) : '';
+
+    var landmarks = [];
+    var regulars = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      var fName = f.name || f.path || 'file';
+      if (fName === tallestName || (f.size && f.size > 80000)) {
+        landmarks.push({
+          type: 'landmark',
+          files: [f],
+          size: f.size || 1000,
+          name: fName,
+          ext: f.ext || '',
+          count: 1
+        });
+      } else {
+        regulars.push(f);
+      }
+    }
+
+    regulars.sort(function(a, b) { return (b.size || 0) - (a.size || 0); });
+
+    var clusters = [];
+    var currentGroup = [];
+    for (var j = 0; j < regulars.length; j++) {
+      var cur = regulars[j];
+      if (currentGroup.length === 0) {
+        currentGroup.push(cur);
+      } else {
+        var first = currentGroup[0];
+        var ratio = (first.size && cur.size) ? (cur.size / first.size) : 1;
+        if (currentGroup.length < 3 && (ratio >= 0.55 || (first.size < 8192 && cur.size < 8192))) {
+          currentGroup.push(cur);
+        } else {
+          clusters.push(createClusterItem(currentGroup));
+          currentGroup = [cur];
+        }
+      }
+    }
+    if (currentGroup.length > 0) {
+      clusters.push(createClusterItem(currentGroup));
+    }
+
+    return landmarks.concat(clusters);
+  }
+
+  function createClusterItem(group) {
+    if (group.length === 1) {
+      var g0 = group[0];
+      return {
+        type: 'single',
+        files: group,
+        size: g0.size || 1000,
+        name: g0.name || g0.path || 'file',
+        ext: g0.ext || '',
+        count: 1
+      };
+    }
+    var totalSize = 0;
+    for (var k = 0; k < group.length; k++) totalSize += (group[k].size || 0);
+    var avgSize = totalSize / group.length;
+    var firstName = group[0].name || group[0].path || 'file';
+    return {
+      type: 'compound',
+      files: group,
+      size: avgSize * 1.15,
+      totalSize: totalSize,
+      name: firstName + ' +' + (group.length - 1) + ' files',
+      ext: group[0].ext || '',
+      count: group.length
+    };
+  }
+
+  function createRepoBannerSprite(repoName, totalFiles, maxFileSize, isNight) {
+    var canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 160;
+    var ctx = canvas.getContext('2d');
+
+    ctx.clearRect(0, 0, 512, 160);
+    ctx.save();
+    ctx.fillStyle = isNight ? 'rgba(7, 12, 24, 0.92)' : 'rgba(255, 255, 255, 0.95)';
+    ctx.strokeStyle = isNight ? '#00f2fe' : '#068d6d';
+    ctx.lineWidth = 4;
+    ctx.shadowColor = isNight ? '#00f2fe' : 'rgba(6, 141, 109, 0.6)';
+    ctx.shadowBlur = isNight ? 14 : 8;
+
+    var x = 12, y = 12, w = 488, h = 136, r = 24;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = isNight ? '#00f2fe' : '#068d6d';
+    ctx.beginPath();
+    ctx.arc(60, 80, 26, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = isNight ? '#070c18' : '#ffffff';
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(52, 68, 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(68, 88, 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(52, 72);
+    ctx.lineTo(52, 92);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(52, 78);
+    ctx.quadraticCurveTo(68, 78, 68, 84);
+    ctx.stroke();
+
+    ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isNight ? '#ffffff' : '#0f172a';
+    ctx.textBaseline = 'middle';
+    var displayName = repoName || 'repo';
+    if (displayName.length > 18) displayName = displayName.slice(0, 16) + '...';
+    ctx.fillText(displayName, 105, 62);
+
+    ctx.font = '600 21px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isNight ? '#38bdf8' : '#059669';
+    var sizeStr = formatBytes(maxFileSize || 0);
+    ctx.fillText((totalFiles || 0) + ' files · ' + sizeStr, 105, 105);
+
+    var texture = new THREE.CanvasTexture(canvas);
+    var spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false
+    });
+    var sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(40, 12.5, 1);
+    return sprite;
+  }
+
+  function buildCity(cityDataList) {
+    if (cityDataList && cityDataList.length) {
+      cachedCityData = cityDataList;
+    }
+    if (!cityGroup || !scene || !isInitialized) return;
+
+    while (cityGroup.children.length > 0) {
+      var obj = cityGroup.children[0];
+      cityGroup.remove(obj);
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) {
+        if (Array.isArray(obj.material)) obj.material.forEach(function(m) { m.dispose(); });
+        else obj.material.dispose();
+      }
+    }
+
+    while (trafficGroup.children.length > 0) {
+      var tobj = trafficGroup.children[0];
+      trafficGroup.remove(tobj);
+      if (tobj.geometry) tobj.geometry.dispose();
+      if (tobj.material) tobj.material.dispose();
+    }
+
+    repoBadges = [];
+    districtData = [];
+    trafficCars = [];
+    beaconMeshes = [];
+    buildingMaterials = [];
+
+    var repos = (cachedCityData && cachedCityData.length) ? cachedCityData : (cityDataList && cityDataList.length) ? cityDataList : [
+      {
+        name: 'vibe-git',
+        path: '',
+        totalFiles: 42,
+        textCount: 36,
+        nonTextCount: 6,
+        tallest: { name: 'web.js', size: 180000, ext: 'js' },
+        buildings: [
+          { name: 'web.js', size: 180000, ext: 'js' },
+          { name: 'gmc.js', size: 90000, ext: 'js' },
+          { name: 'git.js', size: 25000, ext: 'js' },
+          { name: 'agent.js', size: 14000, ext: 'js' },
+          { name: 'README.md', size: 8000, ext: 'md' }
+        ]
+      }
+    ];
+
+    var N = repos.length;
+    var cols = Math.max(1, Math.ceil(Math.sqrt(N)));
+    var rows = Math.max(1, Math.ceil(N / cols));
+
+    var BW = 110;
+    var BD = 110;
+    var RW = 34;
+    var stepX = BW + RW;
+    var stepZ = BD + RW;
+    var originX = -(cols - 1) * stepX / 2;
+    var originZ = -(rows - 1) * stepZ / 2;
+
+    var totalCityW = cols * stepX + 160;
+    var totalCityD = rows * stepZ + 160;
+    var groundGeo = new THREE.PlaneGeometry(totalCityW, totalCityD);
+    var groundMat = new THREE.MeshStandardMaterial({
+      color: 0x111622,
+      roughness: 0.9,
+      metalness: 0.1
+    });
+    var groundMesh = new THREE.Mesh(groundGeo, groundMat);
+    groundMesh.rotation.x = -Math.PI / 2;
+    groundMesh.position.y = -0.1;
+    groundMesh.receiveShadow = true;
+    cityGroup.add(groundMesh);
+
+    buildRoadNetwork(cols, rows, stepX, stepZ, originX, originZ, BW, BD, RW, totalCityW, totalCityD);
+
+    for (var i = 0; i < N; i++) {
+      var repo = repos[i];
+      var col = i % cols;
+      var row = Math.floor(i / cols);
+      var posX = originX + col * stepX;
+      var posZ = originZ + row * stepZ;
+
+      buildDistrict(repo, i, posX, posZ, BW, BD);
+    }
+
+    buildTrafficCars(cols, rows, stepX, stepZ, originX, originZ, totalCityW, totalCityD);
+
+    buildFlightSpline(districtData);
+  }
+
+  function buildRoadNetwork(cols, rows, stepX, stepZ, originX, originZ, BW, BD, RW, totalW, totalD) {
+    var roadMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
+    var lineMatYellow = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+    var lineMatWhite = new THREE.MeshBasicMaterial({ color: 0xe2e8f0 });
+
+    for (var c = 0; c <= cols; c++) {
+      var rx = originX + (c - 0.5) * stepX;
+      var roadV = new THREE.Mesh(new THREE.PlaneGeometry(RW, totalD), roadMat);
+      roadV.rotation.x = -Math.PI / 2;
+      roadV.position.set(rx, 0.05, 0);
+      roadV.receiveShadow = true;
+      cityGroup.add(roadV);
+
+      var dividerV = new THREE.Mesh(new THREE.PlaneGeometry(0.8, totalD), lineMatYellow);
+      dividerV.rotation.x = -Math.PI / 2;
+      dividerV.position.set(rx, 0.08, 0);
+      cityGroup.add(dividerV);
+
+      var laneV1 = new THREE.Mesh(new THREE.PlaneGeometry(0.4, totalD), lineMatWhite);
+      laneV1.rotation.x = -Math.PI / 2;
+      laneV1.position.set(rx - 7.5, 0.07, 0);
+      cityGroup.add(laneV1);
+
+      var laneV2 = new THREE.Mesh(new THREE.PlaneGeometry(0.4, totalD), lineMatWhite);
+      laneV2.rotation.x = -Math.PI / 2;
+      laneV2.position.set(rx + 7.5, 0.07, 0);
+      cityGroup.add(laneV2);
+    }
+
+    for (var r = 0; r <= rows; r++) {
+      var rz = originZ + (r - 0.5) * stepZ;
+      var roadH = new THREE.Mesh(new THREE.PlaneGeometry(totalW, RW), roadMat);
+      roadH.rotation.x = -Math.PI / 2;
+      roadH.position.set(0, 0.05, rz);
+      roadH.receiveShadow = true;
+      cityGroup.add(roadH);
+
+      var dividerH = new THREE.Mesh(new THREE.PlaneGeometry(totalW, 0.8), lineMatYellow);
+      dividerH.rotation.x = -Math.PI / 2;
+      dividerH.position.set(0, 0.08, rz);
+      cityGroup.add(dividerH);
+
+      var laneH1 = new THREE.Mesh(new THREE.PlaneGeometry(totalW, 0.4), lineMatWhite);
+      laneH1.rotation.x = -Math.PI / 2;
+      laneH1.position.set(0, 0.07, rz - 7.5);
+      cityGroup.add(laneH1);
+
+      var laneH2 = new THREE.Mesh(new THREE.PlaneGeometry(totalW, 0.4), lineMatWhite);
+      laneH2.rotation.x = -Math.PI / 2;
+      laneH2.position.set(0, 0.07, rz + 7.5);
+      cityGroup.add(laneH2);
+    }
+  }
+
+  function buildArchitecturalStructure(districtGroup, item, bIndex, slot, repo, posX, posZ, materials, isNight, isTallest) {
+    var styleSeed = hashStr(item.name || ('file_' + bIndex));
+    var styleType = isTallest ? 0 : (item.type === 'compound' ? 4 : (styleSeed % 6));
+
+    var jitter = ((styleSeed % 100) / 100);
+    var bHeight = computeBuildingHeight(item.size, isTallest ? 0.5 : jitter);
+    if (isTallest) {
+      bHeight = Math.max(bHeight, 55);
+    }
+
+    var isCompound = item.type === 'compound';
+    var bw = Math.max(5.0, slot.w * (isCompound ? 1.35 : (0.8 + (styleSeed % 3) * 0.12)));
+    var bd = Math.max(5.0, slot.d * (isCompound ? 1.35 : (0.8 + ((styleSeed + 1) % 3) * 0.12)));
+    var bx = slot.x + ((styleSeed % 10) / 10 - 0.5) * 1.2;
+    var bz = slot.z + (((styleSeed >> 3) % 10) / 10 - 0.5) * 1.2;
+
+    var bMat = materials[styleSeed % materials.length];
+    var accentMat = new THREE.MeshStandardMaterial({
+      color: isNight ? 0x38bdf8 : 0x0284c7,
+      roughness: 0.2,
+      metalness: 0.85
+    });
+    var roofMat = new THREE.MeshStandardMaterial({
+      color: isNight ? 0x334155 : 0x475569,
+      roughness: 0.7
+    });
+
+    var buildingTopY = 1.8 + bHeight;
+    var buildingCenterX = posX + bx;
+    var buildingCenterZ = posZ + bz;
+
+    if (styleType === 0) {
+      // Style 0: Art Deco / Stepped Skyscraper
+      var t1H = bHeight * 0.45;
+      var t2H = bHeight * 0.33;
+      var t3H = bHeight * 0.22;
+
+      var t1Geo = new THREE.BoxGeometry(bw, t1H, bd);
+      var t1Mesh = new THREE.Mesh(t1Geo, bMat);
+      t1Mesh.position.set(bx, 1.8 + t1H / 2, bz);
+      t1Mesh.castShadow = true;
+      t1Mesh.receiveShadow = true;
+      districtGroup.add(t1Mesh);
+
+      var t2Geo = new THREE.BoxGeometry(bw * 0.76, t2H, bd * 0.76);
+      var t2Mesh = new THREE.Mesh(t2Geo, bMat);
+      t2Mesh.position.set(bx, 1.8 + t1H + t2H / 2, bz);
+      t2Mesh.castShadow = true;
+      districtGroup.add(t2Mesh);
+
+      var t3Geo = new THREE.BoxGeometry(bw * 0.52, t3H, bd * 0.52);
+      var t3Mesh = new THREE.Mesh(t3Geo, bMat);
+      t3Mesh.position.set(bx, 1.8 + t1H + t2H + t3H / 2, bz);
+      t3Mesh.castShadow = true;
+      t3Mesh.userData = { repo: repo, item: item, height: bHeight };
+      districtGroup.add(t3Mesh);
+
+      var capGeo = new THREE.BoxGeometry(bw * 0.44, 1.2, bd * 0.44);
+      var capMesh = new THREE.Mesh(capGeo, accentMat);
+      capMesh.position.set(bx, buildingTopY + 0.6, bz);
+      districtGroup.add(capMesh);
+
+      buildingTopY += 1.2;
+    } else if (styleType === 1) {
+      // Style 1: Cylindrical Glass Rotunda Tower
+      var cylR = Math.min(bw, bd) * 0.46;
+      var cylGeo = new THREE.CylinderGeometry(cylR, cylR * 1.05, bHeight, 18);
+      var cylMesh = new THREE.Mesh(cylGeo, bMat);
+      cylMesh.position.set(bx, 1.8 + bHeight / 2, bz);
+      cylMesh.castShadow = true;
+      cylMesh.receiveShadow = true;
+      cylMesh.userData = { repo: repo, item: item, height: bHeight };
+      districtGroup.add(cylMesh);
+
+      var ringGeo = new THREE.CylinderGeometry(cylR * 1.06, cylR * 1.06, 1.4, 18);
+      var ringMesh = new THREE.Mesh(ringGeo, accentMat);
+      ringMesh.position.set(bx, buildingTopY + 0.7, bz);
+      districtGroup.add(ringMesh);
+
+      var domeGeo = new THREE.SphereGeometry(cylR * 0.65, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+      var domeMat = new THREE.MeshStandardMaterial({
+        color: isNight ? 0x38bdf8 : 0x67e8f9,
+        roughness: 0.15,
+        metalness: 0.9
+      });
+      var domeMesh = new THREE.Mesh(domeGeo, domeMat);
+      domeMesh.position.set(bx, buildingTopY + 1.4, bz);
+      districtGroup.add(domeMesh);
+
+      buildingTopY += 1.4 + cylR * 0.65;
+    } else if (styleType === 2) {
+      // Style 2: Beveled Crystal Diamond Prism
+      var prismH = bHeight * 0.78;
+      var pyrH = bHeight * 0.22;
+
+      var bGeo2 = new THREE.BoxGeometry(bw, prismH, bd);
+      var bMesh2 = new THREE.Mesh(bGeo2, bMat);
+      bMesh2.position.set(bx, 1.8 + prismH / 2, bz);
+      bMesh2.castShadow = true;
+      bMesh2.receiveShadow = true;
+      bMesh2.userData = { repo: repo, item: item, height: bHeight };
+      districtGroup.add(bMesh2);
+
+      var pyrGeo = new THREE.ConeGeometry(Math.min(bw, bd) * 0.68, pyrH, 4);
+      var pyrMat = new THREE.MeshStandardMaterial({
+        color: isNight ? 0x0ea5e9 : 0x0284c7,
+        roughness: 0.2,
+        metalness: 0.8
+      });
+      var pyrMesh = new THREE.Mesh(pyrGeo, pyrMat);
+      pyrMesh.rotation.y = Math.PI / 4;
+      pyrMesh.position.set(bx, 1.8 + prismH + pyrH / 2, bz);
+      districtGroup.add(pyrMesh);
+
+      buildingTopY = 1.8 + prismH + pyrH;
+    } else if (styleType === 3) {
+      // Style 3: Interconnected Skybridge Twin Tower
+      var twW = bw * 0.42;
+      var twD = bd * 0.82;
+      var twOff = bw * 0.28;
+
+      var tA = new THREE.Mesh(new THREE.BoxGeometry(twW, bHeight, twD), bMat);
+      tA.position.set(bx - twOff, 1.8 + bHeight / 2, bz);
+      tA.castShadow = true;
+      tA.userData = { repo: repo, item: item, height: bHeight };
+      districtGroup.add(tA);
+
+      var tB = new THREE.Mesh(new THREE.BoxGeometry(twW, bHeight * 0.92, twD), bMat);
+      tB.position.set(bx + twOff, 1.8 + (bHeight * 0.92) / 2, bz);
+      tB.castShadow = true;
+      districtGroup.add(tB);
+
+      var bridgeGeo = new THREE.BoxGeometry(twOff * 2 + twW * 0.5, 2.2, twD * 0.45);
+      var bridgeMesh = new THREE.Mesh(bridgeGeo, accentMat);
+      bridgeMesh.position.set(bx, 1.8 + bHeight * 0.62, bz);
+      districtGroup.add(bridgeMesh);
+
+      var rA = new THREE.Mesh(new THREE.BoxGeometry(twW * 0.85, 1.2, twD * 0.85), roofMat);
+      rA.position.set(bx - twOff, buildingTopY + 0.6, bz);
+      districtGroup.add(rA);
+
+      buildingTopY += 1.2;
+    } else if (styleType === 4) {
+      // Style 4: Modern Compound / Campus Wing Complex (Clean architectural blocks, no yellow discs)
+      var podH = 3.4;
+      var podGeo = new THREE.BoxGeometry(bw * 1.35, podH, bd * 1.35);
+      var podMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.75 });
+      var podMesh = new THREE.Mesh(podGeo, podMat);
+      podMesh.position.set(bx, 1.8 + podH / 2, bz);
+      podMesh.receiveShadow = true;
+      districtGroup.add(podMesh);
+
+      var mainW = bw * 0.78;
+      var mainD = bd * 0.72;
+      var mainH = bHeight;
+      var mainMesh = new THREE.Mesh(new THREE.BoxGeometry(mainW, mainH, mainD), bMat);
+      mainMesh.position.set(bx - bw * 0.22, 1.8 + podH + (mainH - podH) / 2, bz - bd * 0.1);
+      mainMesh.castShadow = true;
+      mainMesh.userData = { repo: repo, item: item, height: bHeight };
+      districtGroup.add(mainMesh);
+
+      var subW = bw * 0.7;
+      var subD = bd * 0.7;
+      var subH = (bHeight - podH) * 0.62;
+      var subMesh = new THREE.Mesh(new THREE.BoxGeometry(subW, subH, subD), bMat);
+      subMesh.position.set(bx + bw * 0.26, 1.8 + podH + subH / 2, bz + bd * 0.15);
+      subMesh.castShadow = true;
+      districtGroup.add(subMesh);
+
+      // Clean modern roof caps
+      var rSub = new THREE.Mesh(new THREE.BoxGeometry(subW * 0.88, 1.2, subD * 0.88), roofMat);
+      rSub.position.set(bx + bw * 0.26, 1.8 + podH + subH + 0.6, bz + bd * 0.15);
+      districtGroup.add(rSub);
+
+      var rMain = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.88, 1.2, mainD * 0.88), roofMat);
+      rMain.position.set(bx - bw * 0.22, 1.8 + mainH + 0.6, bz - bd * 0.1);
+      districtGroup.add(rMain);
+
+      buildingTopY = 1.8 + mainH + 1.2;
+    } else {
+      // Style 5: High-Tech Glass Tower with Vertical Corner Ribs
+      var coreGeo = new THREE.BoxGeometry(bw, bHeight, bd);
+      var coreMesh = new THREE.Mesh(coreGeo, bMat);
+      coreMesh.position.set(bx, 1.8 + bHeight / 2, bz);
+      coreMesh.castShadow = true;
+      coreMesh.receiveShadow = true;
+      coreMesh.userData = { repo: repo, item: item, height: bHeight };
+      districtGroup.add(coreMesh);
+
+      var ribGeo = new THREE.BoxGeometry(0.6, bHeight + 1.6, 0.6);
+      var corners = [
+        [-bw / 2, -bd / 2],
+        [bw / 2, -bd / 2],
+        [-bw / 2, bd / 2],
+        [bw / 2, bd / 2]
+      ];
+      for (var cIdx = 0; cIdx < 4; cIdx++) {
+        var rib = new THREE.Mesh(ribGeo, accentMat);
+        rib.position.set(bx + corners[cIdx][0], 1.8 + (bHeight + 1.6) / 2, bz + corners[cIdx][1]);
+        districtGroup.add(rib);
+      }
+
+      var roofCap = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.85, 1.2, bd * 0.85), roofMat);
+      roofCap.position.set(bx, buildingTopY + 0.6, bz);
+      districtGroup.add(roofCap);
+
+      var satAntennaGeo = new THREE.CylinderGeometry(0.2, 0.2, 4.5, 6);
+      var satAntennaMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8 });
+      var satAntennaMesh = new THREE.Mesh(satAntennaGeo, satAntennaMat);
+      satAntennaMesh.position.set(bx + bw * 0.2, buildingTopY + 2.25, bz);
+      districtGroup.add(satAntennaMesh);
+
+      buildingTopY += 4.5;
+    }
+
+    return {
+      topY: buildingTopY,
+      posX: buildingCenterX,
+      posZ: buildingCenterZ,
+      height: bHeight
+    };
+  }
+
+  function buildDistrict(repo, index, posX, posZ, BW, BD) {
+    var districtGroup = new THREE.Group();
+    districtGroup.position.set(posX, 0, posZ);
+
+    var baseGeo = new THREE.BoxGeometry(BW, 1.8, BD);
+    var baseMat = new THREE.MeshStandardMaterial({
+      color: 0x242e3d,
+      roughness: 0.75,
+      metalness: 0.2
+    });
+    var baseMesh = new THREE.Mesh(baseGeo, baseMat);
+    baseMesh.position.y = 0.9;
+    baseMesh.receiveShadow = true;
+    districtGroup.add(baseMesh);
+
+    var curbMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 });
+    var curbGeo = new THREE.BoxGeometry(BW + 1.2, 0.6, BD + 1.2);
+    var curbMesh = new THREE.Mesh(curbGeo, curbMat);
+    curbMesh.position.y = 0.3;
+    districtGroup.add(curbMesh);
+
+    var nonTextCount = repo.nonTextCount || 0;
+    var parkW = Math.min(48, Math.max(16, 14 + Math.sqrt(nonTextCount) * 5.0));
+    var parkD = parkW;
+    var parkPosX = 0;
+    var parkPosZ = 0;
+
+    var lawnGeo = new THREE.BoxGeometry(parkW, 0.5, parkD);
+    var lawnMat = new THREE.MeshStandardMaterial({
+      color: 0x2e7d32,
+      roughness: 0.85
+    });
+    var lawnMesh = new THREE.Mesh(lawnGeo, lawnMat);
+    lawnMesh.position.set(parkPosX, 1.9, parkPosZ);
+    lawnMesh.receiveShadow = true;
+    districtGroup.add(lawnMesh);
+
+    var numTrees = Math.min(24, Math.max(2, Math.floor(nonTextCount * 0.75)));
+    if (nonTextCount === 0) numTrees = 2;
+
+    var trunkGeo = new THREE.CylinderGeometry(0.35, 0.5, 3.2, 6);
+    var trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c3d2e, roughness: 0.9 });
+    var foliageColors = [0x22c55e, 0x16a34a, 0x15803d, 0x10b981];
+
+    for (var t = 0; t < numTrees; t++) {
+      var treeGroup = new THREE.Group();
+      var angle = (t / numTrees) * Math.PI * 2 + Math.random() * 0.5;
+      var dist = 3.5 + Math.random() * (parkW * 0.38);
+      var tx = parkPosX + Math.cos(angle) * dist;
+      var tz = parkPosZ + Math.sin(angle) * dist;
+
+      var trunk = new THREE.Mesh(trunkGeo, trunkMat);
+      trunk.position.y = 1.6;
+      treeGroup.add(trunk);
+
+      var folCol = foliageColors[t % foliageColors.length];
+      var folMat = new THREE.MeshStandardMaterial({ color: folCol, roughness: 0.7 });
+      var folGeo1 = new THREE.ConeGeometry(2.0, 3.5, 6);
+      var fol1 = new THREE.Mesh(folGeo1, folMat);
+      fol1.position.y = 4.2;
+      fol1.castShadow = true;
+      treeGroup.add(fol1);
+
+      var folGeo2 = new THREE.ConeGeometry(1.5, 2.8, 6);
+      var fol2 = new THREE.Mesh(folGeo2, folMat);
+      fol2.position.y = 5.8;
+      treeGroup.add(fol2);
+
+      treeGroup.position.set(tx, 2.0, tz);
+      districtGroup.add(treeGroup);
+    }
+
+    if (nonTextCount >= 4) {
+      var pondGeo = new THREE.CylinderGeometry(parkW * 0.18, parkW * 0.18, 0.4, 16);
+      var pondMat = new THREE.MeshStandardMaterial({
+        color: 0x0284c7,
+        roughness: 0.1,
+        metalness: 0.8,
+        transparent: true,
+        opacity: 0.85
+      });
+      var pondMesh = new THREE.Mesh(pondGeo, pondMat);
+      pondMesh.position.set(parkPosX, 2.15, parkPosZ);
+      districtGroup.add(pondMesh);
+    }
+
+    var buildingFiles = (repo.buildings && repo.buildings.length) ? repo.buildings : [];
+    if (!buildingFiles.length && repo.tallest) buildingFiles = [repo.tallest];
+    if (!buildingFiles.length) buildingFiles = [{ name: 'index.js', size: 1000 }];
+
+    // Cluster similar-sized files to avoid flat repetitive boxes
+    var clusteredItems = clusterBuildings(buildingFiles, repo.tallest);
+    var itemCount = clusteredItems.length;
+
+    var slots = [];
+    var gridSize = Math.max(3, Math.ceil(Math.sqrt(itemCount + 5)));
+    var cellW = BW / gridSize;
+    var cellD = BD / gridSize;
+
+    for (var gx = 0; gx < gridSize; gx++) {
+      for (var gz = 0; gz < gridSize; gz++) {
+        var sx = -BW / 2 + (gx + 0.5) * cellW;
+        var sz = -BD / 2 + (gz + 0.5) * cellD;
+        if (Math.abs(sx - parkPosX) < parkW * 0.55 && Math.abs(sz - parkPosZ) < parkD * 0.55) {
+          continue;
+        }
+        slots.push({ x: sx, z: sz, w: Math.min(cellW * 0.85, 16), d: Math.min(cellD * 0.85, 16) });
+      }
+    }
+
+    // Seeded shuffle of slots so buildings are placed organically across the block
+    var repoSeed = hashStr(repo.name || ('repo_' + index));
+    for (var s = slots.length - 1; s > 0; s--) {
+      var randIdx = (repoSeed + s * 23) % (s + 1);
+      var tmp = slots[s];
+      slots[s] = slots[randIdx];
+      slots[randIdx] = tmp;
+    }
+
+    // Realistic, bright, and diverse building facade materials
+    var matWhiteMarble = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.55, metalness: 0.2, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+    var matCyanGlass = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.2, metalness: 0.75, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+    var matLimestone = new THREE.MeshStandardMaterial({ color: 0xd8cfbe, roughness: 0.8, metalness: 0.1, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+    var matSapphireGlass = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.22, metalness: 0.7, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+    var matConcrete = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.75, metalness: 0.15, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+    var matTerracotta = new THREE.MeshStandardMaterial({ color: 0xc25e3e, roughness: 0.85, metalness: 0.05, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+    var matEmeraldGlass = new THREE.MeshStandardMaterial({ color: 0x059669, roughness: 0.25, metalness: 0.65, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+    var matTitanium = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.45, metalness: 0.55, map: windowTexDay, emissiveMap: windowTexEmissive, emissive: new THREE.Color(0xffffff), emissiveIntensity: 1.1 });
+
+    var materials = [matWhiteMarble, matCyanGlass, matLimestone, matSapphireGlass, matConcrete, matTerracotta, matEmeraldGlass, matTitanium];
+    materials.forEach(function(m) { if (buildingMaterials.indexOf(m) === -1) buildingMaterials.push(m); });
+
+    var tallestBuildingPos = new THREE.Vector3(posX, 20, posZ);
+    var maxHeight = 0;
+
+    var tallestFileName = repo.tallest ? (repo.tallest.name || repo.tallest.path) : '';
+
+    for (var b = 0; b < itemCount; b++) {
+      var item = clusteredItems[b];
+      var slot = slots[b % slots.length];
+      if (!slot) break;
+
+      var isTallest = (b === 0 && item.type === 'landmark') || (item.name === tallestFileName);
+      var bInfo = buildArchitecturalStructure(districtGroup, item, b, slot, repo, posX, posZ, materials, targetMode === 'night', isTallest);
+
+      if (bInfo.height > maxHeight || isTallest) {
+        maxHeight = Math.max(maxHeight, bInfo.height);
+        tallestBuildingPos.set(bInfo.posX, bInfo.topY, bInfo.posZ);
+      }
+    }
+
+    var spireGeo = new THREE.CylinderGeometry(0.3, 0.7, 14, 8);
+    var spireMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.2 });
+    var spireMesh = new THREE.Mesh(spireGeo, spireMat);
+    spireMesh.position.set(tallestBuildingPos.x - posX, tallestBuildingPos.y + 7.0 - 1.8, tallestBuildingPos.z - posZ);
+    districtGroup.add(spireMesh);
+
+    var beaconGeo = new THREE.SphereGeometry(1.1, 12, 12);
+    var beaconMat = new THREE.MeshBasicMaterial({ color: 0xff3b30 });
+    var beaconMesh = new THREE.Mesh(beaconGeo, beaconMat);
+    beaconMesh.position.set(tallestBuildingPos.x - posX, tallestBuildingPos.y + 14.0 - 1.8, tallestBuildingPos.z - posZ);
+    districtGroup.add(beaconMesh);
+    beaconMeshes.push(beaconMesh);
+
+    var bannerSprite = createRepoBannerSprite(repo.name, repo.totalFiles, (repo.tallest ? repo.tallest.size : 0), targetMode === 'night');
+    bannerSprite.position.set(tallestBuildingPos.x, tallestBuildingPos.y + 26.0, tallestBuildingPos.z);
+    bannerSprite.userData = { repoIndex: index, repo: repo, districtCenter: new THREE.Vector3(posX, 15, posZ) };
+    cityGroup.add(bannerSprite);
+
+    var tetherGeo = new THREE.BufferGeometry();
+    var tetherPoints = [
+      new THREE.Vector3(tallestBuildingPos.x, tallestBuildingPos.y + 14.0, tallestBuildingPos.z),
+      new THREE.Vector3(tallestBuildingPos.x, tallestBuildingPos.y + 20.0, tallestBuildingPos.z)
+    ];
+    tetherGeo.setFromPoints(tetherPoints);
+    var tetherMat = new THREE.LineBasicMaterial({ color: 0x00f2fe, linewidth: 2, transparent: true, opacity: 0.8 });
+    var tetherLine = new THREE.Line(tetherGeo, tetherMat);
+    cityGroup.add(tetherLine);
+
+    repoBadges.push({
+      sprite: bannerSprite,
+      line: tetherLine,
+      repo: repo,
+      districtCenter: new THREE.Vector3(posX, 15, posZ),
+      tallestPos: tallestBuildingPos.clone(),
+      height: maxHeight
+    });
+
+    districtData.push({
+      index: index,
+      repo: repo,
+      center: new THREE.Vector3(posX, 15, posZ),
+      tallestPos: tallestBuildingPos.clone(),
+      height: maxHeight
+    });
+
+    cityGroup.add(districtGroup);
+  }
+
+  function buildTrafficCars(cols, rows, stepX, stepZ, originX, originZ, totalW, totalD) {
+    var carColors = [0x3b82f6, 0xef4444, 0x10b981, 0xf59e0b, 0x8b5cf6, 0xf1f5f9];
+    var carGeo = new THREE.BoxGeometry(2.4, 1.4, 4.4);
+
+    var count = 60;
+    for (var i = 0; i < count; i++) {
+      var isHorizontal = Math.random() > 0.5;
+      var colIdx = Math.floor(Math.random() * (cols + 1));
+      var rowIdx = Math.floor(Math.random() * (rows + 1));
+
+      var carCol = carColors[i % carColors.length];
+      var carMat = new THREE.MeshStandardMaterial({ color: carCol, roughness: 0.4, metalness: 0.6 });
+      var carMesh = new THREE.Mesh(carGeo, carMat);
+
+      var dir = (Math.random() > 0.5) ? 1 : -1;
+      var speed = 28 + Math.random() * 20;
+
+      var x, z;
+      if (isHorizontal) {
+        var rz = originZ + (rowIdx - 0.5) * stepZ;
+        x = (Math.random() - 0.5) * totalW;
+        z = rz + (dir > 0 ? 5.5 : -5.5);
+        carMesh.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      } else {
+        var rx = originX + (colIdx - 0.5) * stepX;
+        x = rx + (dir > 0 ? 5.5 : -5.5);
+        z = (Math.random() - 0.5) * totalD;
+        carMesh.rotation.y = dir > 0 ? 0 : Math.PI;
+      }
+
+      carMesh.position.set(x, 0.8, z);
+      trafficGroup.add(carMesh);
+
+      trafficCars.push({
+        mesh: carMesh,
+        isHorizontal: isHorizontal,
+        dir: dir,
+        speed: speed,
+        totalW: totalW,
+        totalD: totalD
+      });
+    }
+  }
+
+  function buildFlightSpline(districts) {
+    if (!districts || !districts.length) return;
+
+    var waypoints = [];
+    var N = districts.length;
+
+    for (var i = 0; i < N; i++) {
+      var d = districts[i];
+      var cx = d.center.x;
+      var cz = d.center.z;
+      var h = Math.max(d.height + 40, 85);
+      var r = 85;
+
+      waypoints.push(new THREE.Vector3(cx + r, h + 14, cz + r * 0.8));
+      waypoints.push(new THREE.Vector3(cx - r * 0.6, h + 4, cz + r));
+      waypoints.push(new THREE.Vector3(cx - r, h, cz - r * 0.6));
+      waypoints.push(new THREE.Vector3(cx + r * 0.5, h + 22, cz - r));
+    }
+
+    if (waypoints.length < 4) {
+      var d0 = districts[0];
+      waypoints = [
+        new THREE.Vector3(d0.center.x + 100, 95, d0.center.z + 100),
+        new THREE.Vector3(d0.center.x - 100, 85, d0.center.z + 100),
+        new THREE.Vector3(d0.center.x - 100, 90, d0.center.z - 100),
+        new THREE.Vector3(d0.center.x + 100, 105, d0.center.z - 100)
+      ];
+    }
+
+    flightSpline = new THREE.CatmullRomCurve3(waypoints, true, 'catmullrom', 0.5);
+  }
+
+  function calcBankAngle(spline, t) {
+    if (!spline) return 0;
+    try {
+      var p1 = spline.getPointAt(t);
+      var p2 = spline.getPointAt((t + 0.02) % 1.0);
+      var p3 = spline.getPointAt((t + 0.04) % 1.0);
+      var v1x = p2.x - p1.x;
+      var v1z = p2.z - p1.z;
+      var v2x = p3.x - p2.x;
+      var v2z = p3.z - p2.z;
+      var ang1 = Math.atan2(v1x, v1z);
+      var ang2 = Math.atan2(v2x, v2z);
+      var diff = ang2 - ang1;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      return Math.max(-0.6, Math.min(0.6, diff));
+    } catch(e) {
+      return 0;
+    }
+  }
+
+  function animate(timestamp) {
+    if (!isRunning) return;
+
+    animationId = requestAnimationFrame(animate);
+
+    var dt = Math.min(0.1, (timestamp - lastTimestamp) / 1000);
+    lastTimestamp = timestamp;
+    totalElapsedTime += dt;
+
+    var targetVal = targetMode === 'night' ? 1.0 : 0.0;
+    if (Math.abs(modeTransition - targetVal) > 0.001) {
+      modeTransition += (targetVal - modeTransition) * 0.06;
+
+      var skyDay = new THREE.Color(0x94b8e8);
+      var skyNight = new THREE.Color(0x060914);
+      var curSky = skyDay.clone().lerp(skyNight, modeTransition);
+      scene.background = curSky;
+
+      var fogDay = new THREE.Color(0xa8c8ec);
+      var fogNight = new THREE.Color(0x070b18);
+      scene.fog.color = fogDay.clone().lerp(fogNight, modeTransition);
+
+      sunLight.intensity = (1.0 - modeTransition) * 1.35;
+      moonLight.intensity = modeTransition * 0.65;
+
+      var ambDay = new THREE.Color(0xa0aec0);
+      var ambNight = new THREE.Color(0x1e293b);
+      ambientLight.color = ambDay.clone().lerp(ambNight, modeTransition);
+      ambientLight.intensity = (1.0 - modeTransition) * 0.75 + modeTransition * 0.45;
+
+      if (starField) {
+        starField.material.opacity = modeTransition * 0.92;
+      }
+
+      if (buildingMaterials && buildingMaterials.length > 0) {
+        for (var mIdx = 0; mIdx < buildingMaterials.length; mIdx++) {
+          buildingMaterials[mIdx].emissiveIntensity = 0.05 + modeTransition * 1.35;
+        }
+      }
+    }
+
+    var beaconScale = 1.0 + 0.35 * Math.sin(totalElapsedTime * 6.0);
+    for (var b = 0; b < beaconMeshes.length; b++) {
+      beaconMeshes[b].scale.set(beaconScale, beaconScale, beaconScale);
+    }
+
+    for (var c = 0; c < trafficCars.length; c++) {
+      var car = trafficCars[c];
+      if (car.isHorizontal) {
+        car.mesh.position.x += car.dir * car.speed * dt;
+        if (Math.abs(car.mesh.position.x) > car.totalW / 2) {
+          car.mesh.position.x = -car.dir * car.totalW / 2;
+        }
+      } else {
+        car.mesh.position.z += car.dir * car.speed * dt;
+        if (Math.abs(car.mesh.position.z) > car.totalD / 2) {
+          car.mesh.position.z = -car.dir * car.totalD / 2;
+        }
+      }
+    }
+
+    if (isAutoCruising && flightSpline) {
+      cruiseProgress = (cruiseProgress + dt * cruiseSpeed * 0.0024) % 1.0;
+      var camPos = flightSpline.getPointAt(cruiseProgress);
+      camPos.y += Math.sin(totalElapsedTime * 0.55) * 1.6;
+
+      targetBankAngle = -calcBankAngle(flightSpline, cruiseProgress) * 14.0;
+      bankAngle += (targetBankAngle - bankAngle) * 0.035;
+
+      if (districtData.length > 0) {
+        var activeIdx = Math.floor(cruiseProgress * districtData.length) % districtData.length;
+        var actDist = districtData[activeIdx];
+        if (actDist) {
+          targetLookAt.copy(actDist.tallestPos || actDist.center);
+          var hudBadge = document.getElementById('city3dCurrentRepoBadge');
+          if (hudBadge && actDist.repo) {
+            hudBadge.textContent = '✈️ ' + actDist.repo.name + ' (' + (actDist.repo.totalFiles || 0) + ' files)';
+          }
+        }
+      }
+
+      currentLookAt.lerp(targetLookAt, 0.018);
+      camera.position.copy(camPos);
+      camera.lookAt(currentLookAt);
+      camera.rotateZ(bankAngle * Math.PI / 180);
+    } else {
+      var ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
+      var oy = orbit.target.y + orbit.radius * Math.cos(orbit.phi);
+      var oz = orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta);
+      camera.position.set(ox, oy, oz);
+      camera.lookAt(orbit.target.x, orbit.target.y, orbit.target.z);
+    }
+
+    if (raycaster && mouse && camera && repoBadges.length > 0) {
+      raycaster.setFromCamera(mouse, camera);
+      var spriteList = repoBadges.map(function(item) { return item.sprite; });
+      var intersects = raycaster.intersectObjects(spriteList, false);
+      if (intersects.length > 0) {
+        canvasEl.style.cursor = 'pointer';
+        hoveredBadge = intersects[0].object;
+      } else {
+        canvasEl.style.cursor = isDragging ? 'grabbing' : 'grab';
+        hoveredBadge = null;
+      }
+    }
+
+    renderer.render(scene, camera);
+  }
+
+  function bindEvents() {
+    window.addEventListener('resize', handleResize);
+
+    canvasEl.addEventListener('pointerdown', function(e) {
+      isDragging = true;
+      previousPointer = { x: e.clientX, y: e.clientY };
+      dragStart = { x: e.clientX, y: e.clientY };
+      clearTimeout(userInteractionTimer);
+    });
+
+    window.addEventListener('pointermove', function(e) {
+      var rect = canvasEl.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      if (!isDragging) return;
+      var dx = e.clientX - previousPointer.x;
+      var dy = e.clientY - previousPointer.y;
+      previousPointer = { x: e.clientX, y: e.clientY };
+
+      orbit.theta -= dx * 0.006;
+      orbit.phi = Math.max(0.1, Math.min(Math.PI / 2.2, orbit.phi + dy * 0.006));
+
+      if (isAutoCruising) {
+        isAutoCruising = false;
+        updateFlightButton();
+      }
+    });
+
+    window.addEventListener('pointerup', function(e) {
+      if (isDragging) {
+        isDragging = false;
+        var moved = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
+        if (moved < 5 && hoveredBadge && hoveredBadge.userData && hoveredBadge.userData.repo) {
+          openRepoDetail(hoveredBadge.userData.repo);
+        }
+
+        clearTimeout(userInteractionTimer);
+        userInteractionTimer = setTimeout(function() {
+          if (!isDragging) {
+            isAutoCruising = true;
+            updateFlightButton();
+          }
+        }, 6000);
+      }
+    });
+
+    canvasEl.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      orbit.radius = Math.max(50, Math.min(450, orbit.radius + e.deltaY * 0.25));
+      if (isAutoCruising) {
+        isAutoCruising = false;
+        updateFlightButton();
+      }
+      clearTimeout(userInteractionTimer);
+      userInteractionTimer = setTimeout(function() {
+        if (!isDragging) {
+          isAutoCruising = true;
+          updateFlightButton();
+        }
+      }, 6000);
+    }, { passive: false });
+  }
+
+  function bindHudControls() {
+    var flightBtn = document.getElementById('city3dFlightBtn');
+    if (flightBtn) {
+      flightBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        toggleFlight();
+      });
+    }
+
+    var dayNightBtn = document.getElementById('city3dDayNightBtn');
+    if (dayNightBtn) {
+      dayNightBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        manualModeOverride = true;
+        toggleDayNight();
+      });
+    }
+
+    var zenBtn = document.getElementById('city3dZenBtn');
+    if (zenBtn) {
+      zenBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        toggleZenMode();
+      });
+    }
+
+    var closeCardBtn = document.getElementById('city3dCardCloseBtn');
+    if (closeCardBtn) {
+      closeCardBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        closeRepoDetail();
+      });
+    }
+
+    var enterRepoBtn = document.getElementById('city3dCardEnterBtn');
+    if (enterRepoBtn) {
+      enterRepoBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        var repoPath = enterRepoBtn.getAttribute('data-repo-path');
+        if (repoPath) {
+          closeRepoDetail();
+          switchRepository(repoPath);
+        }
+      });
+    }
+  }
+
+  function toggleFlight() {
+    isAutoCruising = !isAutoCruising;
+    updateFlightButton();
+  }
+
+  function updateFlightButton() {
+    var textEl = document.getElementById('city3dFlightText');
+    if (textEl) {
+      textEl.textContent = isAutoCruising ? (t('city3dCruise') || '巡航中') : (t('city3dCruisePaused') || '已暂停');
+    }
+  }
+
+  function toggleDayNight() {
+    setDayNight(targetMode === 'night' ? 'day' : 'night');
+  }
+
+  function setDayNight(mode) {
+    targetMode = mode === 'day' ? 'day' : 'night';
+    var iconEl = document.getElementById('city3dDayNightIcon');
+    var textEl = document.getElementById('city3dDayNightText');
+    if (iconEl) iconEl.textContent = targetMode === 'night' ? '🌙' : '☀️';
+    if (textEl) textEl.textContent = targetMode === 'night' ? (t('city3dNight') || '夜间') : (t('city3dDay') || '白天');
+  }
+
+  function syncWithTheme(themeId) {
+    if (manualModeOverride) return;
+    if (themeId === 'default') {
+      setDayNight('day');
+    } else {
+      setDayNight('night');
+    }
+  }
+
+  function toggleZenMode() {
+    isZenMode = !isZenMode;
+    var homePageEl = document.getElementById('homePage');
+    var zenTextEl = document.getElementById('city3dZenText');
+    if (homePageEl) {
+      homePageEl.classList.toggle('zen-mode', isZenMode);
+    }
+    if (containerEl) {
+      containerEl.classList.toggle('zen-mode', isZenMode);
+    }
+    if (zenTextEl) {
+      zenTextEl.textContent = isZenMode ? (t('city3dOverviewMode') || '恢复概览') : (t('city3dZenMode') || '全景沉浸');
+    }
+  }
+
+  function openRepoDetail(repo) {
+    if (!repoCardEl || !repo) return;
+    var nameEl = document.getElementById('city3dCardRepoName');
+    var bldEl = document.getElementById('city3dCardBuildings');
+    var grnEl = document.getElementById('city3dCardGreens');
+    var talEl = document.getElementById('city3dCardTallest');
+    var enterBtn = document.getElementById('city3dCardEnterBtn');
+
+    if (nameEl) nameEl.textContent = repo.name || 'Repository';
+    if (bldEl) bldEl.textContent = (repo.textCount || 0) + ' ' + (t('city3dBuildings') || '栋建筑');
+    if (grnEl) grnEl.textContent = (repo.nonTextCount || 0) + ' ' + (t('city3dGreenSpace') || '处绿化');
+    if (talEl) {
+      var tName = repo.tallest ? (repo.tallest.name || repo.tallest.path) : '-';
+      var tSize = repo.tallest ? formatBytes(repo.tallest.size) : '';
+      talEl.textContent = tName + (tSize ? ' (' + tSize + ')' : '');
+    }
+    if (enterBtn) {
+      enterBtn.setAttribute('data-repo-path', repo.path || '');
+    }
+
+    repoCardEl.hidden = false;
+  }
+
+  function closeRepoDetail() {
+    if (repoCardEl) repoCardEl.hidden = true;
+  }
+
+  function handleResize() {
+    if (!renderer || !camera || !containerEl) return;
+    var isSidebarCollapsed = document.body.classList.contains('sidebar-collapsed');
+    var width = containerEl.clientWidth || (window.innerWidth - (isSidebarCollapsed ? 0 : 260));
+    if (window.innerWidth <= 960) width = window.innerWidth;
+    var height = containerEl.clientHeight || window.innerHeight;
+    if (width <= 0) width = window.innerWidth;
+    if (height <= 0) height = window.innerHeight;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height);
+  }
+
+  function pause() {
+    isRunning = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+  }
+
+  function resume() {
+    if (!isInitialized) {
+      init();
+      return;
+    }
+    if (!isRunning) {
+      isRunning = true;
+      lastTimestamp = performance.now();
+      handleResize();
+      requestAnimationFrame(animate);
+    }
+    setTimeout(handleResize, 60);
+  }
+
+  function fetchCityData() {
+    fetch('/api/city-data')
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data && data.cityData) {
+          buildCity(data.cityData);
+        }
+      })
+      .catch(function(e) {
+        console.warn('Failed to fetch city-data:', e);
+      });
+  }
+
+  return {
+    init: init,
+    buildCity: buildCity,
+    setDayNight: setDayNight,
+    toggleDayNight: toggleDayNight,
+    syncWithTheme: syncWithTheme,
+    toggleFlight: toggleFlight,
+    toggleZenMode: toggleZenMode,
+    pause: pause,
+    resume: resume,
+    handleResize: handleResize
+  };
+})();
+
 function setPageTitle(repoPath) {
   var title = repoPath ? ('GMC ' + repoDisplayName(repoPath)) : 'GMC GitWeb';
   document.title = title;
@@ -10877,12 +12935,16 @@ if (!targetRepo) {
   setPageTitle('');
   updateRepoLink(t('repoRunning'), null);
   if ($('homePage')) $('homePage').hidden = false;
+  if ($('city3dContainer')) $('city3dContainer').hidden = false;
   if ($('gitPage')) $('gitPage').hidden = true;
   if ($('taskPage')) $('taskPage').hidden = true;
   if ($('closeRepoBtn')) $('closeRepoBtn').hidden = true;
   var viewTabsEl = document.querySelector('.view-tabs');
   if (viewTabsEl) viewTabsEl.hidden = true;
   initSidebar();
+  if (typeof City3DEngine !== 'undefined') {
+    City3DEngine.init();
+  }
   loadGitOverview();
 } else {
   updateRepoLink(targetRepo, targetRepo);
@@ -10895,6 +12957,12 @@ if (!targetRepo) {
   connectTaskEvents();
   load();
 }
+
+window.addEventListener('load', function() {
+  if (!targetRepo && typeof City3DEngine !== 'undefined') {
+    City3DEngine.init();
+  }
+});
 
 $('repo').addEventListener('click', openCurrentRepository);
 $('quickActions').addEventListener('click', function(e) {
@@ -12965,6 +15033,14 @@ function escapeHtml(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
     return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
   });
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  var k = 1024;
+  var sizes = ['B', 'KB', 'MB', 'GB'];
+  var i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 </script>
 </body>
