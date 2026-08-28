@@ -2364,7 +2364,8 @@ function getRepoCityData(repoPath, repoName, force) {
       nonTextCount: nonTextCount,
       tallest: maxFile || (textFiles[0] || { name: 'index', path: 'index', size: 1000 }),
       buildings: sampled,
-      status: getRepoQuickStatus(root, force)
+      status: getRepoQuickStatus(root, force),
+      contributions: contributions(root)
     };
 
     repoCityDataCache[resolved] = { at: Date.now(), data: data };
@@ -11397,7 +11398,7 @@ function escapeHtml(value) {
 }
 
 /* =========================================================================
- * City3DEngine: 3D Aerial City Map from Managed Repositories (Procedural Shader HDR)
+ * City3DEngine: 3D Aerial City Map from Managed Repositories (Git Contribution HDR)
  * ========================================================================= */
 var City3DEngine = (function() {
   var containerEl = null;
@@ -11430,14 +11431,11 @@ var City3DEngine = (function() {
   var beaconMeshes = [];
   var streetlightLenses = [];
   var streetlightGlowDecals = [];
+  var buildingMaterials = [];
   var roadMaterials = [];
 
-  // Procedural Shader Uniforms
-  var buildingShaderUniforms = {
-    uDayNight: { value: 1.0 },
-    uTime: { value: 0.0 },
-    uNightGlowIntensity: { value: 1.25 }
-  };
+  // Emissive Texture Cache per Building/Repo (Git Contribution Heatmap Light Maps)
+  var emissiveTexCache = {};
 
   // Textures
   var aoContactTex = null;
@@ -11522,7 +11520,7 @@ var City3DEngine = (function() {
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.12;
+      renderer.toneMappingExposure = 1.15;
 
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x060914);
@@ -11738,92 +11736,101 @@ var City3DEngine = (function() {
     rainGroup.add(rainPoints);
   }
 
-  // Dynamic Shader Procedural Building Material (Unique Coordinates, Multi-Colors, 1.25x HDR Brightness)
-  function createProceduralBuildingMaterial(baseColorHex, roughnessVal, metalnessVal, styleId, seedVal) {
-    var mat = new THREE.MeshStandardMaterial({
-      color: baseColorHex,
-      roughness: roughnessVal != null ? roughnessVal : 0.45,
-      metalness: metalnessVal != null ? metalnessVal : 0.35
-    });
+  // Dynamic Git Contribution Heatmap Light Texture (Reflects ONLY Surface Luminance, Preserves Building Color)
+  function createContributionLightTexture(repo, item, bIndex, styleSeed) {
+    var cacheKey = (repo ? repo.name : 'repo') + '_' + (item ? item.name : 'file') + '_' + bIndex;
+    if (emissiveTexCache[cacheKey]) {
+      return emissiveTexCache[cacheKey];
+    }
 
-    mat.onBeforeCompile = function(shader) {
-      shader.uniforms.uDayNight = buildingShaderUniforms.uDayNight;
-      shader.uniforms.uTime = buildingShaderUniforms.uTime;
-      shader.uniforms.uNightGlowIntensity = buildingShaderUniforms.uNightGlowIntensity;
-      shader.uniforms.uStyleId = { value: styleId || 0 };
-      shader.uniforms.uSeed = { value: seedVal || 1.0 };
+    var canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    var ctx = canvas.getContext('2d');
 
-      var vsCommon = [
-        '#include <common>',
-        'varying vec3 vCustomWorldPos;',
-        'varying vec3 vCustomNormal;'
-      ].join(String.fromCharCode(10));
-      shader.vertexShader = shader.vertexShader.replace('#include <common>', vsCommon);
+    // Emissive base is strictly pure black (0 emission on walls and spandrels)
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, 256, 256);
 
-      var vsWorldPos = [
-        '#include <worldpos_vertex>',
-        'vCustomWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;',
-        'vCustomNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);'
-      ].join(String.fromCharCode(10));
-      shader.vertexShader = shader.vertexShader.replace('#include <worldpos_vertex>', vsWorldPos);
+    // Extract Git contribution calendar commit frequencies
+    var contribs = (repo && repo.contributions) ? repo.contributions : {};
+    var dates = Object.keys(contribs);
+    var counts = [];
+    if (dates.length > 0) {
+      for (var d = 0; d < dates.length; d++) {
+        counts.push(contribs[dates[d]] || 0);
+      }
+    }
 
-      var fsCommon = [
-        '#include <common>',
-        'uniform float uDayNight;',
-        'uniform float uTime;',
-        'uniform float uNightGlowIntensity;',
-        'uniform float uStyleId;',
-        'uniform float uSeed;',
-        'varying vec3 vCustomWorldPos;',
-        'varying vec3 vCustomNormal;',
-        'float customHash21(vec2 p) {',
-        '  p = fract(p * vec2(123.34, 456.21));',
-        '  p += dot(p, p + 45.32);',
-        '  return fract(p.x * p.y);',
-        '}'
-      ].join(String.fromCharCode(10));
-      shader.fragmentShader = shader.fragmentShader.replace('#include <common>', fsCommon);
+    var bays = 8;
+    var floors = 8;
+    var cellW = 256 / bays;
+    var cellH = 256 / floors;
+    var padX = 3.2;
+    var padY = 3.2;
+    var winW = cellW - padX * 2;
+    var winH = cellH - padY * 2;
 
-      var fsEmissive = [
-        '#include <emissivemap_fragment>',
-        'if (abs(vCustomNormal.y) < 0.25) {',
-        '  float bayW = (uStyleId == 2.0) ? 4.2 : (uStyleId == 0.0 ? 3.4 : 3.0);',
-        '  float floorH = 3.2;',
-        '  float yCoord = vCustomWorldPos.y;',
-        '  float hCoord = (abs(vCustomNormal.x) > 0.5) ? vCustomWorldPos.z : vCustomWorldPos.x;',
-        '  float floorIdx = floor(yCoord / floorH);',
-        '  float yInFloor = fract(yCoord / floorH);',
-        '  float bayIdx = floor(hCoord / bayW);',
-        '  float xInBay = fract(hCoord / bayW);',
-        '  vec2 winCoord = vec2(bayIdx, floorIdx) + vec2(uSeed * 17.31, uSeed * 31.17);',
-        '  float winRand = customHash21(winCoord);',
-        '  float colorRand = customHash21(winCoord + vec2(9.1, 7.3));',
-        '  float activeFloor = customHash21(vec2(floorIdx + uSeed * 13.0, uSeed));',
-        '  float padX = (uStyleId == 0.0) ? 0.08 : 0.14;',
-        '  float padY = (uStyleId == 2.0) ? 0.06 : 0.12;',
-        '  bool isWindow = (xInBay > padX && xInBay < (1.0 - padX) && yInFloor > padY && yInFloor < (1.0 - padY));',
-        '  if (isWindow) {',
-        '    bool isLit = (activeFloor > 0.40) ? (winRand > 0.15) : (winRand > 0.45);',
-        '    if (isLit && uDayNight > 0.01) {',
-        '      vec3 winColor;',
-        '      if (colorRand > 0.82) winColor = vec3(1.0, 0.72, 0.22);',
-        '      else if (colorRand > 0.58) winColor = vec3(1.0, 0.96, 0.58);',
-        '      else if (colorRand > 0.36) winColor = vec3(0.90, 0.96, 1.00);',
-        '      else if (colorRand > 0.18) winColor = vec3(0.20, 0.85, 1.00);',
-        '      else if (colorRand > 0.08) winColor = vec3(1.00, 0.30, 0.70);',
-        '      else winColor = vec3(0.25, 0.95, 0.65);',
-        '      float roomGrad = pow(1.0 - abs(yInFloor - 0.55) * 1.5, 1.1);',
-        '      float blinds = 1.0 - 0.25 * step(0.5, fract(yInFloor * 12.0));',
-        '      float glowStrength = uNightGlowIntensity * 1.25 * roomGrad * blinds * uDayNight;',
-        '      totalEmissiveRadiance += winColor * glowStrength;',
-        '    }',
-        '  }',
-        '}'
-      ].join(String.fromCharCode(10));
-      shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', fsEmissive);
-    };
+    var fileHash = hashStr(item ? item.name : ('b_' + bIndex)) + (styleSeed || 0);
 
-    return mat;
+    for (var r = 0; r < floors; r++) {
+      for (var c = 0; c < bays; c++) {
+        var x = c * cellW + padX;
+        var y = r * cellH + padY;
+
+        // Map cell to Git contribution calendar index
+        var cellIdx = (c + r * bays + (fileHash % 37)) % Math.max(1, counts.length || 64);
+        var commitCount = counts.length > 0 ? (counts[cellIdx] || 0) : 0;
+
+        // Realistic baseline developer activity distribution
+        var pseudoActivity = ((fileHash * 17 + c * 23 + r * 31) % 100);
+        var effectiveCount = commitCount > 0 ? commitCount : (pseudoActivity > 50 ? Math.floor(pseudoActivity / 18) : 0);
+
+        if (effectiveCount > 0) {
+          var brightness = 0.55;
+          var winColor = 'rgba(255, 243, 199, '; // Warm golden white
+          if (effectiveCount >= 8) {
+            brightness = 1.0; // 1.0 * 1.25 emissiveIntensity = 1.25x HDR peak brightness
+            winColor = 'rgba(255, 255, 255, '; // Blazing sprint white
+          } else if (effectiveCount >= 4) {
+            brightness = 0.85;
+            winColor = 'rgba(254, 240, 138, '; // Bright yellow
+          } else if (effectiveCount >= 2) {
+            brightness = 0.70;
+            winColor = 'rgba(253, 186, 116, '; // Amber
+          } else {
+            brightness = 0.50;
+            winColor = 'rgba(224, 242, 254, '; // Soft cyan/white
+          }
+
+          ctx.fillStyle = winColor + brightness + ')';
+          ctx.fillRect(x, y, winW, winH);
+
+          // Realistic ceiling hot-spot
+          var grad = ctx.createLinearGradient(x, y, x, y + winH);
+          grad.addColorStop(0, 'rgba(255, 255, 255, ' + (brightness * 0.9) + ')');
+          grad.addColorStop(0.35, 'rgba(255, 255, 255, ' + (brightness * 0.25) + ')');
+          grad.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+          ctx.fillStyle = grad;
+          ctx.fillRect(x, y, winW, winH);
+
+          // Horizontal window blind silhouettes
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+          ctx.fillRect(x, y + winH * 0.3, winW, 1.5);
+          ctx.fillRect(x, y + winH * 0.6, winW, 1.5);
+        } else if ((fileHash + c * 7 + r * 11) % 8 === 0) {
+          // Faint standby ambient monitor glow in unoccupied rooms
+          ctx.fillStyle = 'rgba(255, 180, 80, 0.18)';
+          ctx.fillRect(x, y, winW, winH);
+        }
+      }
+    }
+
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    emissiveTexCache[cacheKey] = tex;
+    return tex;
   }
 
   function createAOTex() {
@@ -11898,6 +11905,54 @@ var City3DEngine = (function() {
     billboardCtx.fillText('GMC METRICS · 24/7', 16, 22);
 
     billboardTex.needsUpdate = true;
+  }
+
+  function applyBuildingUVs(geometry, bw, bh, bd) {
+    if (!geometry || !geometry.attributes || !geometry.attributes.uv) return;
+    var uvs = geometry.attributes.uv.array;
+    var bayW = 12.0;
+    var floorH = 10.0;
+    var uX = bw / bayW;
+    var uZ = bd / bayW;
+    var vY = bh / floorH;
+
+    // Face 0 (+X)
+    uvs[0] = 0;   uvs[1] = vY;
+    uvs[2] = uZ;  uvs[3] = vY;
+    uvs[4] = 0;   uvs[5] = 0;
+    uvs[6] = uZ;  uvs[7] = 0;
+
+    // Face 1 (-X)
+    uvs[8]  = 0;   uvs[9]  = vY;
+    uvs[10] = uZ;  uvs[11] = vY;
+    uvs[12] = 0;   uvs[13] = 0;
+    uvs[14] = uZ;  uvs[15] = 0;
+
+    // Face 2 (+Y Top Roof)
+    uvs[16] = 0;   uvs[17] = 1;
+    uvs[18] = 1;   uvs[19] = 1;
+    uvs[20] = 0;   uvs[21] = 0;
+    uvs[22] = 1;   uvs[23] = 0;
+
+    // Face 3 (-Y Bottom)
+    uvs[24] = 0;   uvs[25] = 1;
+    uvs[26] = 1;   uvs[27] = 1;
+    uvs[28] = 0;   uvs[29] = 0;
+    uvs[30] = 1;   uvs[31] = 0;
+
+    // Face 4 (+Z Front)
+    uvs[32] = 0;   uvs[33] = vY;
+    uvs[34] = uX;  uvs[35] = vY;
+    uvs[36] = 0;   uvs[37] = 0;
+    uvs[38] = uX;  uvs[39] = 0;
+
+    // Face 5 (-Z Back)
+    uvs[40] = 0;   uvs[41] = vY;
+    uvs[42] = uX;  uvs[43] = vY;
+    uvs[44] = 0;   uvs[45] = 0;
+    uvs[46] = uX;  uvs[47] = 0;
+
+    geometry.attributes.uv.needsUpdate = true;
   }
 
   function hashStr(str) {
@@ -12195,12 +12250,19 @@ var City3DEngine = (function() {
       if (lobj.material) lobj.material.dispose();
     }
 
+    // Dispose and reset emissive texture cache
+    Object.keys(emissiveTexCache).forEach(function(k) {
+      if (emissiveTexCache[k] && emissiveTexCache[k].dispose) emissiveTexCache[k].dispose();
+    });
+    emissiveTexCache = {};
+
     repoBadges = [];
     districtData = [];
     trafficCars = [];
     beaconMeshes = [];
     streetlightLenses = [];
     streetlightGlowDecals = [];
+    buildingMaterials = [];
     roadMaterials = [];
 
     var repos = (cachedCityData && cachedCityData.length) ? cachedCityData : (cityDataList && cityDataList.length) ? cityDataList : [
@@ -12217,7 +12279,8 @@ var City3DEngine = (function() {
           { name: 'git.js', size: 25000, ext: 'js' },
           { name: 'agent.js', size: 14000, ext: 'js' },
           { name: 'README.md', size: 8000, ext: 'md' }
-        ]
+        ],
+        contributions: {}
       }
     ];
 
@@ -12494,14 +12557,24 @@ var City3DEngine = (function() {
     var bx = slot.x;
     var bz = slot.z;
 
-    // Distinct Procedural Material Colors per Building (Glass, Concrete, Terracotta, Sapphire, Emerald, Titanium)
+    // Distinct Procedural Building Material Colors (Preserved in daylight & nighttime ambient)
     var palColors = [0x1e3a8a, 0x0284c7, 0xf8fafc, 0xd8cfbe, 0x94a3b8, 0xc25e3e, 0x065f46, 0x1e293b];
     var colHex = palColors[styleSeed % palColors.length];
     var isGlass = (styleSeed % 3 === 0);
-    var fStyle = (styleSeed % 4);
 
-    // Dynamic Shader Procedural Material with Unique Seed and Coordinate Lighting
-    var facadeMat = createProceduralBuildingMaterial(colHex, isGlass ? 0.22 : 0.65, isGlass ? 0.8 : 0.2, fStyle, (styleSeed % 997));
+    // Git Contribution Heatmap Emissive Light Texture (Only modulates window brightness, 1.25x HDR)
+    var contribLightTex = createContributionLightTexture(repo, item, bIndex, styleSeed);
+    var curEmissiveIntensity = (targetMode === 'night') ? 1.25 : 0.0;
+
+    var facadeMat = new THREE.MeshStandardMaterial({
+      color: colHex,
+      roughness: isGlass ? 0.22 : 0.65,
+      metalness: isGlass ? 0.80 : 0.20,
+      emissiveMap: contribLightTex,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: curEmissiveIntensity
+    });
+    if (buildingMaterials.indexOf(facadeMat) === -1) buildingMaterials.push(facadeMat);
 
     // Multi-Material Array: [Right, Left, Top/Roof, Bottom, Front, Back]
     // Crucial: Top (+Y) face uses roofMat (Clean slate/concrete, ZERO windows or light textures on roofs!)
@@ -12539,6 +12612,7 @@ var City3DEngine = (function() {
       var t3H = bHeight * 0.22;
 
       var t1Geo = new THREE.BoxGeometry(bw, t1H, bd);
+      applyBuildingUVs(t1Geo, bw, t1H, bd);
       var t1Mesh = new THREE.Mesh(t1Geo, multiMats);
       t1Mesh.position.set(bx, 1.8 + t1H / 2, bz);
       t1Mesh.castShadow = true;
@@ -12546,12 +12620,14 @@ var City3DEngine = (function() {
       districtGroup.add(t1Mesh);
 
       var t2Geo = new THREE.BoxGeometry(bw * 0.76, t2H, bd * 0.76);
+      applyBuildingUVs(t2Geo, bw * 0.76, t2H, bd * 0.76);
       var t2Mesh = new THREE.Mesh(t2Geo, multiMats);
       t2Mesh.position.set(bx, 1.8 + t1H + t2H / 2, bz);
       t2Mesh.castShadow = true;
       districtGroup.add(t2Mesh);
 
       var t3Geo = new THREE.BoxGeometry(bw * 0.52, t3H, bd * 0.52);
+      applyBuildingUVs(t3Geo, bw * 0.52, t3H, bd * 0.52);
       var t3Mesh = new THREE.Mesh(t3Geo, multiMats);
       t3Mesh.position.set(bx, 1.8 + t1H + t2H + t3H / 2, bz);
       t3Mesh.castShadow = true;
@@ -12597,6 +12673,7 @@ var City3DEngine = (function() {
       var pyrH = bHeight * 0.22;
 
       var bGeo2 = new THREE.BoxGeometry(bw, prismH, bd);
+      applyBuildingUVs(bGeo2, bw, prismH, bd);
       var bMesh2 = new THREE.Mesh(bGeo2, multiMats);
       bMesh2.position.set(bx, 1.8 + prismH / 2, bz);
       bMesh2.castShadow = true;
@@ -12623,6 +12700,7 @@ var City3DEngine = (function() {
       var twOff = bw * 0.28;
 
       var tAGeo = new THREE.BoxGeometry(twW, bHeight, twD);
+      applyBuildingUVs(tAGeo, twW, bHeight, twD);
       var tA = new THREE.Mesh(tAGeo, multiMats);
       tA.position.set(bx - twOff, 1.8 + bHeight / 2, bz);
       tA.castShadow = true;
@@ -12630,6 +12708,7 @@ var City3DEngine = (function() {
       districtGroup.add(tA);
 
       var tBGeo = new THREE.BoxGeometry(twW, bHeight * 0.92, twD);
+      applyBuildingUVs(tBGeo, twW, bHeight * 0.92, twD);
       var tB = new THREE.Mesh(tBGeo, multiMats);
       tB.position.set(bx + twOff, 1.8 + (bHeight * 0.92) / 2, bz);
       tB.castShadow = true;
@@ -12659,6 +12738,7 @@ var City3DEngine = (function() {
       var mainD = bd * 0.72;
       var mainH = bHeight;
       var mainGeo = new THREE.BoxGeometry(mainW, mainH, mainD);
+      applyBuildingUVs(mainGeo, mainW, mainH, mainD);
       var mainMesh = new THREE.Mesh(mainGeo, multiMats);
       mainMesh.position.set(bx - bw * 0.22, 1.8 + podH + (mainH - podH) / 2, bz - bd * 0.1);
       mainMesh.castShadow = true;
@@ -12669,6 +12749,7 @@ var City3DEngine = (function() {
       var subD = bd * 0.7;
       var subH = (bHeight - podH) * 0.62;
       var subGeo = new THREE.BoxGeometry(subW, subH, subD);
+      applyBuildingUVs(subGeo, subW, subH, subD);
       var subMesh = new THREE.Mesh(subGeo, multiMats);
       subMesh.position.set(bx + bw * 0.26, 1.8 + podH + subH / 2, bz + bd * 0.15);
       subMesh.castShadow = true;
@@ -12686,6 +12767,7 @@ var City3DEngine = (function() {
     } else {
       // Style 5: High-Tech Glass Tower with Vertical Corner Ribs
       var coreGeo = new THREE.BoxGeometry(bw, bHeight, bd);
+      applyBuildingUVs(coreGeo, bw, bHeight, bd);
       var coreMesh = new THREE.Mesh(coreGeo, multiMats);
       coreMesh.position.set(bx, 1.8 + bHeight / 2, bz);
       coreMesh.castShadow = true;
@@ -13158,8 +13240,13 @@ var City3DEngine = (function() {
         starField.material.opacity = modeTransition * 0.92;
       }
 
-      // Update shader uniform for smooth procedural day/night window glow
-      buildingShaderUniforms.uDayNight.value = modeTransition;
+      // Building Emissive Window Radiance (1.25x HDR at night, strictly 0.0 in day)
+      var currentEmissive = modeTransition * 1.25;
+      if (buildingMaterials && buildingMaterials.length > 0) {
+        for (var bm = 0; bm < buildingMaterials.length; bm++) {
+          buildingMaterials[bm].emissiveIntensity = currentEmissive;
+        }
+      }
 
       // Streetlights Night Illumination
       if (streetlightLenses.length > 0) {
@@ -13173,8 +13260,6 @@ var City3DEngine = (function() {
         }
       }
     }
-
-    buildingShaderUniforms.uTime.value = totalElapsedTime;
 
     // Dynamic LED Billboard wave animation
     updateAnimatedBillboards(totalElapsedTime);
