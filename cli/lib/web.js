@@ -5951,6 +5951,12 @@ body.sidebar-collapsed .city-3d-hud-left {
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 </head>
 <body>
 <div class="app-container">
@@ -5987,10 +5993,6 @@ body.sidebar-collapsed .city-3d-hud-left {
         <button id="city3dDayNightBtn" class="city-3d-btn" type="button" title="昼夜切换" data-i18n-title="city3dDay">
           <span id="city3dDayNightIcon">☀️</span>
           <span id="city3dDayNightText">白天</span>
-        </button>
-        <button id="city3dWeatherBtn" class="city-3d-btn" type="button" title="天气切换 (晴空 / 赛博雨夜)" data-i18n-title="city3dWeather">
-          <span id="city3dWeatherIcon">🌧️</span>
-          <span id="city3dWeatherText">雨夜</span>
         </button>
         <button id="city3dZenBtn" class="city-3d-btn city-3d-btn-highlight" type="button" title="全屏沉浸/显示概览" data-i18n-title="city3dZenMode">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
@@ -11411,6 +11413,11 @@ var City3DEngine = (function() {
   var isInitialized = false;
   var isRunning = false;
 
+  // Postprocessing & Unreal Bloom
+  var composer = null;
+  var renderPass = null;
+  var bloomPass = null;
+
   // Scene Objects
   var cityGroup = null;
   var skyGroup = null;
@@ -11418,6 +11425,10 @@ var City3DEngine = (function() {
   var rainGroup = null;
   var streetlightsGroup = null;
   var trafficGroup = null;
+  var searchlightsGroup = null;
+  var avTrafficGroup = null;
+  var hologramGroup = null;
+  var groundMistGroup = null;
   var sunLight = null;
   var moonLight = null;
   var ambientLight = null;
@@ -11428,6 +11439,11 @@ var City3DEngine = (function() {
   var repoBadges = [];
   var districtData = [];
   var trafficCars = [];
+  var flyingAVs = [];
+  var searchlightCones = [];
+  var neonConduitMaterials = [];
+  var holographicObjects = [];
+  var groundMistParticles = [];
   var beaconMeshes = [];
   var streetlightLenses = [];
   var streetlightGlowDecals = [];
@@ -11436,6 +11452,10 @@ var City3DEngine = (function() {
 
   // Emissive Texture Cache per Building/Repo (Git Contribution Heatmap Light Maps)
   var emissiveTexCache = {};
+
+  // Multi-Channel Animated Cyberpunk Screens (Arasaka, Night City, Git Code Rain, Trauma Team)
+  var cyberScreenChannels = [];
+  var cyberScreenTextures = [];
 
   // Textures
   var aoContactTex = null;
@@ -11454,7 +11474,7 @@ var City3DEngine = (function() {
   var isRaining = true;
   var rainPoints = null;
   var rainPositions = null;
-  var rainCount = 2400;
+  var rainCount = 2800;
 
   // Airplane Cruise Flight
   var isAutoCruising = true;
@@ -11520,14 +11540,34 @@ var City3DEngine = (function() {
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.15;
+      renderer.toneMappingExposure = 1.4;
 
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x060914);
-      scene.fog = new THREE.FogExp2(0x070b18, 0.0018);
+      scene.background = new THREE.Color(0x060913);
+      scene.fog = null; // Clean crystal-clear view, no murky fog!
 
       camera = new THREE.PerspectiveCamera(50, width / height, 1, 3800);
       camera.position.set(160, 140, 220);
+
+      // Unreal Bloom Post-Processing Pipeline
+      if (typeof THREE.EffectComposer !== 'undefined' && typeof THREE.UnrealBloomPass !== 'undefined') {
+        try {
+          renderPass = new THREE.RenderPass(scene, camera);
+          bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(width, height),
+            0.65, // strength
+            0.25, // radius
+            1  // threshold (isolates true luminous highlights without blowing out text)
+          );
+          composer = new THREE.EffectComposer(renderer);
+          composer.addPass(renderPass);
+          composer.addPass(bloomPass);
+        } catch (compErr) {
+          console.warn('EffectComposer init fallback:', compErr);
+          composer = null;
+          bloomPass = null;
+        }
+      }
 
       currentLookAt = new THREE.Vector3(0, 15, 0);
       targetLookAt = new THREE.Vector3(0, 15, 0);
@@ -11539,24 +11579,15 @@ var City3DEngine = (function() {
       setupSkyAndStars();
       createAOTex();
       createLampGlowTex();
+      initCyberScreens();
       createAnimatedBillboardTexture();
 
       cityGroup = new THREE.Group();
       scene.add(cityGroup);
 
-      trafficGroup = new THREE.Group();
-      scene.add(trafficGroup);
-
-      cloudsGroup = new THREE.Group();
-      scene.add(cloudsGroup);
-
-      rainGroup = new THREE.Group();
-      scene.add(rainGroup);
-
       streetlightsGroup = new THREE.Group();
       scene.add(streetlightsGroup);
 
-      setupCloudsAndRain();
       bindEvents();
       bindHudControls();
 
@@ -11584,59 +11615,51 @@ var City3DEngine = (function() {
   }
 
   function loadThreeScript(cb) {
-    if (typeof THREE !== 'undefined') {
+    if (typeof THREE !== 'undefined' && typeof THREE.EffectComposer !== 'undefined' && typeof THREE.UnrealBloomPass !== 'undefined') {
       if (typeof cb === 'function') cb();
       return;
     }
-    var existing = document.querySelector('script[src*="three"]');
-    if (existing) {
-      existing.addEventListener('load', function() {
+    var list = [
+      'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js'
+    ];
+    function loadNext(idx) {
+      if (idx >= list.length || typeof THREE !== 'undefined' && idx > 0 && typeof THREE.UnrealBloomPass !== 'undefined') {
         if (typeof cb === 'function') cb();
-      });
-      existing.addEventListener('error', function() {
-        var s2 = document.createElement('script');
-        s2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js';
-        s2.onload = function() { if (typeof cb === 'function') cb(); };
-        document.head.appendChild(s2);
-      });
-      return;
+        return;
+      }
+      var src = list[idx];
+      var s = document.createElement('script');
+      s.src = src;
+      s.onload = function() { loadNext(idx + 1); };
+      s.onerror = function() { loadNext(idx + 1); };
+      document.head.appendChild(s);
     }
-    var s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    s.onload = function() { if (typeof cb === 'function') cb(); };
-    s.onerror = function() {
-      var s2 = document.createElement('script');
-      s2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js';
-      s2.onload = function() { if (typeof cb === 'function') cb(); };
-      document.head.appendChild(s2);
-    };
-    document.head.appendChild(s);
+    loadNext(0);
   }
 
   function setupLighting() {
-    ambientLight = new THREE.AmbientLight(0x475569, 0.45);
+    ambientLight = new THREE.AmbientLight(0x1e293b, 0.95);
     scene.add(ambientLight);
 
-    hemiLight = new THREE.HemisphereLight(0xcce0ff, 0x334155, 0.75);
-    scene.add(hemiLight);
-
-    sunLight = new THREE.DirectionalLight(0xfff5e0, 1.25);
-    sunLight.position.set(240, 340, 180);
+    sunLight = new THREE.DirectionalLight(0xfff5e0, 1.35);
+    sunLight.position.set(220, 320, 180);
     sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 1024;
-    sunLight.shadow.mapSize.height = 1024;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
     sunLight.shadow.camera.near = 10;
     sunLight.shadow.camera.far = 900;
-    sunLight.shadow.camera.left = -280;
-    sunLight.shadow.camera.right = 280;
-    sunLight.shadow.camera.top = 280;
-    sunLight.shadow.camera.bottom = -280;
-    sunLight.shadow.bias = -0.0004;
+    sunLight.shadow.camera.left = -300;
+    sunLight.shadow.camera.right = 300;
+    sunLight.shadow.camera.top = 300;
+    sunLight.shadow.camera.bottom = -300;
+    sunLight.shadow.bias = -0.0003;
     scene.add(sunLight);
-
-    moonLight = new THREE.DirectionalLight(0x818cf8, 0.55);
-    moonLight.position.set(-180, 260, -140);
-    scene.add(moonLight);
   }
 
   function setupSkyAndStars() {
@@ -11684,56 +11707,6 @@ var City3DEngine = (function() {
     });
     starField = new THREE.Points(starGeo, starMat);
     skyGroup.add(starField);
-  }
-
-  function setupCloudsAndRain() {
-    var cloudMat = new THREE.MeshStandardMaterial({
-      color: 0xe2e8f0,
-      roughness: 0.9,
-      transparent: true,
-      opacity: 0.52
-    });
-    var cloudGeo1 = new THREE.DodecahedronGeometry(22, 1);
-    var cloudGeo2 = new THREE.DodecahedronGeometry(16, 1);
-
-    for (var c = 0; c < 14; c++) {
-      var cloudGroup = new THREE.Group();
-      var p1 = new THREE.Mesh(cloudGeo1, cloudMat);
-      var p2 = new THREE.Mesh(cloudGeo2, cloudMat);
-      p2.position.set(16, -3, 8);
-      var p3 = new THREE.Mesh(cloudGeo2, cloudMat);
-      p3.position.set(-16, -2, -6);
-      cloudGroup.add(p1);
-      cloudGroup.add(p2);
-      cloudGroup.add(p3);
-
-      var cx = (Math.random() - 0.5) * 800;
-      var cy = 190 + Math.random() * 70;
-      var cz = (Math.random() - 0.5) * 800;
-      cloudGroup.position.set(cx, cy, cz);
-      cloudGroup.scale.set(1.4, 0.45, 1.1);
-      cloudGroup.userData = { speed: 4.5 + Math.random() * 4.0 };
-      cloudsGroup.add(cloudGroup);
-    }
-
-    var rainGeo = new THREE.BufferGeometry();
-    rainPositions = new Float32Array(rainCount * 3);
-    for (var r = 0; r < rainCount; r++) {
-      rainPositions[r * 3] = (Math.random() - 0.5) * 900;
-      rainPositions[r * 3 + 1] = Math.random() * 260;
-      rainPositions[r * 3 + 2] = (Math.random() - 0.5) * 900;
-    }
-    rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
-
-    var rainMat = new THREE.PointsMaterial({
-      size: 2.2,
-      color: 0x93c5fd,
-      transparent: true,
-      opacity: 0.65,
-      depthWrite: false
-    });
-    rainPoints = new THREE.Points(rainGeo, rainMat);
-    rainGroup.add(rainPoints);
   }
 
   // Dynamic Git Contribution Heatmap Light Texture (Reflects ONLY Surface Luminance, Preserves Building Color)
@@ -11871,43 +11844,357 @@ var City3DEngine = (function() {
     lampGlowTex = new THREE.CanvasTexture(canvasLamp);
   }
 
+  function initCyberScreens() {
+    cyberScreenChannels = [];
+    cyberScreenTextures = [];
+
+    var channelConfigs = [
+      { id: 'arasaka', name: 'GMC // NEURAL NET', w: 512, h: 256 },
+      { id: 'nightcity', name: 'NIGHT CITY 2077', w: 512, h: 256 },
+      { id: 'gitmatrix', name: 'GIT CODE MATRIX', w: 512, h: 256 },
+      { id: 'traumateam', name: 'TRAUMA TEAM REPO', w: 512, h: 256 }
+    ];
+
+    for (var i = 0; i < channelConfigs.length; i++) {
+      var cfg = channelConfigs[i];
+      var cvs = document.createElement('canvas');
+      cvs.width = cfg.w;
+      cvs.height = cfg.h;
+      var ctx = cvs.getContext('2d');
+      var tex = new THREE.CanvasTexture(cvs);
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+
+      cyberScreenChannels.push({
+        id: cfg.id,
+        name: cfg.name,
+        canvas: cvs,
+        ctx: ctx,
+        tex: tex,
+        width: cfg.w,
+        height: cfg.h
+      });
+      cyberScreenTextures.push(tex);
+    }
+
+    // Default legacy billboard alias
+    billboardCanvas = cyberScreenChannels[0].canvas;
+    billboardCtx = cyberScreenChannels[0].ctx;
+    billboardTex = cyberScreenChannels[0].tex;
+  }
+
   function createAnimatedBillboardTexture() {
-    billboardCanvas = document.createElement('canvas');
-    billboardCanvas.width = 256;
-    billboardCanvas.height = 128;
-    billboardCtx = billboardCanvas.getContext('2d');
-    billboardTex = new THREE.CanvasTexture(billboardCanvas);
+    if (!cyberScreenChannels.length) {
+      initCyberScreens();
+    }
   }
 
   function updateAnimatedBillboards(time) {
-    if (!billboardCtx || !billboardTex) return;
-    billboardCtx.fillStyle = '#050a14';
-    billboardCtx.fillRect(0, 0, 256, 128);
+    if (!cyberScreenChannels || !cyberScreenChannels.length) return;
 
-    billboardCtx.strokeStyle = '#00f2fe';
-    billboardCtx.lineWidth = 2;
-    billboardCtx.beginPath();
-    for (var x = 0; x < 256; x += 8) {
-      var y = 64 + Math.sin(x * 0.05 + time * 3.5) * 22 + Math.cos(x * 0.02 - time * 2.0) * 12;
-      if (x === 0) billboardCtx.moveTo(x, y);
-      else billboardCtx.lineTo(x, y);
+    for (var ch = 0; ch < cyberScreenChannels.length; ch++) {
+      var sc = cyberScreenChannels[ch];
+      var ctx = sc.ctx;
+      var w = sc.width;
+      var h = sc.height;
+
+      if (sc.id === 'arasaka') {
+        // Channel 0: GMC NEURAL MATRIX // ARASAKA STYLE
+        ctx.fillStyle = '#030712';
+        ctx.fillRect(0, 0, w, h);
+
+        // Cyber Grid Lines
+        ctx.strokeStyle = 'rgba(0, 242, 254, 0.15)';
+        ctx.lineWidth = 1;
+        for (var gx = 0; gx < w; gx += 32) {
+          ctx.beginPath();
+          ctx.moveTo(gx, 0);
+          ctx.lineTo(gx, h);
+          ctx.stroke();
+        }
+        for (var gy = 0; gy < h; gy += 32) {
+          ctx.beginPath();
+          ctx.moveTo(0, gy);
+          ctx.lineTo(w, gy);
+          ctx.stroke();
+        }
+
+        // Header Bar
+        ctx.fillStyle = 'rgba(0, 242, 254, 0.18)';
+        ctx.fillRect(16, 14, w - 32, 36);
+        ctx.strokeStyle = '#00f2fe';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(16, 14, w - 32, 36);
+
+        ctx.font = 'bold 20px monospace';
+        ctx.fillStyle = '#00f2fe';
+        ctx.textAlign = 'left';
+        ctx.fillText('⚡ GMC // NEURAL MATRIX · 荒坂知能', 28, 38);
+
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 16px monospace';
+        ctx.fillStyle = '#f43f5e';
+        ctx.fillText('[ONLINE 99.8%]', w - 28, 38);
+
+        // Animated Rotating Targeting Reticle / Scanner
+        var cx = 140;
+        var cy = 145;
+        var rad = 65;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(time * 1.5);
+        ctx.strokeStyle = 'rgba(0, 242, 254, 0.85)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, rad, 0, Math.PI * 1.4);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, rad, Math.PI * 1.6, Math.PI * 1.95);
+        ctx.stroke();
+
+        ctx.rotate(-time * 2.8);
+        ctx.strokeStyle = 'rgba(255, 0, 127, 0.8)';
+        ctx.beginPath();
+        ctx.arc(0, 0, rad * 0.72, 0, Math.PI * 1.2);
+        ctx.stroke();
+        ctx.restore();
+
+        // Crosshairs
+        ctx.strokeStyle = 'rgba(0, 242, 254, 0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx - rad - 12, cy); ctx.lineTo(cx + rad + 12, cy);
+        ctx.moveTo(cx, cy - rad - 12); ctx.lineTo(cx, cy + rad + 12);
+        ctx.stroke();
+
+        // Target Lock Tag
+        ctx.fillStyle = '#00f2fe';
+        ctx.font = 'bold 13px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('TARGET: LOCK', cx, cy + 4);
+
+        // Right Telemetry Panel: Animated EQ Spectrum
+        var startX = 250;
+        for (var b = 0; b < 14; b++) {
+          var barH = 20 + Math.abs(Math.sin(time * 3.2 + b * 0.65)) * 68;
+          var barGrad = ctx.createLinearGradient(0, 210 - barH, 0, 210);
+          barGrad.addColorStop(0, '#00f2fe');
+          barGrad.addColorStop(0.6, '#a855f7');
+          barGrad.addColorStop(1, '#ff007f');
+          ctx.fillStyle = barGrad;
+          ctx.fillRect(startX + b * 17, 210 - barH, 13, barH);
+        }
+
+        // Live telemetry text
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = '13px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('BUFFER: 4.2TB · LATENCY: 0.8ms', 250, 80);
+        ctx.fillText('REPO SYNC: ACTIVE · 0 CONFLICTS', 250, 102);
+
+        // Footer Ticker
+        ctx.fillStyle = '#ffd166';
+        ctx.font = 'bold 14px monospace';
+        ctx.fillText('▸ NEURAL AGENT AUTO-COMMIT · 24/7 ACTIVE', 250, 238);
+
+        // Subtle CRT scanlines
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+        for (var sl = 0; sl < h; sl += 4) {
+          ctx.fillRect(0, sl, w, 1.5);
+        }
+
+      } else if (sc.id === 'nightcity') {
+        // Channel 1: NIGHT CITY 2077 // BRAINDANCE OVERDRIVE
+        ctx.fillStyle = '#0e0417';
+        ctx.fillRect(0, 0, w, h);
+
+        // Synthwave Horizon Sun Grid
+        var sunGrad = ctx.createRadialGradient(w / 2, 80, 10, w / 2, 80, 120);
+        sunGrad.addColorStop(0, 'rgba(255, 0, 127, 0.7)');
+        sunGrad.addColorStop(0.5, 'rgba(255, 183, 3, 0.35)');
+        sunGrad.addColorStop(1, 'rgba(14, 4, 23, 0)');
+        ctx.fillStyle = sunGrad;
+        ctx.fillRect(0, 0, w, 160);
+
+        // Top Banner
+        ctx.font = '900 28px sans-serif';
+        ctx.fillStyle = '#ff007f';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = '#ff007f';
+        ctx.shadowBlur = 12;
+        ctx.fillText('NIGHT CITY 2077', w / 2, 42);
+        ctx.shadowBlur = 0;
+
+        ctx.font = 'bold 14px monospace';
+        ctx.fillStyle = '#fef08a';
+        ctx.fillText('// BRAINDANCE OVERDRIVE · 超夢体験', w / 2, 66);
+
+        // 18 Synthwave Equalizer Bars
+        var eqCount = 18;
+        var barW = 20;
+        var gap = 6;
+        var totalEqW = eqCount * (barW + gap) - gap;
+        var eqStartX = (w - totalEqW) / 2;
+
+        for (var k = 0; k < eqCount; k++) {
+          var eh = 16 + Math.abs(Math.sin(time * 3.8 + k * 0.45) + Math.cos(time * 2.2 + k * 0.9)) * 52;
+          var eqGrad = ctx.createLinearGradient(0, 205 - eh, 0, 205);
+          eqGrad.addColorStop(0, '#fef08a');
+          eqGrad.addColorStop(0.4, '#ff007f');
+          eqGrad.addColorStop(1, '#7928ca');
+          ctx.fillStyle = eqGrad;
+          ctx.fillRect(eqStartX + k * (barW + gap), 205 - eh, barW, eh);
+        }
+
+        // Hazard Stripe Footer
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(16, 222, w - 32, 22);
+        ctx.fillStyle = '#111827';
+        for (var hz = 16; hz < w - 32; hz += 28) {
+          ctx.beginPath();
+          ctx.moveTo(hz, 244);
+          ctx.lineTo(hz + 14, 222);
+          ctx.lineTo(hz + 24, 222);
+          ctx.lineTo(hz + 10, 244);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#000000';
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚡ CYBERWARE OVERCLOCK: HIGH PERFORMANCE', w / 2, 237);
+
+      } else if (sc.id === 'gitmatrix') {
+        // Channel 2: GIT MATRIX // CODE RAIN & TELEMETRY
+        ctx.fillStyle = '#020e06';
+        ctx.fillRect(0, 0, w, h);
+
+        // Cascading Matrix Digital Code Rain
+        ctx.font = 'bold 14px monospace';
+        var chars = '0123456789ABCDEFλπΣΨGMCGITVIBE';
+        var cols = 12;
+        for (var cIdx = 0; cIdx < cols; cIdx++) {
+          var colX = 18 + cIdx * 18;
+          var speed = 40 + (cIdx % 5) * 12;
+          var headY = ((time * speed + cIdx * 53) % (h + 80)) - 30;
+
+          for (var tIdx = 0; tIdx < 7; tIdx++) {
+            var charY = headY - tIdx * 16;
+            if (charY > 10 && charY < h - 10) {
+              var chChar = chars.charAt((cIdx * 7 + tIdx + Math.floor(time * 3)) % chars.length);
+              if (tIdx === 0) {
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowColor = '#00ff9d';
+                ctx.shadowBlur = 8;
+              } else if (tIdx === 1) {
+                ctx.fillStyle = '#00ff9d';
+                ctx.shadowBlur = 0;
+              } else {
+                ctx.fillStyle = 'rgba(0, 255, 157, ' + (1.0 - tIdx * 0.14) + ')';
+                ctx.shadowBlur = 0;
+              }
+              ctx.textAlign = 'center';
+              ctx.fillText(chChar, colX, charY);
+            }
+          }
+        }
+        ctx.shadowBlur = 0;
+
+        // Right Telemetry Panel: Live Git Counters
+        var pX = 240;
+        ctx.fillStyle = 'rgba(0, 255, 157, 0.12)';
+        ctx.fillRect(pX, 16, w - pX - 16, h - 32);
+        ctx.strokeStyle = '#00ff9d';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(pX, 16, w - pX - 16, h - 32);
+
+        ctx.font = 'bold 18px monospace';
+        ctx.fillStyle = '#00ff9d';
+        ctx.textAlign = 'left';
+        ctx.fillText('GIT REPO TELEMETRY', pX + 16, 46);
+
+        ctx.font = 'bold 15px monospace';
+        ctx.fillStyle = '#10b981';
+        ctx.fillText('+ 3,420 lines added', pX + 16, 80);
+        ctx.fillStyle = '#f43f5e';
+        ctx.fillText('-   412 lines removed', pX + 16, 106);
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('[BRANCH: main · CLEAN]', pX + 16, 134);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillText('[COMMIT: 8a4f9c1e · OK]', pX + 16, 160);
+
+        // Dynamic Sine Wave Graph
+        ctx.strokeStyle = '#00ff9d';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (var sx = pX + 16; sx < w - 32; sx += 6) {
+          var sy = 198 + Math.sin((sx - pX) * 0.08 + time * 4.0) * 14;
+          if (sx === pX + 16) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        }
+        ctx.stroke();
+
+      } else {
+        // Channel 3: TRAUMA TEAM // EMERGENCY REPO RESCUE
+        ctx.fillStyle = '#140407';
+        ctx.fillRect(0, 0, w, h);
+
+        // Header
+        ctx.fillStyle = '#ef4444';
+        ctx.fillRect(16, 14, w - 32, 40);
+        ctx.font = 'bold 22px monospace';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'left';
+        ctx.fillText('✚ TRAUMA TEAM // REPO RESCUE', 28, 42);
+
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 16px monospace';
+        ctx.fillText('HEALTH: 99.4%', w - 28, 42);
+
+        // Dynamic ECG Heartbeat Monitor Line
+        ctx.strokeStyle = '#00f2fe';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = '#00f2fe';
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        var ecgWidth = w - 48;
+        var ecgStartX = 24;
+        var scanX = ((time * 180) % ecgWidth);
+
+        for (var ex = 0; ex < ecgWidth; ex += 4) {
+          var relX = (ex - scanX + ecgWidth) % ecgWidth;
+          var pulseY = 140;
+          if (relX > 40 && relX < 90) {
+            var normP = (relX - 40) / 50;
+            if (normP < 0.25) pulseY -= normP * 40;
+            else if (normP < 0.5) pulseY += 80;
+            else if (normP < 0.75) pulseY -= 90;
+            else pulseY += (1.0 - normP) * 50;
+          }
+          if (ex === 0) ctx.moveTo(ecgStartX + ex, pulseY);
+          else ctx.lineTo(ecgStartX + ex, pulseY);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Bottom Status Box
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+        ctx.fillRect(16, 196, w - 32, 42);
+        ctx.strokeStyle = '#ef4444';
+        ctx.strokeRect(16, 196, w - 32, 42);
+
+        ctx.font = 'bold 14px monospace';
+        ctx.fillStyle = '#fca5a5';
+        ctx.textAlign = 'center';
+        ctx.fillText('🛡️ MERGE CONFLICT DEFENSE: SECURE · AGENT READY', w / 2, 222);
+      }
+
+      sc.tex.needsUpdate = true;
     }
-    billboardCtx.stroke();
-
-    for (var b = 0; b < 12; b++) {
-      var barH = 15 + Math.abs(Math.sin(time * 2.5 + b * 0.8)) * 36;
-      billboardCtx.fillStyle = (b % 2 === 0) ? '#ff0055' : '#10b981';
-      billboardCtx.fillRect(20 + b * 18, 120 - barH, 12, barH);
-    }
-
-    billboardCtx.fillStyle = '#ffd166';
-    billboardCtx.font = 'bold 16px monospace';
-    billboardCtx.fillText('GMC METRICS · 24/7', 16, 22);
-
-    billboardTex.needsUpdate = true;
   }
 
-  function applyBuildingUVs(geometry, bw, bh, bd) {
+  function applyBuildingUVs(geometry, bw, bh, bd, megaFace) {
     if (!geometry || !geometry.attributes || !geometry.attributes.uv) return;
     var uvs = geometry.attributes.uv.array;
     var bayW = 12.0;
@@ -11916,17 +12203,25 @@ var City3DEngine = (function() {
     var uZ = bd / bayW;
     var vY = bh / floorH;
 
-    // Face 0 (+X)
-    uvs[0] = 0;   uvs[1] = vY;
-    uvs[2] = uZ;  uvs[3] = vY;
-    uvs[4] = 0;   uvs[5] = 0;
-    uvs[6] = uZ;  uvs[7] = 0;
+    // Face 0 (+X Right / East)
+    if (megaFace === 0) {
+      uvs[0] = 0; uvs[1] = 1;  uvs[2] = 1; uvs[3] = 1;  uvs[4] = 0; uvs[5] = 0;  uvs[6] = 1; uvs[7] = 0;
+    } else {
+      uvs[0] = 0;   uvs[1] = vY;
+      uvs[2] = uZ;  uvs[3] = vY;
+      uvs[4] = 0;   uvs[5] = 0;
+      uvs[6] = uZ;  uvs[7] = 0;
+    }
 
-    // Face 1 (-X)
-    uvs[8]  = 0;   uvs[9]  = vY;
-    uvs[10] = uZ;  uvs[11] = vY;
-    uvs[12] = 0;   uvs[13] = 0;
-    uvs[14] = uZ;  uvs[15] = 0;
+    // Face 1 (-X Left / West)
+    if (megaFace === 1) {
+      uvs[8] = 0; uvs[9] = 1;  uvs[10] = 1; uvs[11] = 1;  uvs[12] = 0; uvs[13] = 0;  uvs[14] = 1; uvs[15] = 0;
+    } else {
+      uvs[8]  = 0;   uvs[9]  = vY;
+      uvs[10] = uZ;  uvs[11] = vY;
+      uvs[12] = 0;   uvs[13] = 0;
+      uvs[14] = uZ;  uvs[15] = 0;
+    }
 
     // Face 2 (+Y Top Roof)
     uvs[16] = 0;   uvs[17] = 1;
@@ -11940,17 +12235,25 @@ var City3DEngine = (function() {
     uvs[28] = 0;   uvs[29] = 0;
     uvs[30] = 1;   uvs[31] = 0;
 
-    // Face 4 (+Z Front)
-    uvs[32] = 0;   uvs[33] = vY;
-    uvs[34] = uX;  uvs[35] = vY;
-    uvs[36] = 0;   uvs[37] = 0;
-    uvs[38] = uX;  uvs[39] = 0;
+    // Face 4 (+Z Front / South)
+    if (megaFace === 4) {
+      uvs[32] = 0; uvs[33] = 1; uvs[34] = 1; uvs[35] = 1; uvs[36] = 0; uvs[37] = 0; uvs[38] = 1; uvs[39] = 0;
+    } else {
+      uvs[32] = 0;   uvs[33] = vY;
+      uvs[34] = uX;  uvs[35] = vY;
+      uvs[36] = 0;   uvs[37] = 0;
+      uvs[38] = uX;  uvs[39] = 0;
+    }
 
-    // Face 5 (-Z Back)
-    uvs[40] = 0;   uvs[41] = vY;
-    uvs[42] = uX;  uvs[43] = vY;
-    uvs[44] = 0;   uvs[45] = 0;
-    uvs[46] = uX;  uvs[47] = 0;
+    // Face 5 (-Z Back / North)
+    if (megaFace === 5) {
+      uvs[40] = 0; uvs[41] = 1; uvs[42] = 1; uvs[43] = 1; uvs[44] = 0; uvs[45] = 0; uvs[46] = 1; uvs[47] = 0;
+    } else {
+      uvs[40] = 0;   uvs[41] = vY;
+      uvs[42] = uX;  uvs[43] = vY;
+      uvs[44] = 0;   uvs[45] = 0;
+      uvs[46] = uX;  uvs[47] = 0;
+    }
 
     geometry.attributes.uv.needsUpdate = true;
   }
@@ -12053,8 +12356,8 @@ var City3DEngine = (function() {
 
   function createRepoBannerSprite(repoName, totalFiles, maxFileSize, isNight, status) {
     var canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 160;
+    canvas.width = 1024;
+    canvas.height = 320;
     var ctx = canvas.getContext('2d');
 
     var isConflict = status && status.conflicted;
@@ -12063,34 +12366,33 @@ var City3DEngine = (function() {
     var isBehind = status && status.behind > 0;
 
     var themeColor = '#00f2fe';
-    var themeBg = isNight ? 'rgba(7, 12, 24, 0.94)' : 'rgba(255, 255, 255, 0.96)';
     var statusTag = '✓ CLEAN';
-    var statusTagColor = isNight ? '#38bdf8' : '#059669';
+    var statusTagColor = '#10b981';
+    var statusBg = 'rgba(16, 185, 129, 0.18)';
 
     if (isConflict) {
       themeColor = '#ff0055';
       statusTag = '⚠️ CONFLICT';
       statusTagColor = '#ff0055';
+      statusBg = 'rgba(255, 0, 85, 0.22)';
     } else if (hasChanges) {
       var totalChanges = (status.staged || 0) + (status.unstaged || 0) + (status.untracked || 0);
       themeColor = '#f59e0b';
       statusTag = '⚡ ' + totalChanges + ' CHANGES';
       statusTagColor = '#f59e0b';
+      statusBg = 'rgba(245, 158, 11, 0.22)';
     } else if (isAhead || isBehind) {
       themeColor = '#a855f7';
       statusTag = '🚀 ↑' + (status.ahead || 0) + ' ↓' + (status.behind || 0);
       statusTagColor = '#a855f7';
+      statusBg = 'rgba(168, 85, 247, 0.22)';
     }
 
-    ctx.clearRect(0, 0, 512, 160);
-    ctx.save();
-    ctx.fillStyle = themeBg;
-    ctx.strokeStyle = themeColor;
-    ctx.lineWidth = 4;
-    ctx.shadowColor = themeColor;
-    ctx.shadowBlur = isNight ? 16 : 8;
+    ctx.clearRect(0, 0, 1024, 320);
 
-    var x = 12, y = 12, w = 488, h = 136, r = 24;
+    // 1. Solid High-Contrast Opaque Dark Titanium Card Background (Sharp in both Day & Night)
+    var x = 16, y = 16, w = 992, h = 288, r = 36;
+    ctx.save();
     ctx.beginPath();
     ctx.moveTo(x + r, y);
     ctx.lineTo(x + w - r, y);
@@ -12102,72 +12404,119 @@ var City3DEngine = (function() {
     ctx.lineTo(x, y + r);
     ctx.quadraticCurveTo(x, y, x + r, y);
     ctx.closePath();
+
+    ctx.fillStyle = '#ffffff';
     ctx.fill();
+
+    // 2. High-Tech Dual Border (Outer neon accent + inner subtle bevel)
+    ctx.strokeStyle = themeColor;
+    ctx.lineWidth = 6;
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
 
+    // 3. Status Chip / Icon Emblem
+    ctx.save();
     ctx.fillStyle = themeColor;
     ctx.beginPath();
-    ctx.arc(60, 80, 26, 0, Math.PI * 2);
+    ctx.arc(110, 160, 50, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = isNight ? '#070c18' : '#ffffff';
-    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 7;
     ctx.lineCap = 'round';
     if (isConflict) {
-      ctx.fillStyle = isNight ? '#070c18' : '#ffffff';
-      ctx.font = 'bold 30px sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '900 56px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('!', 60, 80);
+      ctx.fillText('!', 110, 160);
     } else if (hasChanges) {
-      ctx.fillStyle = isNight ? '#070c18' : '#ffffff';
-      ctx.font = 'bold 24px sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 44px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('⚡', 60, 80);
+      ctx.fillText('⚡', 110, 160);
     } else {
       ctx.beginPath();
-      ctx.arc(52, 68, 4, 0, Math.PI * 2);
+      ctx.arc(95, 138, 8, 0, Math.PI * 2);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(68, 88, 4, 0, Math.PI * 2);
+      ctx.arc(125, 178, 8, 0, Math.PI * 2);
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(52, 72);
-      ctx.lineTo(52, 92);
+      ctx.moveTo(95, 146);
+      ctx.lineTo(95, 184);
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(52, 78);
-      ctx.quadraticCurveTo(68, 78, 68, 84);
+      ctx.moveTo(95, 158);
+      ctx.quadraticCurveTo(125, 158, 125, 170);
       ctx.stroke();
     }
+    ctx.restore();
 
+    // 4. Repo Title (Laser-Sharp Pure Crisp White Typography, No Blur)
+    ctx.save();
     ctx.textAlign = 'left';
-    ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = isNight ? '#ffffff' : '#0f172a';
     ctx.textBaseline = 'middle';
+    ctx.font = '700 64px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#222222';
     var displayName = repoName || 'repo';
-    if (displayName.length > 15) displayName = displayName.slice(0, 13) + '...';
-    ctx.fillText(displayName, 105, 62);
+    if (displayName.length > 18) displayName = displayName.slice(0, 16) + '...';
+    ctx.fillText(displayName, 195, 122);
 
-    ctx.font = '700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    // 5. Status Pill Container
+    ctx.font = '700 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    var tagWidth = ctx.measureText(statusTag).width;
+    var pillX = 195;
+    var pillY = 190;
+    var pillW = tagWidth + 36;
+    var pillH = 50;
+    var pillR = 14;
+
+    ctx.beginPath();
+    ctx.moveTo(pillX + pillR, pillY);
+    ctx.lineTo(pillX + pillW - pillR, pillY);
+    ctx.quadraticCurveTo(pillX + pillW, pillY, pillX + pillW, pillY + pillR);
+    ctx.lineTo(pillX + pillW, pillY + pillH - pillR);
+    ctx.quadraticCurveTo(pillX + pillW, pillY + pillH, pillX + pillW - pillR, pillY + pillH);
+    ctx.lineTo(pillX + pillR, pillY + pillH);
+    ctx.quadraticCurveTo(pillX, pillY + pillH, pillX, pillY + pillH - pillR);
+    ctx.lineTo(pillX, pillY + pillR);
+    ctx.quadraticCurveTo(pillX, pillY, pillX + pillR, pillY);
+    ctx.closePath();
+    ctx.fillStyle = statusBg;
+    ctx.fill();
+    ctx.strokeStyle = statusTagColor;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
     ctx.fillStyle = statusTagColor;
-    ctx.fillText(statusTag, 105, 105);
+    ctx.fillText(statusTag, pillX + 18, pillY + pillH / 2 + 1);
 
-    ctx.font = '500 19px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = isNight ? '#94a3b8' : '#64748b';
+    // 6. Meta File Count & Size
+    ctx.font = '500 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#94a3b8';
     var sizeStr = formatBytes(maxFileSize || 0);
-    ctx.fillText(' · ' + (totalFiles || 0) + ' files', 105 + ctx.measureText(statusTag).width + 8, 105);
+    ctx.fillText('·  ' + (totalFiles || 0) + ' files  (' + sizeStr + ')', pillX + pillW + 20, pillY + pillH / 2 + 1);
+    ctx.restore();
 
     var texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+
     var spriteMat = new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
-      depthTest: false
+      depthTest: true,
+      depthWrite: false,
+      toneMapped: false
     });
     var sprite = new THREE.Sprite(spriteMat);
-    sprite.scale.set(42, 13.1, 1);
+    sprite.scale.set(40, 12.5, 1);
     return sprite;
   }
 
@@ -12220,35 +12569,148 @@ var City3DEngine = (function() {
     return group;
   }
 
+  function createHologramRooftopSign(text, colorHex, width, height) {
+    var group = new THREE.Group();
+    var signW = width || 12.0;
+    var signH = height || 4.5;
+
+    // Emitter Base Pod
+    var podGeo = new THREE.CylinderGeometry(signW * 0.35, signW * 0.45, 1.4, 8);
+    var podMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6, metalness: 0.8 });
+    var podMesh = new THREE.Mesh(podGeo, podMat);
+    podMesh.position.y = 0.7;
+    group.add(podMesh);
+
+    // Emitter Lens
+    var lensGeo = new THREE.CylinderGeometry(signW * 0.28, signW * 0.28, 0.4, 8);
+    var lensMat = new THREE.MeshBasicMaterial({ color: colorHex });
+    var lensMesh = new THREE.Mesh(lensGeo, lensMat);
+    lensMesh.position.y = 1.5;
+    group.add(lensMesh);
+
+    // Floating Hologram Screen Canvas
+    var canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(4, 9, 20, 0.85)';
+    ctx.fillRect(0, 0, 256, 128);
+
+    ctx.strokeStyle = colorHex;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(6, 6, 244, 116);
+
+    ctx.font = '900 24px sans-serif';
+    ctx.fillStyle = colorHex;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 128, 48);
+
+    ctx.font = 'bold 13px monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('// CYBERNETIC LINK · 2077', 128, 88);
+
+    // Holo Scanlines
+    ctx.fillStyle = 'rgba(0, 242, 254, 0.2)';
+    for (var s = 0; s < 128; s += 4) {
+      ctx.fillRect(6, s, 244, 1.5);
+    }
+
+    var tex = new THREE.CanvasTexture(canvas);
+    var holoMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      opacity: 0.88,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    var holoGeo = new THREE.PlaneGeometry(signW, signH);
+    var holoMesh = new THREE.Mesh(holoGeo, holoMat);
+    holoMesh.position.set(0, signH * 0.6 + 2.2, 0);
+    group.add(holoMesh);
+
+    holographicObjects.push({ mesh: holoMesh, mat: holoMat, baseY: signH * 0.6 + 2.2, rotSpeed: 0.0 });
+    return group;
+  }
+
+  function createAVHelipadMesh(padSize) {
+    var group = new THREE.Group();
+    var size = padSize || 14.0;
+
+    var padGeo = new THREE.BoxGeometry(size, 0.5, size);
+    var padMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 });
+    var padMesh = new THREE.Mesh(padGeo, padMat);
+    padMesh.position.y = 0.25;
+    group.add(padMesh);
+
+    // Helipad Canvas Decal
+    var canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(0, 0, 256, 256);
+
+    // Glowing Neon Yellow Runway Circle & "AV" marking
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(128, 128, 96, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.font = '900 82px sans-serif';
+    ctx.fillStyle = '#00f2fe';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('AV', 128, 128);
+
+    var tex = new THREE.CanvasTexture(canvas);
+    var decalMat = new THREE.MeshBasicMaterial({ map: tex });
+    var decalGeo = new THREE.PlaneGeometry(size * 0.94, size * 0.94);
+    var decalMesh = new THREE.Mesh(decalGeo, decalMat);
+    decalMesh.rotation.x = -Math.PI / 2;
+    decalMesh.position.y = 0.52;
+    group.add(decalMesh);
+
+    // Corner Strobe LEDs
+    var ledGeo = new THREE.BoxGeometry(0.6, 0.4, 0.6);
+    var ledMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    var half = size * 0.44;
+    var ledCorners = [[-half, -half], [half, -half], [-half, half], [half, half]];
+    for (var l = 0; l < 4; l++) {
+      var led = new THREE.Mesh(ledGeo, ledMat);
+      led.position.set(ledCorners[l][0], 0.55, ledCorners[l][1]);
+      group.add(led);
+    }
+
+    return group;
+  }
+
   function buildCity(cityDataList) {
     if (cityDataList && cityDataList.length) {
       cachedCityData = cityDataList;
     }
     if (!cityGroup || !scene || !isInitialized) return;
 
-    while (cityGroup.children.length > 0) {
-      var obj = cityGroup.children[0];
-      cityGroup.remove(obj);
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) {
-        if (Array.isArray(obj.material)) obj.material.forEach(function(m) { m.dispose(); });
-        else obj.material.dispose();
+    var cleanGroup = function(grp) {
+      if (!grp) return;
+      while (grp.children.length > 0) {
+        var obj = grp.children[0];
+        grp.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) obj.material.forEach(function(m) { m.dispose(); });
+          else obj.material.dispose();
+        }
       }
-    }
+    };
 
-    while (trafficGroup.children.length > 0) {
-      var tobj = trafficGroup.children[0];
-      trafficGroup.remove(tobj);
-      if (tobj.geometry) tobj.geometry.dispose();
-      if (tobj.material) tobj.material.dispose();
-    }
-
-    while (streetlightsGroup.children.length > 0) {
-      var lobj = streetlightsGroup.children[0];
-      streetlightsGroup.remove(lobj);
-      if (lobj.geometry) lobj.geometry.dispose();
-      if (lobj.material) lobj.material.dispose();
-    }
+    cleanGroup(cityGroup);
+    cleanGroup(trafficGroup);
+    cleanGroup(streetlightsGroup);
+    cleanGroup(avTrafficGroup);
+    cleanGroup(groundMistGroup);
 
     // Dispose and reset emissive texture cache
     Object.keys(emissiveTexCache).forEach(function(k) {
@@ -12259,6 +12721,11 @@ var City3DEngine = (function() {
     repoBadges = [];
     districtData = [];
     trafficCars = [];
+    flyingAVs = [];
+    searchlightCones = [];
+    neonConduitMaterials = [];
+    holographicObjects = [];
+    groundMistParticles = [];
     beaconMeshes = [];
     streetlightLenses = [];
     streetlightGlowDecals = [];
@@ -12301,9 +12768,9 @@ var City3DEngine = (function() {
 
     var groundGeo = new THREE.PlaneGeometry(totalCityW, totalCityD);
     var groundMat = new THREE.MeshStandardMaterial({
-      color: 0x111622,
-      roughness: 0.9,
-      metalness: 0.1
+      color: 0x0a0f18,
+      roughness: 0.88,
+      metalness: 0.15
     });
     var groundMesh = new THREE.Mesh(groundGeo, groundMat);
     groundMesh.rotation.x = -Math.PI / 2;
@@ -12326,21 +12793,25 @@ var City3DEngine = (function() {
 
     buildStreetlights(cols, rows, stepX, stepZ, originX, originZ, BW, BD, RW);
     buildTrafficCars(cols, rows, stepX, stepZ, originX, originZ, totalCityW, totalCityD);
+    buildFlyingAVs(totalCityW, totalCityD);
+    buildGroundMist(cols, rows, stepX, stepZ, originX, originZ);
     buildFlightSpline(districtData);
   }
 
   function buildRoadNetwork(cols, rows, stepX, stepZ, originX, originZ, BW, BD, RW, totalW, totalD) {
+    // Premium Asphalt PBR Material
     var roadMat = new THREE.MeshStandardMaterial({
-      color: 0x1a2130,
-      roughness: isRaining ? 0.2 : 0.85,
-      metalness: isRaining ? 0.8 : 0.1
+      color: 0x0f141f,
+      roughness: 0.45,
+      metalness: 0.35
     });
     roadMaterials.push(roadMat);
 
-    var lineMatYellow = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
-    var lineMatWhite = new THREE.MeshBasicMaterial({ color: 0xe2e8f0 });
-    var zebraMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    var lineMatYellow = new THREE.MeshBasicMaterial({ color: 0xfbbf24, toneMapped: false });
+    var lineMatCyan = new THREE.MeshBasicMaterial({ color: 0x00f2fe, toneMapped: false });
+    var zebraMat = new THREE.MeshBasicMaterial({ color: 0xe2e8f0, toneMapped: false });
 
+    // 1. Continuous Asphalt Road Surface Grid
     for (var c = 0; c <= cols; c++) {
       var rx = originX + (c - 0.5) * stepX;
       var roadV = new THREE.Mesh(new THREE.PlaneGeometry(RW, totalD), roadMat);
@@ -12348,21 +12819,6 @@ var City3DEngine = (function() {
       roadV.position.set(rx, 0.05, 0);
       roadV.receiveShadow = true;
       cityGroup.add(roadV);
-
-      var dividerV = new THREE.Mesh(new THREE.PlaneGeometry(0.8, totalD), lineMatYellow);
-      dividerV.rotation.x = -Math.PI / 2;
-      dividerV.position.set(rx, 0.08, 0);
-      cityGroup.add(dividerV);
-
-      var laneV1 = new THREE.Mesh(new THREE.PlaneGeometry(0.4, totalD), lineMatWhite);
-      laneV1.rotation.x = -Math.PI / 2;
-      laneV1.position.set(rx - 7.5, 0.07, 0);
-      cityGroup.add(laneV1);
-
-      var laneV2 = new THREE.Mesh(new THREE.PlaneGeometry(0.4, totalD), lineMatWhite);
-      laneV2.rotation.x = -Math.PI / 2;
-      laneV2.position.set(rx + 7.5, 0.07, 0);
-      cityGroup.add(laneV2);
     }
 
     for (var r = 0; r <= rows; r++) {
@@ -12372,50 +12828,100 @@ var City3DEngine = (function() {
       roadH.position.set(0, 0.05, rz);
       roadH.receiveShadow = true;
       cityGroup.add(roadH);
-
-      var dividerH = new THREE.Mesh(new THREE.PlaneGeometry(totalW, 0.8), lineMatYellow);
-      dividerH.rotation.x = -Math.PI / 2;
-      dividerH.position.set(0, 0.08, rz);
-      cityGroup.add(dividerH);
-
-      var laneH1 = new THREE.Mesh(new THREE.PlaneGeometry(totalW, 0.4), lineMatWhite);
-      laneH1.rotation.x = -Math.PI / 2;
-      laneH1.position.set(0, 0.07, rz - 7.5);
-      cityGroup.add(laneH1);
-
-      var laneH2 = new THREE.Mesh(new THREE.PlaneGeometry(totalW, 0.4), lineMatWhite);
-      laneH2.rotation.x = -Math.PI / 2;
-      laneH2.position.set(0, 0.07, rz + 7.5);
-      cityGroup.add(laneH2);
     }
 
-    var zebraBarGeo = new THREE.PlaneGeometry(1.4, 4.5);
-    for (var c2 = 0; c2 <= cols; c2++) {
-      for (var r2 = 0; r2 <= rows; r2++) {
-        var ix = originX + (c2 - 0.5) * stepX;
-        var iz = originZ + (r2 - 0.5) * stepZ;
+    // 2. Road Markings (ONLY on road segments BETWEEN intersections - NEVER cut across intersections!)
+    // Vertical Street Segments (North-South)
+    for (var vc = 0; vc <= cols; vc++) {
+      var vrx = originX + (vc - 0.5) * stepX;
+      for (var vr = 0; vr < rows; vr++) {
+        var vrz = originZ + vr * stepZ;
+        var vSegLen = Math.max(10, BD - 14); // Buffer before crosswalks
 
-        for (var bar = -3; bar <= 3; bar++) {
+        // Double Yellow Centerline
+        var vDiv = new THREE.Mesh(new THREE.PlaneGeometry(0.8, vSegLen), lineMatYellow);
+        vDiv.rotation.x = -Math.PI / 2;
+        vDiv.position.set(vrx, 0.08, vrz);
+        cityGroup.add(vDiv);
+
+        // Lane Guide Lines
+        var vLane1 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, vSegLen), lineMatCyan);
+        vLane1.rotation.x = -Math.PI / 2;
+        vLane1.position.set(vrx - 7.5, 0.07, vrz);
+        cityGroup.add(vLane1);
+
+        var vLane2 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, vSegLen), lineMatCyan);
+        vLane2.rotation.x = -Math.PI / 2;
+        vLane2.position.set(vrx + 7.5, 0.07, vrz);
+        cityGroup.add(vLane2);
+      }
+    }
+
+    // Horizontal Street Segments (East-West)
+    for (var hr = 0; hr <= rows; hr++) {
+      var hrz = originZ + (hr - 0.5) * stepZ;
+      for (var hc = 0; hc < cols; hc++) {
+        var hrx = originX + hc * stepX;
+        var hSegLen = Math.max(10, BW - 14); // Buffer before crosswalks
+
+        // Double Yellow Centerline
+        var hDiv = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.8), lineMatYellow);
+        hDiv.rotation.x = -Math.PI / 2;
+        hDiv.position.set(hrx, 0.08, hrz);
+        cityGroup.add(hDiv);
+
+        // Lane Guide Lines
+        var hLane1 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
+        hLane1.rotation.x = -Math.PI / 2;
+        hLane1.position.set(hrx, 0.07, hrz - 7.5);
+        cityGroup.add(hLane1);
+
+        var hLane2 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
+        hLane2.rotation.x = -Math.PI / 2;
+        hLane2.position.set(hrx, 0.07, hrz + 7.5);
+        cityGroup.add(hLane2);
+      }
+    }
+
+    // 3. Intersection Crosswalks (斑马线) on all 4 approaches of every intersection (Center of crossing is clean!)
+    var zebraBarGeo = new THREE.PlaneGeometry(1.2, 4.2);
+    for (var ic = 0; ic <= cols; ic++) {
+      for (var ir = 0; ir <= rows; ir++) {
+        var ix = originX + (ic - 0.5) * stepX;
+        var iz = originZ + (ir - 0.5) * stepZ;
+        var crossOff = RW * 0.5 - 2.8;
+
+        // North Approach Crosswalk
+        for (var bN = -3; bN <= 3; bN++) {
           var zN = new THREE.Mesh(zebraBarGeo, zebraMat);
           zN.rotation.x = -Math.PI / 2;
-          zN.position.set(ix + bar * 2.2, 0.09, iz - RW * 0.55);
+          zN.position.set(ix + bN * 2.2, 0.09, iz - crossOff);
           cityGroup.add(zN);
+        }
 
+        // South Approach Crosswalk
+        for (var bS = -3; bS <= 3; bS++) {
           var zS = new THREE.Mesh(zebraBarGeo, zebraMat);
           zS.rotation.x = -Math.PI / 2;
-          zS.position.set(ix + bar * 2.2, 0.09, iz + RW * 0.55);
+          zS.position.set(ix + bS * 2.2, 0.09, iz + crossOff);
           cityGroup.add(zS);
+        }
 
+        // West Approach Crosswalk
+        for (var bW = -3; bW <= 3; bW++) {
           var zW = new THREE.Mesh(zebraBarGeo, zebraMat);
           zW.rotation.x = -Math.PI / 2;
           zW.rotation.z = Math.PI / 2;
-          zW.position.set(ix - RW * 0.55, 0.09, iz + bar * 2.2);
+          zW.position.set(ix - crossOff, 0.09, iz + bW * 2.2);
           cityGroup.add(zW);
+        }
 
+        // East Approach Crosswalk
+        for (var bE = -3; bE <= 3; bE++) {
           var zE = new THREE.Mesh(zebraBarGeo, zebraMat);
           zE.rotation.x = -Math.PI / 2;
           zE.rotation.z = Math.PI / 2;
-          zE.position.set(ix + RW * 0.55, 0.09, iz + bar * 2.2);
+          zE.position.set(ix + crossOff, 0.09, iz + bE * 2.2);
           cityGroup.add(zE);
         }
       }
@@ -12424,9 +12930,9 @@ var City3DEngine = (function() {
 
   function buildAvenueStreetTrees(posX, posZ, BW, BD) {
     var trunkGeo = new THREE.CylinderGeometry(0.3, 0.45, 3.4, 6);
-    var trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c3d2e, roughness: 0.9 });
-    var folMat1 = new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.75 });
-    var folMat2 = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.75 });
+    var trunkMat = new THREE.MeshStandardMaterial({ color: 0x473024, roughness: 0.9 });
+    var folMat1 = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.75 });
+    var folMat2 = new THREE.MeshStandardMaterial({ color: 0x166534, roughness: 0.75 });
     var folGeo = new THREE.SphereGeometry(1.8, 8, 8);
     var grateGeo = new THREE.BoxGeometry(2.4, 0.1, 2.4);
     var grateMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
@@ -12437,7 +12943,6 @@ var City3DEngine = (function() {
 
     for (var s = 0; s < steps; s++) {
       var tOffset = -halfW + (s + 0.5) * (BW / steps);
-
       var treeCoords = [
         [tOffset, -halfD],
         [tOffset, halfD],
@@ -12472,11 +12977,11 @@ var City3DEngine = (function() {
   }
 
   function buildStreetlights(cols, rows, stepX, stepZ, originX, originZ, BW, BD, RW) {
-    var poleMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.8, roughness: 0.3 });
+    var poleMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.85, roughness: 0.25 });
     var poleGeo = new THREE.CylinderGeometry(0.25, 0.35, 8.0, 6);
     var armGeo = new THREE.BoxGeometry(3.5, 0.25, 0.25);
     var headGeo = new THREE.BoxGeometry(1.0, 0.4, 0.8);
-    var decalGeo = new THREE.PlaneGeometry(9.0, 9.0);
+    var decalGeo = new THREE.PlaneGeometry(10.0, 10.0);
 
     for (var c = 0; c < cols; c++) {
       for (var r = 0; r < rows; r++) {
@@ -12514,7 +13019,7 @@ var City3DEngine = (function() {
           var lensMat = new THREE.MeshStandardMaterial({
             color: 0xfef08a,
             emissive: new THREE.Color(0xfbbf24),
-            emissiveIntensity: 2.5
+            emissiveIntensity: targetMode === 'night' ? 2.5 : 0.2
           });
           var head = new THREE.Mesh(headGeo, lensMat);
           head.position.set(2.8, 7.6, 0);
@@ -12527,8 +13032,9 @@ var City3DEngine = (function() {
             var decalMat = new THREE.MeshBasicMaterial({
               map: lampGlowTex,
               transparent: true,
-              opacity: 0.45,
-              depthWrite: false
+              opacity: targetMode === 'night' ? 0.45 : 0.0,
+              depthWrite: false,
+              blending: THREE.AdditiveBlending
             });
             var decal = new THREE.Mesh(decalGeo, decalMat);
             decal.rotation.x = -Math.PI / 2;
@@ -12541,7 +13047,7 @@ var City3DEngine = (function() {
     }
   }
 
-  function buildArchitecturalStructure(districtGroup, item, bIndex, slot, repo, posX, posZ, isNight, isTallest, roofMat, groundMat, buildingSeed) {
+  function buildArchitecturalStructure(districtGroup, item, bIndex, slot, repo, posX, posZ, isNight, isTallest, roofMat, groundMat, buildingSeed, isMegaScreen, districtIndex) {
     var styleSeed = hashStr(item.name || ('file_' + bIndex)) + buildingSeed;
     var styleType = isTallest ? 0 : (item.type === 'compound' ? 4 : (styleSeed % 6));
 
@@ -12557,14 +13063,17 @@ var City3DEngine = (function() {
     var bx = slot.x;
     var bz = slot.z;
 
-    // Distinct Procedural Building Material Colors (Preserved in daylight & nighttime ambient)
+    // Distinct Procedural Building Material Colors (Restored Original Rich Vibrant Palette)
+    // 0x1e3a8a: Sapphire Blue, 0x0284c7: Sky Cyan Glass, 0xf8fafc: Architectural Platinum,
+    // 0xd8cfbe: Warm Sandstone Limestone, 0x94a3b8: Slate Aluminum Steel, 0xc25e3e: Terracotta Brick,
+    // 0x065f46: Emerald Glass, 0x1e293b: Dark Titanium
     var palColors = [0x1e3a8a, 0x0284c7, 0xf8fafc, 0xd8cfbe, 0x94a3b8, 0xc25e3e, 0x065f46, 0x1e293b];
     var colHex = palColors[styleSeed % palColors.length];
     var isGlass = (styleSeed % 3 === 0);
 
-    // Git Contribution Heatmap Emissive Light Texture (Only modulates window brightness, 1.25x HDR)
+    // Git Contribution Heatmap Emissive Light Texture (Window radiance)
     var contribLightTex = createContributionLightTexture(repo, item, bIndex, styleSeed);
-    var curEmissiveIntensity = (targetMode === 'night') ? 1.25 : 0.0;
+    var curEmissiveIntensity = (targetMode === 'night') ? 0.90 : 0.0;
 
     var facadeMat = new THREE.MeshStandardMaterial({
       color: colHex,
@@ -12576,14 +13085,46 @@ var City3DEngine = (function() {
     });
     if (buildingMaterials.indexOf(facadeMat) === -1) buildingMaterials.push(facadeMat);
 
-    // Multi-Material Array: [Right, Left, Top/Roof, Bottom, Front, Back]
-    // Crucial: Top (+Y) face uses roofMat (Clean slate/concrete, ZERO windows or light textures on roofs!)
+    // Multi-Material Array: [Right(+X), Left(-X), Top(+Y Roof), Bottom(-Y), Front(+Z), Back(-Z)]
     var multiMats = [facadeMat, facadeMat, roofMat, groundMat, facadeMat, facadeMat];
 
+    // Determine street-facing face direction
+    var megaFaceIdx = -1;
+    var sDir = slot.streetDir || ((bIndex % 2 === 0) ? 'S' : 'N');
+    if (sDir === 'E') megaFaceIdx = 0;
+    else if (sDir === 'W') megaFaceIdx = 1;
+    else if (sDir === 'S') megaFaceIdx = 4;
+    else megaFaceIdx = 5;
+
+    // If this building is designated as the district's Mega-Screen Skyscraper, map the dynamic canvas across the whole street face!
+    if (isMegaScreen && cyberScreenTextures.length > 0) {
+      var scrTex = cyberScreenTextures[districtIndex % cyberScreenTextures.length];
+      var megaScreenMat = new THREE.MeshBasicMaterial({ map: scrTex, toneMapped: false });
+      multiMats[megaFaceIdx] = megaScreenMat;
+    }
+
+    // Precise Neon Edge Outline via Parent-Child Geometry Linkage (Zero Offset!)
+    var neonColors = [0x00f2fe, 0xff007f, 0xa855f7, 0xffb703, 0x00ff9d, 0x38bdf8];
+    var neonCol = neonColors[styleSeed % neonColors.length];
+
+    var addEdgeOutline = function(mesh, geo) {
+      var edgeGeo = new THREE.EdgesGeometry(geo);
+      var edgeMat = new THREE.LineBasicMaterial({
+        color: neonCol,
+        transparent: true,
+        opacity: 0.95,
+        toneMapped: false
+      });
+      edgeMat.userData = { pulseOffset: (styleSeed % 10) * 0.6 };
+      neonConduitMaterials.push(edgeMat);
+      var edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+      mesh.add(edgeLines);
+    };
+
     var accentMat = new THREE.MeshStandardMaterial({
-      color: isNight ? 0x38bdf8 : 0x0284c7,
-      roughness: 0.2,
-      metalness: 0.85
+      color: 0x0284c7,
+      roughness: 0.25,
+      metalness: 0.8
     });
 
     // Ground Contact AO Shadow Disc
@@ -12606,32 +13147,35 @@ var City3DEngine = (function() {
     var buildingCenterZ = posZ + bz;
 
     if (styleType === 0) {
-      // Style 0: Art Deco / Stepped Skyscraper
+      // Style 0: Stepped Skyscraper
       var t1H = bHeight * 0.45;
       var t2H = bHeight * 0.33;
       var t3H = bHeight * 0.22;
 
       var t1Geo = new THREE.BoxGeometry(bw, t1H, bd);
-      applyBuildingUVs(t1Geo, bw, t1H, bd);
+      applyBuildingUVs(t1Geo, bw, t1H, bd, isMegaScreen ? megaFaceIdx : -1);
       var t1Mesh = new THREE.Mesh(t1Geo, multiMats);
       t1Mesh.position.set(bx, 1.8 + t1H / 2, bz);
       t1Mesh.castShadow = true;
       t1Mesh.receiveShadow = true;
+      addEdgeOutline(t1Mesh, t1Geo);
       districtGroup.add(t1Mesh);
 
       var t2Geo = new THREE.BoxGeometry(bw * 0.76, t2H, bd * 0.76);
-      applyBuildingUVs(t2Geo, bw * 0.76, t2H, bd * 0.76);
+      applyBuildingUVs(t2Geo, bw * 0.76, t2H, bd * 0.76, isMegaScreen ? megaFaceIdx : -1);
       var t2Mesh = new THREE.Mesh(t2Geo, multiMats);
       t2Mesh.position.set(bx, 1.8 + t1H + t2H / 2, bz);
       t2Mesh.castShadow = true;
+      addEdgeOutline(t2Mesh, t2Geo);
       districtGroup.add(t2Mesh);
 
       var t3Geo = new THREE.BoxGeometry(bw * 0.52, t3H, bd * 0.52);
-      applyBuildingUVs(t3Geo, bw * 0.52, t3H, bd * 0.52);
+      applyBuildingUVs(t3Geo, bw * 0.52, t3H, bd * 0.52, isMegaScreen ? megaFaceIdx : -1);
       var t3Mesh = new THREE.Mesh(t3Geo, multiMats);
       t3Mesh.position.set(bx, 1.8 + t1H + t2H + t3H / 2, bz);
       t3Mesh.castShadow = true;
       t3Mesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(t3Mesh, t3Geo);
       districtGroup.add(t3Mesh);
 
       var capGeo = new THREE.BoxGeometry(bw * 0.44, 1.6, bd * 0.44);
@@ -12640,59 +13184,55 @@ var City3DEngine = (function() {
       districtGroup.add(capMesh);
 
       buildingTopY += 1.6;
+
     } else if (styleType === 1) {
       // Style 1: Cylindrical Glass Rotunda Tower
       var cylR = Math.min(bw, bd) * 0.46;
-      var cylGeo = new THREE.CylinderGeometry(cylR, cylR * 1.05, bHeight, 18);
+      var cylGeo = new THREE.CylinderGeometry(cylR, cylR * 1.05, bHeight, 20);
       var cylMesh = new THREE.Mesh(cylGeo, facadeMat);
       cylMesh.position.set(bx, 1.8 + bHeight / 2, bz);
       cylMesh.castShadow = true;
       cylMesh.receiveShadow = true;
       cylMesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(cylMesh, cylGeo);
       districtGroup.add(cylMesh);
 
-      var ringGeo = new THREE.CylinderGeometry(cylR * 1.06, cylR * 1.06, 1.4, 18);
-      var ringMesh = new THREE.Mesh(ringGeo, accentMat);
-      ringMesh.position.set(bx, buildingTopY + 0.7, bz);
-      districtGroup.add(ringMesh);
+      var crownDiskGeo = new THREE.CylinderGeometry(cylR * 0.92, cylR, 1.4, 20);
+      var crownDiskMesh = new THREE.Mesh(crownDiskGeo, accentMat);
+      crownDiskMesh.position.set(bx, buildingTopY + 0.7, bz);
+      districtGroup.add(crownDiskMesh);
 
-      var domeGeo = new THREE.SphereGeometry(cylR * 0.65, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2);
-      var domeMat = new THREE.MeshStandardMaterial({
-        color: isNight ? 0x38bdf8 : 0x67e8f9,
-        roughness: 0.15,
-        metalness: 0.9
-      });
-      var domeMesh = new THREE.Mesh(domeGeo, domeMat);
-      domeMesh.position.set(bx, buildingTopY + 1.4, bz);
-      districtGroup.add(domeMesh);
+      buildingTopY += 1.4;
 
-      buildingTopY += 1.4 + cylR * 0.65;
     } else if (styleType === 2) {
       // Style 2: Beveled Crystal Diamond Prism
       var prismH = bHeight * 0.78;
       var pyrH = bHeight * 0.22;
 
       var bGeo2 = new THREE.BoxGeometry(bw, prismH, bd);
-      applyBuildingUVs(bGeo2, bw, prismH, bd);
+      applyBuildingUVs(bGeo2, bw, prismH, bd, isMegaScreen ? megaFaceIdx : -1);
       var bMesh2 = new THREE.Mesh(bGeo2, multiMats);
       bMesh2.position.set(bx, 1.8 + prismH / 2, bz);
       bMesh2.castShadow = true;
       bMesh2.receiveShadow = true;
       bMesh2.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(bMesh2, bGeo2);
       districtGroup.add(bMesh2);
 
       var pyrGeo = new THREE.ConeGeometry(Math.min(bw, bd) * 0.68, pyrH, 4);
       var pyrMat = new THREE.MeshStandardMaterial({
-        color: isNight ? 0x0ea5e9 : 0x0284c7,
+        color: 0x0284c7,
         roughness: 0.2,
-        metalness: 0.8
+        metalness: 0.85
       });
       var pyrMesh = new THREE.Mesh(pyrGeo, pyrMat);
       pyrMesh.rotation.y = Math.PI / 4;
       pyrMesh.position.set(bx, 1.8 + prismH + pyrH / 2, bz);
+      addEdgeOutline(pyrMesh, pyrGeo);
       districtGroup.add(pyrMesh);
 
       buildingTopY = 1.8 + prismH + pyrH;
+
     } else if (styleType === 3) {
       // Style 3: Interconnected Skybridge Twin Tower
       var twW = bw * 0.42;
@@ -12700,22 +13240,31 @@ var City3DEngine = (function() {
       var twOff = bw * 0.28;
 
       var tAGeo = new THREE.BoxGeometry(twW, bHeight, twD);
-      applyBuildingUVs(tAGeo, twW, bHeight, twD);
+      applyBuildingUVs(tAGeo, twW, bHeight, twD, isMegaScreen ? megaFaceIdx : -1);
       var tA = new THREE.Mesh(tAGeo, multiMats);
       tA.position.set(bx - twOff, 1.8 + bHeight / 2, bz);
       tA.castShadow = true;
       tA.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(tA, tAGeo);
       districtGroup.add(tA);
 
       var tBGeo = new THREE.BoxGeometry(twW, bHeight * 0.92, twD);
-      applyBuildingUVs(tBGeo, twW, bHeight * 0.92, twD);
+      applyBuildingUVs(tBGeo, twW, bHeight * 0.92, twD, isMegaScreen ? megaFaceIdx : -1);
       var tB = new THREE.Mesh(tBGeo, multiMats);
       tB.position.set(bx + twOff, 1.8 + (bHeight * 0.92) / 2, bz);
       tB.castShadow = true;
+      addEdgeOutline(tB, tBGeo);
       districtGroup.add(tB);
 
-      var bridgeGeo = new THREE.BoxGeometry(twOff * 2 + twW * 0.5, 2.2, twD * 0.45);
-      var bridgeMesh = new THREE.Mesh(bridgeGeo, accentMat);
+      // Glowing Neon Skybridge
+      var bridgeGeo = new THREE.BoxGeometry(twOff * 2 + twW * 0.5, 3.2, twD * 0.45);
+      var bridgeMat = new THREE.MeshStandardMaterial({
+        color: 0x00f2fe,
+        emissive: new THREE.Color(0x00f2fe),
+        emissiveIntensity: targetMode === 'night' ? 1.5 : 0.2,
+        roughness: 0.2
+      });
+      var bridgeMesh = new THREE.Mesh(bridgeGeo, bridgeMat);
       bridgeMesh.position.set(bx, 1.8 + bHeight * 0.62, bz);
       districtGroup.add(bridgeMesh);
 
@@ -12724,11 +13273,12 @@ var City3DEngine = (function() {
       districtGroup.add(rA);
 
       buildingTopY += 1.2;
+
     } else if (styleType === 4) {
       // Style 4: Modern Compound / Campus Wing Complex
       var podH = 3.4;
       var podGeo = new THREE.BoxGeometry(bw * 1.35, podH, bd * 1.35);
-      var podMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.75 });
+      var podMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.75 });
       var podMesh = new THREE.Mesh(podGeo, podMat);
       podMesh.position.set(bx, 1.8 + podH / 2, bz);
       podMesh.receiveShadow = true;
@@ -12738,55 +13288,42 @@ var City3DEngine = (function() {
       var mainD = bd * 0.72;
       var mainH = bHeight;
       var mainGeo = new THREE.BoxGeometry(mainW, mainH, mainD);
-      applyBuildingUVs(mainGeo, mainW, mainH, mainD);
+      applyBuildingUVs(mainGeo, mainW, mainH, mainD, isMegaScreen ? megaFaceIdx : -1);
       var mainMesh = new THREE.Mesh(mainGeo, multiMats);
       mainMesh.position.set(bx - bw * 0.22, 1.8 + podH + (mainH - podH) / 2, bz - bd * 0.1);
       mainMesh.castShadow = true;
       mainMesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(mainMesh, mainGeo);
       districtGroup.add(mainMesh);
 
       var subW = bw * 0.7;
       var subD = bd * 0.7;
       var subH = (bHeight - podH) * 0.62;
       var subGeo = new THREE.BoxGeometry(subW, subH, subD);
-      applyBuildingUVs(subGeo, subW, subH, subD);
+      applyBuildingUVs(subGeo, subW, subH, subD, isMegaScreen ? megaFaceIdx : -1);
       var subMesh = new THREE.Mesh(subGeo, multiMats);
       subMesh.position.set(bx + bw * 0.26, 1.8 + podH + subH / 2, bz + bd * 0.15);
       subMesh.castShadow = true;
+      addEdgeOutline(subMesh, subGeo);
       districtGroup.add(subMesh);
-
-      var rSub = new THREE.Mesh(new THREE.BoxGeometry(subW * 0.88, 1.2, subD * 0.88), roofMat);
-      rSub.position.set(bx + bw * 0.26, 1.8 + podH + subH + 0.6, bz + bd * 0.15);
-      districtGroup.add(rSub);
 
       var rMain = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.88, 1.2, mainD * 0.88), roofMat);
       rMain.position.set(bx - bw * 0.22, 1.8 + mainH + 0.6, bz - bd * 0.1);
       districtGroup.add(rMain);
 
       buildingTopY = 1.8 + mainH + 1.2;
+
     } else {
-      // Style 5: High-Tech Glass Tower with Vertical Corner Ribs
+      // Style 5: High-Tech Glass Tower
       var coreGeo = new THREE.BoxGeometry(bw, bHeight, bd);
-      applyBuildingUVs(coreGeo, bw, bHeight, bd);
+      applyBuildingUVs(coreGeo, bw, bHeight, bd, isMegaScreen ? megaFaceIdx : -1);
       var coreMesh = new THREE.Mesh(coreGeo, multiMats);
       coreMesh.position.set(bx, 1.8 + bHeight / 2, bz);
       coreMesh.castShadow = true;
       coreMesh.receiveShadow = true;
       coreMesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(coreMesh, coreGeo);
       districtGroup.add(coreMesh);
-
-      var ribGeo = new THREE.BoxGeometry(0.6, bHeight + 1.6, 0.6);
-      var corners = [
-        [-bw / 2, -bd / 2],
-        [bw / 2, -bd / 2],
-        [-bw / 2, bd / 2],
-        [bw / 2, bd / 2]
-      ];
-      for (var cIdx = 0; cIdx < 4; cIdx++) {
-        var rib = new THREE.Mesh(ribGeo, accentMat);
-        rib.position.set(bx + corners[cIdx][0], 1.8 + (bHeight + 1.6) / 2, bz + corners[cIdx][1]);
-        districtGroup.add(rib);
-      }
 
       var roofCap = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.85, 1.2, bd * 0.85), roofMat);
       roofCap.position.set(bx, buildingTopY + 0.6, bz);
@@ -12795,65 +13332,29 @@ var City3DEngine = (function() {
       buildingTopY += 1.2;
     }
 
-    // Realistic Rooftop Detailing (HVAC, Mechanical Penthouse, Antennas)
-    var topType = styleSeed % 5;
-    if (!isTallest && bHeight > 18) {
-      if (topType === 0) {
-        var hvacGeo = new THREE.BoxGeometry(2.4, 1.3, 1.8);
-        var hvacMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.6, roughness: 0.4 });
-        var hvac1 = new THREE.Mesh(hvacGeo, hvacMat);
-        hvac1.position.set(bx - 1.2, buildingTopY + 0.65, bz - 0.8);
-        districtGroup.add(hvac1);
-        var hvac2 = new THREE.Mesh(hvacGeo, hvacMat);
-        hvac2.position.set(bx + 1.2, buildingTopY + 0.65, bz - 0.8);
-        districtGroup.add(hvac2);
-      } else if (topType === 1) {
-        var pentGeo = new THREE.BoxGeometry(bw * 0.38, 3.2, bd * 0.38);
-        var pentMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7 });
-        var pentMesh = new THREE.Mesh(pentGeo, pentMat);
-        pentMesh.position.set(bx, buildingTopY + 1.6, bz);
-        districtGroup.add(pentMesh);
-      } else if (topType === 2) {
-        var antGeo = new THREE.CylinderGeometry(0.2, 0.25, 6.5, 6);
-        var antMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85 });
-        var antMesh = new THREE.Mesh(antGeo, antMat);
-        antMesh.position.set(bx + bw * 0.2, buildingTopY + 3.25, bz + bd * 0.2);
-        districtGroup.add(antMesh);
+    // Clean Rooftop Detailing (Helipad or HVAC - No Spheres!)
+    if (!isTallest && bHeight > 24) {
+      var topFeature = (styleSeed % 3);
+      if (topFeature === 0) {
+        // Rooftop AV Landing Pad
+        var helipad = createAVHelipadMesh(Math.min(bw, bd) * 0.82);
+        helipad.position.set(bx, buildingTopY, bz);
+        districtGroup.add(helipad);
+      } else if (topFeature === 1) {
+        // Mechanical Penthouse Units
+        var hvacGeo = new THREE.BoxGeometry(bw * 0.4, 2.2, bd * 0.4);
+        var hvacMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7 });
+        var hvacMesh = new THREE.Mesh(hvacGeo, hvacMat);
+        hvacMesh.position.set(bx, buildingTopY + 1.1, bz);
+        districtGroup.add(hvacMesh);
+      } else {
+        // Sleek Communication Mast
+        var mastGeo = new THREE.CylinderGeometry(0.18, 0.35, 8.0, 6);
+        var mastMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.9 });
+        var mastMesh = new THREE.Mesh(mastGeo, mastMat);
+        mastMesh.position.set(bx, buildingTopY + 4.0, bz);
+        districtGroup.add(mastMesh);
       }
-    }
-
-    // Street-Facing Animated LED Billboard (Strictly on outer perimeter facades facing avenue!)
-    if (slot.isStreetEdge && slot.streetDir && billboardTex && bHeight > 24 && (bIndex % 4 === 1)) {
-      var bbW = Math.min(bw * 0.85, 14.0);
-      var bbH = Math.min(bHeight * 0.32, 10.0);
-      var bbGeo = new THREE.PlaneGeometry(bbW, bbH);
-      var bbMat = new THREE.MeshBasicMaterial({ map: billboardTex });
-      var bbMesh = new THREE.Mesh(bbGeo, bbMat);
-
-      if (slot.streetDir === 'N') {
-        bbMesh.position.set(bx, 1.8 + bHeight * 0.55, bz - bd * 0.51);
-        bbMesh.rotation.y = Math.PI;
-      } else if (slot.streetDir === 'S') {
-        bbMesh.position.set(bx, 1.8 + bHeight * 0.55, bz + bd * 0.51);
-        bbMesh.rotation.y = 0;
-      } else if (slot.streetDir === 'E') {
-        bbMesh.position.set(bx + bw * 0.51, 1.8 + bHeight * 0.55, bz);
-        bbMesh.rotation.y = Math.PI / 2;
-      } else if (slot.streetDir === 'W') {
-        bbMesh.position.set(bx - bw * 0.51, 1.8 + bHeight * 0.55, bz);
-        bbMesh.rotation.y = -Math.PI / 2;
-      }
-      districtGroup.add(bbMesh);
-    }
-
-    // Fixed 3D Physical Rooftop Sign
-    if (bIndex % 5 === 2 && bHeight > 35) {
-      var neonNames = ['GMC CLOUD', 'GIT HIGHWAY', 'VIBE LABS', 'QUANTUM', 'NEO MATRIX', 'CYBER CORP'];
-      var neonCols = ['#00f2fe', '#ff0055', '#10b981', '#f59e0b', '#a855f7', '#38bdf8'];
-      var nIdx = styleSeed % neonNames.length;
-      var fixedSign = createFixed3DRooftopSign(neonNames[nIdx], neonCols[nIdx], Math.min(bw * 0.85, 10.0), 2.8);
-      fixedSign.position.set(bx, buildingTopY, bz);
-      districtGroup.add(fixedSign);
     }
 
     return {
@@ -12870,23 +13371,23 @@ var City3DEngine = (function() {
 
     var baseGeo = new THREE.BoxGeometry(BW, 1.8, BD);
     var baseMat = new THREE.MeshStandardMaterial({
-      color: 0x242e3d,
-      roughness: 0.75,
-      metalness: 0.2
+      color: 0x1e2433,
+      roughness: 0.70,
+      metalness: 0.20
     });
     var baseMesh = new THREE.Mesh(baseGeo, baseMat);
     baseMesh.position.y = 0.9;
     baseMesh.receiveShadow = true;
     districtGroup.add(baseMesh);
 
-    var curbMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 });
+    var curbMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.55, metalness: 0.35 });
     var curbGeo = new THREE.BoxGeometry(BW + 1.2, 0.6, BD + 1.2);
     var curbMesh = new THREE.Mesh(curbGeo, curbMat);
     curbMesh.position.y = 0.3;
     districtGroup.add(curbMesh);
 
-    var roofMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85, metalness: 0.1 });
-    var groundMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
+    var roofMat = new THREE.MeshStandardMaterial({ color: 0x1e2430, roughness: 0.75, metalness: 0.25 });
+    var groundMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 });
 
     var nonTextCount = repo.nonTextCount || 0;
     var parkW = Math.min(48, Math.max(16, 14 + Math.sqrt(nonTextCount) * 5.0));
@@ -12896,8 +13397,9 @@ var City3DEngine = (function() {
 
     var lawnGeo = new THREE.BoxGeometry(parkW, 0.5, parkD);
     var lawnMat = new THREE.MeshStandardMaterial({
-      color: 0x2e7d32,
-      roughness: 0.85
+      color: 0x164e33,
+      roughness: 0.85,
+      metalness: 0.05
     });
     var lawnMesh = new THREE.Mesh(lawnGeo, lawnMat);
     lawnMesh.position.set(parkPosX, 1.9, parkPosZ);
@@ -12908,8 +13410,8 @@ var City3DEngine = (function() {
     if (nonTextCount === 0) numTrees = 2;
 
     var trunkGeo = new THREE.CylinderGeometry(0.35, 0.5, 3.2, 6);
-    var trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c3d2e, roughness: 0.9 });
-    var foliageColors = [0x22c55e, 0x16a34a, 0x15803d, 0x10b981];
+    var trunkMat = new THREE.MeshStandardMaterial({ color: 0x473024, roughness: 0.9 });
+    var foliageColors = [0x15803d, 0x166534, 0x047857, 0x0f766e];
 
     for (var t = 0; t < numTrees; t++) {
       var treeGroup = new THREE.Group();
@@ -13003,25 +13505,24 @@ var City3DEngine = (function() {
     var maxHeight = 0;
     var tallestFileName = repo.tallest ? (repo.tallest.name || repo.tallest.path) : '';
 
+    // Pick exactly ONE building in this district to become the MegaScreen Skyscraper!
+    var megaBldgIdx = (repoSeed % itemCount);
+
     for (var b = 0; b < itemCount; b++) {
       var item = clusteredItems[b];
       var slot = slots[b % slots.length];
       if (!slot) break;
 
       var isTallest = (b === 0 && item.type === 'landmark') || (item.name === tallestFileName);
-      var bInfo = buildArchitecturalStructure(districtGroup, item, b, slot, repo, posX, posZ, targetMode === 'night', isTallest, roofMat, groundMat, (repoSeed + b * 17));
+      var isMega = (b === megaBldgIdx);
+
+      var bInfo = buildArchitecturalStructure(districtGroup, item, b, slot, repo, posX, posZ, targetMode === 'night', isTallest, roofMat, groundMat, (repoSeed + b * 17), isMega, index);
 
       if (bInfo.height > maxHeight || isTallest) {
         maxHeight = Math.max(maxHeight, bInfo.height);
         tallestBuildingPos.set(bInfo.posX, bInfo.topY, bInfo.posZ);
       }
     }
-
-    var spireGeo = new THREE.CylinderGeometry(0.3, 0.7, 10, 8);
-    var spireMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.2 });
-    var spireMesh = new THREE.Mesh(spireGeo, spireMat);
-    spireMesh.position.set(tallestBuildingPos.x - posX, tallestBuildingPos.y + 5.0 - 1.8, tallestBuildingPos.z - posZ);
-    districtGroup.add(spireMesh);
 
     var status = repo.status || null;
     var isConflict = status && status.conflicted;
@@ -13034,25 +13535,19 @@ var City3DEngine = (function() {
     else if (hasChanges) beaconColor = 0xf59e0b;
     else if (isAhead || isBehind) beaconColor = 0xa855f7;
 
-    var beaconGeo = new THREE.SphereGeometry(1.2, 12, 12);
-    var beaconMat = new THREE.MeshBasicMaterial({ color: beaconColor });
-    var beaconMesh = new THREE.Mesh(beaconGeo, beaconMat);
-    beaconMesh.position.set(tallestBuildingPos.x - posX, tallestBuildingPos.y + 10.0 - 1.8, tallestBuildingPos.z - posZ);
-    districtGroup.add(beaconMesh);
-    beaconMeshes.push(beaconMesh);
-
+    // Clean Repo Banner Sprite directly tethered to the roof
     var bannerSprite = createRepoBannerSprite(repo.name, repo.totalFiles, (repo.tallest ? repo.tallest.size : 0), targetMode === 'night', status);
-    bannerSprite.position.set(tallestBuildingPos.x, tallestBuildingPos.y + 14.0, tallestBuildingPos.z);
+    bannerSprite.position.set(tallestBuildingPos.x, tallestBuildingPos.y + 12.0, tallestBuildingPos.z);
     bannerSprite.userData = { repoIndex: index, repo: repo, districtCenter: new THREE.Vector3(posX, 15, posZ) };
     cityGroup.add(bannerSprite);
 
     var tetherGeo = new THREE.BufferGeometry();
     var tetherPoints = [
-      new THREE.Vector3(tallestBuildingPos.x, tallestBuildingPos.y + 10.0, tallestBuildingPos.z),
-      new THREE.Vector3(tallestBuildingPos.x, tallestBuildingPos.y + 13.0, tallestBuildingPos.z)
+      new THREE.Vector3(tallestBuildingPos.x, tallestBuildingPos.y + 1.0, tallestBuildingPos.z),
+      new THREE.Vector3(tallestBuildingPos.x, tallestBuildingPos.y + 11.0, tallestBuildingPos.z)
     ];
     tetherGeo.setFromPoints(tetherPoints);
-    var tetherMat = new THREE.LineBasicMaterial({ color: beaconColor, linewidth: 2, transparent: true, opacity: 0.85 });
+    var tetherMat = new THREE.LineBasicMaterial({ color: beaconColor, linewidth: 2, toneMapped: false });
     var tetherLine = new THREE.Line(tetherGeo, tetherMat);
     cityGroup.add(tetherLine);
 
@@ -13078,103 +13573,30 @@ var City3DEngine = (function() {
     cityGroup.add(districtGroup);
   }
 
-  function buildTrafficCars(cols, rows, stepX, stepZ, originX, originZ, totalW, totalD) {
-    var carColors = [0x3b82f6, 0xef4444, 0x10b981, 0xf59e0b, 0x8b5cf6, 0xf1f5f9];
-    var carGeo = new THREE.BoxGeometry(2.4, 1.4, 4.4);
-    var headLightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    var tailLightMat = new THREE.MeshBasicMaterial({ color: 0xff0055 });
-    var lightConeGeo = new THREE.PlaneGeometry(2.6, 6.5);
-    var lightConeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 });
-
-    var count = 65;
-    for (var i = 0; i < count; i++) {
-      var isHorizontal = Math.random() > 0.5;
-      var colIdx = Math.floor(Math.random() * (cols + 1));
-      var rowIdx = Math.floor(Math.random() * (rows + 1));
-
-      var carCol = carColors[i % carColors.length];
-      var carMat = new THREE.MeshStandardMaterial({ color: carCol, roughness: 0.4, metalness: 0.6 });
-      var carGroup = new THREE.Group();
-
-      var carBody = new THREE.Mesh(carGeo, carMat);
-      carBody.position.y = 0.7;
-      carGroup.add(carBody);
-
-      var hl1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.2), headLightMat);
-      hl1.position.set(-0.75, 0.6, 2.22);
-      carGroup.add(hl1);
-      var hl2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.2), headLightMat);
-      hl2.position.set(0.75, 0.6, 2.22);
-      carGroup.add(hl2);
-
-      var tl1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.2), tailLightMat);
-      tl1.position.set(-0.75, 0.6, -2.22);
-      carGroup.add(tl1);
-      var tl2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.2), tailLightMat);
-      tl2.position.set(0.75, 0.6, -2.22);
-      carGroup.add(tl2);
-
-      var cone = new THREE.Mesh(lightConeGeo, lightConeMat);
-      cone.rotation.x = -Math.PI / 2;
-      cone.position.set(0, 0.1, 5.5);
-      carGroup.add(cone);
-
-      var dir = (Math.random() > 0.5) ? 1 : -1;
-      var speed = 28 + Math.random() * 20;
-
-      var x, z;
-      if (isHorizontal) {
-        var rz = originZ + (rowIdx - 0.5) * stepZ;
-        x = (Math.random() - 0.5) * totalW;
-        z = rz + (dir > 0 ? 5.5 : -5.5);
-        carGroup.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-      } else {
-        var rx = originX + (colIdx - 0.5) * stepX;
-        x = rx + (dir > 0 ? 5.5 : -5.5);
-        z = (Math.random() - 0.5) * totalD;
-        carGroup.rotation.y = dir > 0 ? 0 : Math.PI;
-      }
-
-      carGroup.position.set(x, 0, z);
-      trafficGroup.add(carGroup);
-
-      trafficCars.push({
-        group: carGroup,
-        isHorizontal: isHorizontal,
-        dir: dir,
-        speed: speed,
-        totalW: totalW,
-        totalD: totalD
-      });
-    }
-  }
-
   function buildFlightSpline(districts) {
-    if (!districts || !districts.length) return;
-
     var waypoints = [];
-    var N = districts.length;
+    if (districts && districts.length > 0) {
+      var N = districts.length;
+      for (var i = 0; i < N; i++) {
+        var d = districts[i];
+        var cx = d.center ? d.center.x : 0;
+        var cz = d.center ? d.center.z : 0;
+        var h = Math.max((d.height || 40) + 40, 85);
+        var r = 90;
 
-    for (var i = 0; i < N; i++) {
-      var d = districts[i];
-      var cx = d.center.x;
-      var cz = d.center.z;
-      var h = Math.max(d.height + 40, 85);
-      var r = 85;
-
-      waypoints.push(new THREE.Vector3(cx + r, h + 14, cz + r * 0.8));
-      waypoints.push(new THREE.Vector3(cx - r * 0.6, h + 4, cz + r));
-      waypoints.push(new THREE.Vector3(cx - r, h, cz - r * 0.6));
-      waypoints.push(new THREE.Vector3(cx + r * 0.5, h + 22, cz - r));
+        waypoints.push(new THREE.Vector3(cx + r, h + 14, cz + r * 0.8));
+        waypoints.push(new THREE.Vector3(cx - r * 0.6, h + 4, cz + r));
+        waypoints.push(new THREE.Vector3(cx - r, h, cz - r * 0.6));
+        waypoints.push(new THREE.Vector3(cx + r * 0.5, h + 22, cz - r));
+      }
     }
 
     if (waypoints.length < 4) {
-      var d0 = districts[0];
       waypoints = [
-        new THREE.Vector3(d0.center.x + 100, 95, d0.center.z + 100),
-        new THREE.Vector3(d0.center.x - 100, 85, d0.center.z + 100),
-        new THREE.Vector3(d0.center.x - 100, 90, d0.center.z - 100),
-        new THREE.Vector3(d0.center.x + 100, 105, d0.center.z - 100)
+        new THREE.Vector3(140, 95, 140),
+        new THREE.Vector3(-140, 85, 140),
+        new THREE.Vector3(-140, 90, -140),
+        new THREE.Vector3(140, 105, -140)
       ];
     }
 
@@ -13215,33 +13637,29 @@ var City3DEngine = (function() {
     if (Math.abs(modeTransition - targetVal) > 0.001) {
       modeTransition += (targetVal - modeTransition) * 0.06;
 
-      var skyDay = new THREE.Color(0x94b8e8);
-      var skyNight = new THREE.Color(0x060914);
-      var curSky = skyDay.clone().lerp(skyNight, modeTransition);
-      scene.background = curSky;
+      // Crystal Clear Studio Background (Zero Fog!)
+      var bgDay = new THREE.Color(0xf1f5f9);
+      var bgNight = new THREE.Color(0x060913);
+      scene.background = bgDay.clone().lerp(bgNight, modeTransition);
 
-      var fogDay = new THREE.Color(0xa8c8ec);
-      var fogNight = new THREE.Color(0x070b18);
-      scene.fog.color = fogDay.clone().lerp(fogNight, modeTransition);
-
-      sunLight.intensity = (1.0 - modeTransition) * 1.25;
-      moonLight.intensity = modeTransition * 0.55;
-
-      var ambDay = new THREE.Color(0x64748b);
+      // Balanced 1 Ambient Light + 1 Directional Light
+      var ambDay = new THREE.Color(0xffffff);
       var ambNight = new THREE.Color(0x1e293b);
       ambientLight.color = ambDay.clone().lerp(ambNight, modeTransition);
-      ambientLight.intensity = (1.0 - modeTransition) * 0.45 + modeTransition * 0.25;
+      ambientLight.intensity = (1.0 - modeTransition) * 0.75 + modeTransition * 0.55;
 
-      hemiLight.intensity = (1.0 - modeTransition) * 0.75 + modeTransition * 0.35;
-      hemiLight.color.lerpColors(new THREE.Color(0xcce0ff), new THREE.Color(0x1e293b), modeTransition);
-      hemiLight.groundColor.lerpColors(new THREE.Color(0x475569), new THREE.Color(0x0f172a), modeTransition);
+      var sunDay = new THREE.Color(0xfffaf0);
+      var sunNight = new THREE.Color(0x818cf8);
+      sunLight.color = sunDay.clone().lerp(sunNight, modeTransition);
+      sunLight.intensity = (1.0 - modeTransition) * 1.35 + modeTransition * 0.65;
+      sunLight.position.lerpVectors(new THREE.Vector3(220, 320, 180), new THREE.Vector3(-180, 260, -140), modeTransition);
 
       if (starField) {
-        starField.material.opacity = modeTransition * 0.92;
+        starField.material.opacity = modeTransition * 0.95;
       }
 
-      // Building Emissive Window Radiance (1.25x HDR at night, strictly 0.0 in day)
-      var currentEmissive = modeTransition * 1.25;
+      // Building Emissive Window Radiance
+      var currentEmissive = modeTransition * 0.90;
       if (buildingMaterials && buildingMaterials.length > 0) {
         for (var bm = 0; bm < buildingMaterials.length; bm++) {
           buildingMaterials[bm].emissiveIntensity = currentEmissive;
@@ -13259,65 +13677,34 @@ var City3DEngine = (function() {
           streetlightGlowDecals[sg].opacity = modeTransition * 0.45;
         }
       }
+
+      // Unreal Bloom Dynamic Adaptation (Gentle glow, zero text washout)
+      if (bloomPass) {
+        bloomPass.strength = modeTransition * 0.65;
+        bloomPass.threshold = 0.88;
+        bloomPass.radius = 0.25;
+      }
+      renderer.toneMappingExposure = 1.0;
     }
 
-    // Dynamic LED Billboard wave animation
+    // Dynamic Multi-Channel Cyberpunk Screens & Billboards Animation (Renders on whole building facades)
     updateAnimatedBillboards(totalElapsedTime);
 
-    // Drifting Volumetric Cloud Deck
-    if (cloudsGroup && cloudsGroup.children.length > 0) {
-      for (var cl = 0; cl < cloudsGroup.children.length; cl++) {
-        var cloud = cloudsGroup.children[cl];
-        cloud.position.x += dt * (cloud.userData.speed || 5.0);
-        if (cloud.position.x > 450) cloud.position.x = -450;
+    // Neon Conduits Pulsing Wave
+    if (neonConduitMaterials && neonConduitMaterials.length > 0) {
+      for (var nm = 0; nm < neonConduitMaterials.length; nm++) {
+        var nMat = neonConduitMaterials[nm];
+        var pOff = nMat.userData ? (nMat.userData.pulseOffset || 0) : 0;
+        var pulse = 0.82 + 0.18 * Math.sin(totalElapsedTime * 4.5 + pOff);
+        nMat.opacity = Math.max(0.20, modeTransition * 0.95 * pulse + (1.0 - modeTransition) * 0.45);
       }
-    }
-
-    // Rain Particle Falling
-    if (rainPoints && rainPositions) {
-      if (isRaining) {
-        rainPoints.visible = true;
-        for (var r = 0; r < rainCount; r++) {
-          rainPositions[r * 3 + 1] -= dt * 260;
-          rainPositions[r * 3] -= dt * 22;
-          if (rainPositions[r * 3 + 1] < 0) {
-            rainPositions[r * 3 + 1] = 250 + Math.random() * 20;
-            rainPositions[r * 3] = (Math.random() - 0.5) * 900;
-          }
-        }
-        rainPoints.geometry.attributes.position.needsUpdate = true;
-      } else {
-        rainPoints.visible = false;
-      }
-    }
-
-    // Beacon Lights Pulsing
-    var beaconScale = 1.0 + 0.35 * Math.sin(totalElapsedTime * 6.0);
-    for (var b = 0; b < beaconMeshes.length; b++) {
-      beaconMeshes[b].scale.set(beaconScale, beaconScale, beaconScale);
     }
 
     // Badge floating sine bobbing
     for (var bg = 0; bg < repoBadges.length; bg++) {
       var bItem = repoBadges[bg];
-      var bob = Math.sin(totalElapsedTime * 2.0 + bg) * 0.8;
-      bItem.sprite.position.y = bItem.tallestPos.y + 14.0 + bob;
-    }
-
-    // Traffic Cars Movement
-    for (var c = 0; c < trafficCars.length; c++) {
-      var car = trafficCars[c];
-      if (car.isHorizontal) {
-        car.group.position.x += car.dir * car.speed * dt;
-        if (Math.abs(car.group.position.x) > car.totalW / 2) {
-          car.group.position.x = -car.dir * car.totalW / 2;
-        }
-      } else {
-        car.group.position.z += car.dir * car.speed * dt;
-        if (Math.abs(car.group.position.z) > car.totalD / 2) {
-          car.group.position.z = -car.dir * car.totalD / 2;
-        }
-      }
+      var bob = Math.sin(totalElapsedTime * 2.0 + bg) * 0.6;
+      bItem.sprite.position.y = bItem.tallestPos.y + 12.0 + bob;
     }
 
     // Airplane Flight Cruise
@@ -13327,13 +13714,13 @@ var City3DEngine = (function() {
       camPos.y += Math.sin(totalElapsedTime * 0.55) * 1.6;
 
       targetBankAngle = -calcBankAngle(flightSpline, cruiseProgress) * 14.0;
-      bankAngle += (targetBankAngle - bankAngle) * 0.035;
+      bankAngle += (targetBankAngle - bankAngle) * 0.05;
 
       if (districtData.length > 0) {
         var activeIdx = Math.floor(cruiseProgress * districtData.length) % districtData.length;
         var actDist = districtData[activeIdx];
         if (actDist) {
-          targetLookAt.copy(actDist.tallestPos || actDist.center);
+          targetLookAt.copy(actDist.tallestPos || actDist.center || new THREE.Vector3(0, 15, 0));
           var hudBadge = document.getElementById('city3dCurrentRepoBadge');
           if (hudBadge && actDist.repo) {
             var stIcon = '✈️';
@@ -13344,7 +13731,7 @@ var City3DEngine = (function() {
         }
       }
 
-      currentLookAt.lerp(targetLookAt, 0.018);
+      currentLookAt.lerp(targetLookAt, 0.04);
       camera.position.copy(camPos);
       camera.lookAt(currentLookAt);
       camera.rotateZ(bankAngle * Math.PI / 180);
@@ -13370,7 +13757,12 @@ var City3DEngine = (function() {
       }
     }
 
-    renderer.render(scene, camera);
+    // Post-Processing / Fallback Render
+    if (composer) {
+      composer.render();
+    } else {
+      renderer.render(scene, camera);
+    }
   }
 
   function bindEvents() {
@@ -13412,7 +13804,7 @@ var City3DEngine = (function() {
           isAutoCruising = true;
           updateFlightButton();
         }
-      }, 12000);
+      }, 15000);
     });
 
     canvasEl.addEventListener('wheel', function(e) {
@@ -13428,7 +13820,7 @@ var City3DEngine = (function() {
           isAutoCruising = true;
           updateFlightButton();
         }
-      }, 12000);
+      }, 15000);
     }, { passive: false });
   }
 
@@ -13447,14 +13839,6 @@ var City3DEngine = (function() {
         e.preventDefault();
         manualModeOverride = true;
         toggleDayNight();
-      });
-    }
-
-    var weatherBtn = document.getElementById('city3dWeatherBtn');
-    if (weatherBtn) {
-      weatherBtn.addEventListener('click', function(e) {
-        e.preventDefault();
-        toggleWeather();
       });
     }
 
@@ -13489,6 +13873,13 @@ var City3DEngine = (function() {
 
   function toggleFlight() {
     isAutoCruising = !isAutoCruising;
+    if (isAutoCruising) {
+      if (!flightSpline) {
+        buildFlightSpline(districtData);
+      }
+      if (!currentLookAt) currentLookAt = new THREE.Vector3(0, 15, 0);
+      if (!targetLookAt) targetLookAt = new THREE.Vector3(0, 15, 0);
+    }
     updateFlightButton();
   }
 
@@ -13509,19 +13900,6 @@ var City3DEngine = (function() {
     var textEl = document.getElementById('city3dDayNightText');
     if (iconEl) iconEl.textContent = targetMode === 'night' ? '🌙' : '☀️';
     if (textEl) textEl.textContent = targetMode === 'night' ? (t('city3dNight') || '夜间') : (t('city3dDay') || '白天');
-  }
-
-  function toggleWeather() {
-    isRaining = !isRaining;
-    var iconEl = document.getElementById('city3dWeatherIcon');
-    var textEl = document.getElementById('city3dWeatherText');
-    if (iconEl) iconEl.textContent = isRaining ? '🌧️' : '☀️';
-    if (textEl) textEl.textContent = isRaining ? (t('city3dRain') || '雨夜') : (t('city3dClear') || '晴空');
-
-    for (var r = 0; r < roadMaterials.length; r++) {
-      roadMaterials[r].roughness = isRaining ? 0.18 : 0.85;
-      roadMaterials[r].metalness = isRaining ? 0.85 : 0.1;
-    }
   }
 
   function syncWithTheme(themeId) {
@@ -13586,6 +13964,12 @@ var City3DEngine = (function() {
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
+    if (composer) {
+      composer.setSize(width, height);
+    }
+    if (bloomPass && bloomPass.resolution) {
+      bloomPass.resolution.set(width, height);
+    }
   }
 
   function pause() {
@@ -13628,7 +14012,6 @@ var City3DEngine = (function() {
     buildCity: buildCity,
     setDayNight: setDayNight,
     toggleDayNight: toggleDayNight,
-    toggleWeather: toggleWeather,
     syncWithTheme: syncWithTheme,
     toggleFlight: toggleFlight,
     toggleZenMode: toggleZenMode,
