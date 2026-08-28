@@ -5835,6 +5835,12 @@ body.sidebar-collapsed .city-3d-hud-left {
   background: var(--accent);
   color: #ffffff;
 }
+.city-3d-btn-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-soft);
+}
 .city-3d-repo-card {
   position: fixed;
   bottom: 24px;
@@ -5993,6 +5999,14 @@ body.sidebar-collapsed .city-3d-hud-left {
         <button id="city3dDayNightBtn" class="city-3d-btn" type="button" title="昼夜切换" data-i18n-title="city3dDay">
           <span id="city3dDayNightIcon">☀️</span>
           <span id="city3dDayNightText">白天</span>
+        </button>
+        <button id="city3dGtaoBtn" class="city-3d-btn city-3d-btn-active" type="button" title="GTAO & GI 光影遮蔽" data-i18n-title="city3dGtao">
+          <span>✨</span>
+          <span id="city3dGtaoText">GTAO / GI</span>
+        </button>
+        <button id="city3dEdlBtn" class="city-3d-btn city-3d-btn-active" type="button" title="EDL / 建筑结构轮廓" data-i18n-title="city3dEdl">
+          <span>📐</span>
+          <span id="city3dEdlText">EDL 轮廓</span>
         </button>
         <button id="city3dZenBtn" class="city-3d-btn city-3d-btn-highlight" type="button" title="全屏沉浸/显示概览" data-i18n-title="city3dZenMode">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
@@ -6859,7 +6873,7 @@ var I18N = {
     commitDetail: '提交详情',
     copied: '已复制',
     selectTextAndCopy: '请选中文本后复制',
-    repoRunning: 'GMC GitWeb 正在运行。请在 git 仓库中执行 "gmc web" 查看状态。',
+    repoRunning: 'GMC GitWeb 正在运行。',
     openInFinderPrefix: '在 Finder 中打开：',
     removeFromRecent: '从最近仓库中移除',
     removeFromRecentAriaSuffix: '从最近仓库中移除',
@@ -7041,7 +7055,12 @@ var I18N = {
     city3dTallest: '最高建筑 (最大文件)',
     city3dWeather: '天气切换 (晴空/雨夜)',
     city3dRain: '赛博雨夜',
-    city3dClear: '晴朗晴空'
+    city3dClear: '晴朗晴空',
+    city3dGtao: 'GTAO 光影遮蔽与全局光 (GI)',
+    city3dSss: 'SSS 屏幕空间接触阴影',
+    city3dSsr: 'SSR 屏幕空间湿面反射',
+    city3dEdl: 'EDL / 建筑结构轮廓 (Sobel)',
+    city3dAntialias: '抗锯齿 (FXAA)'
   },
   en: {
     language: 'Language',
@@ -7171,7 +7190,7 @@ var I18N = {
     commitDetail: 'Commit detail',
     copied: 'Copied',
     selectTextAndCopy: 'Select text and copy',
-    repoRunning: 'GMC GitWeb is running. Use "gmc web" in a git repository to view its status.',
+    repoRunning: 'GMC GitWeb is running. ',
     openInFinderPrefix: 'Open in Finder: ',
     removeFromRecent: 'Remove from recent',
     removeFromRecentAriaSuffix: 'from recent repositories',
@@ -7360,7 +7379,12 @@ var I18N = {
     city3dTallest: 'Tallest Building (Largest File)',
     city3dWeather: 'Toggle Weather',
     city3dRain: 'Cyber Rain',
-    city3dClear: 'Clear Sky'
+    city3dClear: 'Clear Sky',
+    city3dGtao: 'GTAO & GI Ambient Occlusion',
+    city3dSss: 'SSS Screen-Space Contact Shadows',
+    city3dSsr: 'SSR Screen-Space Reflections',
+    city3dEdl: 'EDL / Edge Outlines (Sobel)',
+    city3dAntialias: 'Anti-Aliasing (FXAA)'
   }
 };
 I18N.ja = Object.assign({}, I18N.en, {
@@ -7487,7 +7511,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   commitDetail: 'コミット詳細',
   copied: 'コピーしました',
   selectTextAndCopy: 'テキストを選択してコピーしてください',
-  repoRunning: 'GMC GitWeb は実行中です。状態を表示するには git リポジトリで "gmc web" を実行してください。',
+  repoRunning: 'GMC GitWeb は実行中です。',
   openInFinderPrefix: 'Finder で開く: ',
   removeFromRecent: '最近の一覧から削除',
   removeFromRecentAriaSuffix: '最近のリポジトリから削除',
@@ -7731,7 +7755,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   commitDetail: '커밋 상세',
   copied: '복사됨',
   selectTextAndCopy: '텍스트를 선택한 뒤 복사하세요',
-  repoRunning: 'GMC GitWeb이 실행 중입니다. 상태를 보려면 git 저장소에서 "gmc web"을 실행하세요.',
+  repoRunning: 'GMC GitWeb이 실행 중입니다. ',
   openInFinderPrefix: 'Finder에서 열기: ',
   removeFromRecent: '최근 목록에서 제거',
   removeFromRecentAriaSuffix: '최근 저장소에서 제거',
@@ -7975,7 +7999,7 @@ I18N.es = Object.assign({}, I18N.en, {
   commitDetail: 'Detalle del commit',
   copied: 'Copiado',
   selectTextAndCopy: 'Selecciona el texto y copia',
-  repoRunning: 'GMC GitWeb está en ejecución. Usa "gmc web" en un repositorio git para ver su estado.',
+  repoRunning: 'GMC GitWeb está en ejecución. ',
   openInFinderPrefix: 'Abrir en Finder: ',
   removeFromRecent: 'Eliminar de recientes',
   removeFromRecentAriaSuffix: 'de repositorios recientes',
@@ -8203,7 +8227,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   commitDetail: 'Détail du commit',
   copied: 'Copié',
   selectTextAndCopy: 'Sélectionnez le texte puis copiez',
-  repoRunning: 'GMC GitWeb est en cours d’exécution. Utilisez "gmc web" dans un dépôt git pour voir son état.',
+  repoRunning: 'GMC GitWeb est en cours d’exécution. ',
   openInFinderPrefix: 'Ouvrir dans Finder : ',
   removeFromRecent: 'Supprimer des récents',
   removeFromRecentAriaSuffix: 'des dépôts récents',
@@ -11413,10 +11437,230 @@ var City3DEngine = (function() {
   var isInitialized = false;
   var isRunning = false;
 
-  // Postprocessing & Unreal Bloom
+  // Postprocessing & Custom Passes
   var composer = null;
   var renderPass = null;
+  var gtaoPass = null;
   var bloomPass = null;
+  var gammaPass = null;
+  var fxaaPass = null;
+  var depthTexture = null;
+  var isGTAOEnabled = true;
+  var isEDLEnabled = true;
+
+  var GTAO_CONFIG = {
+    radius: 2.0,
+    intensity: 3.45,
+    giIntensity: 0.85,
+    edlStrength: 0.85,
+    edlRadius: 1.0,
+    sobelStrength: 0.55
+  };
+
+  /* =========================================================================
+   * Post-Processing Shaders: Unified GTAO (AO + GI) & Pure Depth EDL + Sobel, FXAA 3.11
+   * ========================================================================= */
+  var City3DShaders = {
+    GTAOShader: {
+      uniforms: {
+        tDiffuse: { value: null },
+        tDepth: { value: null },
+        resolution: { value: null },
+        cameraNear: { value: 5.0 },
+        cameraFar: { value: 2200.0 },
+        cameraProjectionMatrixInverse: { value: null },
+        aoEnabled: { value: 1.0 },
+        aoRadius: { value: 20.0 },
+        aoIntensity: { value: 1.45 },
+        giIntensity: { value: 0.35 },
+        edlEnabled: { value: 1.0 },
+        edlStrength: { value: 0.85 },
+        edlRadius: { value: 1.2 },
+        sobelStrength: { value: 0.55 }
+      },
+      vertexShader: [
+        'varying vec2 vUv;',
+        'void main() {',
+        '  vUv = uv;',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}'
+      ].join('\\n'),
+      fragmentShader: [
+        'uniform sampler2D tDiffuse;',
+        'uniform sampler2D tDepth;',
+        'uniform vec2 resolution;',
+        'uniform float cameraNear;',
+        'uniform float cameraFar;',
+        'uniform mat4 cameraProjectionMatrixInverse;',
+        'uniform float aoEnabled;',
+        'uniform float aoRadius;',
+        'uniform float aoIntensity;',
+        'uniform float giIntensity;',
+        'uniform float edlEnabled;',
+        'uniform float edlStrength;',
+        'uniform float edlRadius;',
+        'uniform float sobelStrength;',
+        'varying vec2 vUv;',
+        '',
+        'vec3 getViewPosition(vec2 uv, float d) {',
+        '  vec4 clipSpace = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);',
+        '  vec4 viewSpace = cameraProjectionMatrixInverse * clipSpace;',
+        '  return viewSpace.xyz / max(viewSpace.w, 0.00001);',
+        '}',
+        '',
+        'float getLinearDepth(vec2 uv) {',
+        '  float d = texture2D(tDepth, uv).r;',
+        '  return (2.0 * cameraNear * cameraFar) / max(cameraFar + cameraNear - (d * 2.0 - 1.0) * (cameraFar - cameraNear), 0.0001);',
+        '}',
+        '',
+        'void main() {',
+        '  vec4 sceneColor = texture2D(tDiffuse, vUv);',
+        '  float rawDepth = texture2D(tDepth, vUv).r;',
+        '  if (rawDepth >= 0.9999 || rawDepth <= 0.0) {',
+        '    gl_FragColor = sceneColor;',
+        '    return;',
+        '  }',
+        '  vec3 viewPos = getViewPosition(vUv, rawDepth);',
+        '  vec3 normal = normalize(cross(dFdx(viewPos), dFdy(viewPos)));',
+        '  vec2 texel = 1.0 / resolution;',
+        '  float z = getLinearDepth(vUv);',
+        '',
+        '  // 1. Ground Truth Ambient Occlusion (GTAO) + Multi-Bounce GI',
+        '  float aoMultiBounce = 1.0;',
+        '  vec3 giBounce = vec3(0.0);',
+        '  if (aoEnabled > 0.5) {',
+        '    float projScale = resolution.y / max(-viewPos.z * 1.0, 0.1);',
+        '    float radiusSS = clamp(aoRadius * projScale, 2.0, min(resolution.x, resolution.y) * 0.22);',
+        '    float totalAO = 0.0;',
+        '    float totalWeight = 0.0001;',
+        '    const int NUM_SAMPLES = 16;',
+        '    const float GOLDEN_ANGLE = 2.39996323;',
+        '    for (int i = 1; i <= NUM_SAMPLES; i++) {',
+        '      float fi = float(i);',
+        '      float r = sqrt(fi / float(NUM_SAMPLES));',
+        '      float theta = fi * GOLDEN_ANGLE;',
+        '      vec2 offset = vec2(cos(theta), sin(theta)) * (r * radiusSS);',
+        '      vec2 sUv = vUv + offset / resolution;',
+        '      if (sUv.x < 0.0 || sUv.x > 1.0 || sUv.y < 0.0 || sUv.y > 1.0) continue;',
+        '      float sRawD = texture2D(tDepth, sUv).r;',
+        '      if (sRawD >= 0.9999) continue;',
+        '      vec3 sViewPos = getViewPosition(sUv, sRawD);',
+        '      vec3 sampleVec = sViewPos - viewPos;',
+        '      float dist = length(sampleVec);',
+        '      if (dist > 0.05 && dist < aoRadius * 1.5) {',
+        '        float cosH = max(0.0, dot(sampleVec / dist, normal));',
+        '        float distRatio = dist / aoRadius;',
+        '        float falloff = max(0.0, 1.0 - distRatio * distRatio);',
+        '        if (cosH > 0.02) {',
+        '          totalAO += cosH * falloff;',
+        '        }',
+        '        totalWeight += 1.0;',
+        '      }',
+        '    }',
+        '    float rawAO = clamp((totalAO / totalWeight) * aoIntensity, 0.0, 0.88);',
+        '    float aoFactor = 1.0 - rawAO;',
+        '    float rho = 0.35;',
+        '    aoMultiBounce = aoFactor / max(1.0 - rho * (1.0 - aoFactor), 0.001);',
+        '    giBounce = vec3(0.05, 0.08, 0.12) * (1.0 - aoMultiBounce) * giIntensity;',
+        '  }',
+        '',
+        '  // 2. Eye-Dome Lighting (EDL) + Pure Depth Sobel Architectural Outline',
+        '  float edlFactor = 1.0;',
+        '  float totalEdge = 0.0;',
+        '  if (edlEnabled > 0.5) {',
+        '    vec2 offsets[8];',
+        '    offsets[0] = vec2( 1.0,  0.0);',
+        '    offsets[1] = vec2( 0.7071,  0.7071);',
+        '    offsets[2] = vec2( 0.0,  1.0);',
+        '    offsets[3] = vec2(-0.7071,  0.7071);',
+        '    offsets[4] = vec2(-1.0,  0.0);',
+        '    offsets[5] = vec2(-0.7071, -0.7071);',
+        '    offsets[6] = vec2( 0.0, -1.0);',
+        '    offsets[7] = vec2( 0.7071, -0.7071);',
+        '    float edlResponse = 0.0;',
+        '    for (int i = 0; i < 8; i++) {',
+        '      vec2 uvN = vUv + offsets[i] * (edlRadius * texel);',
+        '      float zN = getLinearDepth(uvN);',
+        '      float diff = max(0.0, (z - zN) / max(z, 1.0) * 100.0);',
+        '      if (diff > 0.05) {',
+        '        edlResponse += diff;',
+        '      }',
+        '    }',
+        '    edlFactor = exp(-edlStrength * (edlResponse / 8.0));',
+        '',
+        '    // 3x3 Depth-Only Sobel Filter: Strictly detects 3D depth discontinuities',
+        '    float d00 = getLinearDepth(vUv + vec2(-texel.x, -texel.y));',
+        '    float d10 = getLinearDepth(vUv + vec2( 0.0,     -texel.y));',
+        '    float d20 = getLinearDepth(vUv + vec2( texel.x, -texel.y));',
+        '    float d01 = getLinearDepth(vUv + vec2(-texel.x,  0.0));',
+        '    float d21 = getLinearDepth(vUv + vec2( texel.x,  0.0));',
+        '    float d02 = getLinearDepth(vUv + vec2(-texel.x,  texel.y));',
+        '    float d12 = getLinearDepth(vUv + vec2( 0.0,      texel.y));',
+        '    float d22 = getLinearDepth(vUv + vec2( texel.x,  texel.y));',
+        '    float gxD = (-d00 + d20) + (-2.0 * d01 + 2.0 * d21) + (-d02 + d22);',
+        '    float gyD = (-d00 - 2.0 * d10 - d20) + (d02 + 2.0 * d12 + d22);',
+        '    float depthGrad = sqrt(gxD * gxD + gyD * gyD) / max(z, 1.0) * 12.0;',
+        '    totalEdge = smoothstep(0.12, 0.40, depthGrad) * sobelStrength;',
+        '  }',
+        '',
+        '  // 3. Composite Result: AO + GI + EDL + Outlines Blended Harmoniously',
+        '  vec3 shadedColor = (sceneColor.rgb * aoMultiBounce + giBounce) * edlFactor * (1.0 - totalEdge * 0.85);',
+        '  gl_FragColor = vec4(shadedColor, sceneColor.a);',
+        '}'
+      ].join('\\n')
+    },
+
+    FXAAShader: {
+      uniforms: {
+        tDiffuse: { value: null },
+        resolution: { value: null }
+      },
+      vertexShader: [
+        'varying vec2 vUv;',
+        'void main() {',
+        '  vUv = uv;',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}'
+      ].join('\\n'),
+      fragmentShader: [
+        'uniform sampler2D tDiffuse;',
+        'uniform vec2 resolution;',
+        'varying vec2 vUv;',
+        '#define FXAA_SPAN_MAX 8.0',
+        '#define FXAA_REDUCE_MUL (1.0 / 8.0)',
+        '#define FXAA_REDUCE_MIN (1.0 / 128.0)',
+        'void main() {',
+        '  vec3 rgbNW = texture2D(tDiffuse, vUv + (vec2(-1.0, -1.0) * resolution)).rgb;',
+        '  vec3 rgbNE = texture2D(tDiffuse, vUv + (vec2( 1.0, -1.0) * resolution)).rgb;',
+        '  vec3 rgbSW = texture2D(tDiffuse, vUv + (vec2(-1.0,  1.0) * resolution)).rgb;',
+        '  vec3 rgbSE = texture2D(tDiffuse, vUv + (vec2( 1.0,  1.0) * resolution)).rgb;',
+        '  vec3 rgbM  = texture2D(tDiffuse, vUv).rgb;',
+        '  vec3 luma = vec3(0.299, 0.587, 0.114);',
+        '  float lumaNW = dot(rgbNW, luma);',
+        '  float lumaNE = dot(rgbNE, luma);',
+        '  float lumaSW = dot(rgbSW, luma);',
+        '  float lumaSE = dot(rgbSE, luma);',
+        '  float lumaM  = dot(rgbM,  luma);',
+        '  float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));',
+        '  float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));',
+        '  vec2 dir;',
+        '  dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));',
+        '  dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));',
+        '  float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * FXAA_REDUCE_MUL), FXAA_REDUCE_MIN);',
+        '  float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);',
+        '  dir = min(vec2(FXAA_SPAN_MAX, FXAA_SPAN_MAX), max(vec2(-FXAA_SPAN_MAX, -FXAA_SPAN_MAX), dir * rcpDirMin)) * resolution;',
+        '  vec3 rgbA = 0.5 * (texture2D(tDiffuse, vUv + dir * (1.0 / 3.0 - 0.5)).rgb + texture2D(tDiffuse, vUv + dir * (2.0 / 3.0 - 0.5)).rgb);',
+        '  vec3 rgbB = rgbA * 0.5 + 0.25 * (texture2D(tDiffuse, vUv + dir * -0.5).rgb + texture2D(tDiffuse, vUv + dir * 0.5).rgb);',
+        '  float lumaB = dot(rgbB, luma);',
+        '  if ((lumaB < lumaMin) || (lumaB > lumaMax)) {',
+        '    gl_FragColor = vec4(rgbA, 1.0);',
+        '  } else {',
+        '    gl_FragColor = vec4(rgbB, 1.0);',
+        '  }',
+        '}'
+      ].join('\\n')
+    }
+  };
 
   // Scene Objects
   var cityGroup = null;
@@ -11529,14 +11773,15 @@ var City3DEngine = (function() {
       if (width <= 0) width = window.innerWidth;
       if (height <= 0) height = window.innerHeight;
 
+      var pr = Math.min(window.devicePixelRatio || 1, 2);
+
       renderer = new THREE.WebGLRenderer({
         canvas: canvasEl,
         antialias: true,
         alpha: true,
-        logarithmicDepthBuffer: true,
         powerPreference: 'high-performance'
       });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setPixelRatio(pr);
       renderer.setSize(width, height);
       if (typeof THREE.sRGBEncoding !== 'undefined') {
         renderer.outputEncoding = THREE.sRGBEncoding;
@@ -11553,42 +11798,109 @@ var City3DEngine = (function() {
       camera = new THREE.PerspectiveCamera(50, width / height, 5, 2200);
       camera.position.set(160, 140, 220);
 
-      // Unreal Bloom Post-Processing Pipeline with MSAA Antialiasing Support
-      if (typeof THREE.EffectComposer !== 'undefined' && typeof THREE.UnrealBloomPass !== 'undefined') {
+      // Post-Processing Pipeline: Scene -> GTAO (AO + GI + EDL + Sobel) -> Bloom -> Gamma -> FXAA
+      if (typeof THREE.EffectComposer !== 'undefined') {
         try {
+          var rw = Math.floor(width * pr);
+          var rh = Math.floor(height * pr);
+
+          if (typeof THREE.DepthTexture !== 'undefined') {
+            depthTexture = new THREE.DepthTexture(rw, rh);
+            depthTexture.format = THREE.DepthFormat;
+            depthTexture.type = THREE.UnsignedIntType;
+          }
+
           var renderTarget = null;
           var isWebGL2 = renderer.capabilities && renderer.capabilities.isWebGL2;
           if (isWebGL2 && typeof THREE.WebGLMultisampleRenderTarget !== 'undefined') {
-            renderTarget = new THREE.WebGLMultisampleRenderTarget(width, height, {
+            renderTarget = new THREE.WebGLMultisampleRenderTarget(rw, rh, {
               format: THREE.RGBAFormat,
               encoding: THREE.sRGBEncoding,
               samples: 4
             });
           } else if (typeof THREE.WebGLRenderTarget !== 'undefined') {
-            renderTarget = new THREE.WebGLRenderTarget(width, height, {
+            renderTarget = new THREE.WebGLRenderTarget(rw, rh, {
               format: THREE.RGBAFormat,
               encoding: THREE.sRGBEncoding
             });
           }
 
+          if (renderTarget && depthTexture) {
+            renderTarget.depthTexture = depthTexture;
+          }
+
           composer = renderTarget ? new THREE.EffectComposer(renderer, renderTarget) : new THREE.EffectComposer(renderer);
+          if (typeof composer.setPixelRatio === 'function') {
+            composer.setPixelRatio(pr);
+          }
+          if (composer.renderTarget1 && depthTexture && !composer.renderTarget1.depthTexture) {
+            composer.renderTarget1.depthTexture = depthTexture;
+          }
+
+          // 1. Scene Render Pass (Scene with PCF Soft Shadow Maps)
           renderPass = new THREE.RenderPass(scene, camera);
-          bloomPass = new THREE.UnrealBloomPass(
-            new THREE.Vector2(width, height),
-            0.65, // strength
-            0.25, // radius
-            1.15  // threshold (isolates true luminous highlights without blowing out text)
-          );
           composer.addPass(renderPass);
-          composer.addPass(bloomPass);
+
+          // 2. GTAO Pass (Unified GTAO Horizon AO + Warm GI Bounce + EDL + Sobel Outlines)
+          if (typeof THREE.ShaderPass !== 'undefined') {
+            var gtaoShaderConfig = {
+              uniforms: {
+                tDiffuse: { value: null },
+                tDepth: { value: depthTexture },
+                resolution: { value: new THREE.Vector2(rw, rh) },
+                cameraNear: { value: camera.near },
+                cameraFar: { value: camera.far },
+                cameraProjectionMatrixInverse: { value: camera.projectionMatrixInverse.clone() },
+                aoEnabled: { value: isGTAOEnabled ? 1.0 : 0.0 },
+                aoRadius: { value: GTAO_CONFIG.radius },
+                aoIntensity: { value: GTAO_CONFIG.intensity },
+                giIntensity: { value: GTAO_CONFIG.giIntensity },
+                edlEnabled: { value: isEDLEnabled ? 1.0 : 0.0 },
+                edlStrength: { value: GTAO_CONFIG.edlStrength },
+                edlRadius: { value: GTAO_CONFIG.edlRadius },
+                sobelStrength: { value: GTAO_CONFIG.sobelStrength }
+              },
+              vertexShader: City3DShaders.GTAOShader.vertexShader,
+              fragmentShader: City3DShaders.GTAOShader.fragmentShader
+            };
+            gtaoPass = new THREE.ShaderPass(gtaoShaderConfig);
+            gtaoPass.material.depthTest = false;
+            gtaoPass.material.depthWrite = false;
+            composer.addPass(gtaoPass);
+          }
+
+          // 3. Unreal Bloom Pass
+          if (typeof THREE.UnrealBloomPass !== 'undefined') {
+            bloomPass = new THREE.UnrealBloomPass(
+              new THREE.Vector2(rw, rh),
+              0.65, // strength
+              0.25, // radius
+              1.15  // threshold
+            );
+            composer.addPass(bloomPass);
+          }
+
+          // 4. Gamma Correction Pass
           if (typeof THREE.GammaCorrectionShader !== 'undefined' && typeof THREE.ShaderPass !== 'undefined') {
-            var gammaPass = new THREE.ShaderPass(THREE.GammaCorrectionShader);
+            gammaPass = new THREE.ShaderPass(THREE.GammaCorrectionShader);
             composer.addPass(gammaPass);
+          }
+
+          // 5. FXAA Anti-Aliasing Pass
+          if (typeof THREE.ShaderPass !== 'undefined') {
+            var fxaaShaderConfig = (typeof THREE.FXAAShader !== 'undefined') ? THREE.FXAAShader : City3DShaders.FXAAShader;
+            fxaaPass = new THREE.ShaderPass(fxaaShaderConfig);
+            if (fxaaPass.uniforms && fxaaPass.uniforms['resolution']) {
+              fxaaPass.uniforms['resolution'].value = new THREE.Vector2(1.0 / rw, 1.0 / rh);
+            }
+            composer.addPass(fxaaPass);
           }
         } catch (compErr) {
           console.warn('EffectComposer init fallback:', compErr);
           composer = null;
           bloomPass = null;
+          gtaoPass = null;
+          fxaaPass = null;
         }
       }
 
@@ -11647,6 +11959,8 @@ var City3DEngine = (function() {
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/GammaCorrectionShader.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/FXAAShader.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/SobelOperatorShader.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js',
@@ -12545,7 +12859,8 @@ var City3DEngine = (function() {
       map: texture,
       transparent: true,
       depthTest: true,
-      depthWrite: false,
+      depthWrite: true,
+      alphaTest: 0.1,
       toneMapped: false
     });
     var sprite = new THREE.Sprite(spriteMat);
@@ -12702,7 +13017,7 @@ var City3DEngine = (function() {
     ctx.fillStyle = '#00f2fe';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('AV', 128, 128);
+    ctx.fillText('GMC', 128, 128);
 
     var tex = new THREE.CanvasTexture(canvas);
     if (typeof THREE.sRGBEncoding !== 'undefined') {
@@ -13807,6 +14122,16 @@ var City3DEngine = (function() {
 
     // Post-Processing / Fallback Render
     if (composer) {
+      if (gtaoPass && gtaoPass.uniforms) {
+        gtaoPass.uniforms['cameraNear'].value = camera.near;
+        gtaoPass.uniforms['cameraFar'].value = camera.far;
+        gtaoPass.uniforms['cameraProjectionMatrixInverse'].value.copy(camera.projectionMatrixInverse);
+        gtaoPass.uniforms['aoEnabled'].value = isGTAOEnabled ? 1.0 : 0.0;
+        gtaoPass.uniforms['edlEnabled'].value = isEDLEnabled ? 1.0 : 0.0;
+        if (depthTexture) {
+          gtaoPass.uniforms['tDepth'].value = depthTexture;
+        }
+      }
       composer.render();
     } else {
       renderer.render(scene, camera);
@@ -13890,6 +14215,22 @@ var City3DEngine = (function() {
       });
     }
 
+    var gtaoBtn = document.getElementById('city3dGtaoBtn');
+    if (gtaoBtn) {
+      gtaoBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        toggleGTAO();
+      });
+    }
+
+    var edlBtn = document.getElementById('city3dEdlBtn');
+    if (edlBtn) {
+      edlBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        toggleEDL();
+      });
+    }
+
     var zenBtn = document.getElementById('city3dZenBtn');
     if (zenBtn) {
       zenBtn.addEventListener('click', function(e) {
@@ -13916,6 +14257,36 @@ var City3DEngine = (function() {
           switchRepository(repoPath);
         }
       });
+    }
+  }
+
+  function toggleGTAO() {
+    isGTAOEnabled = !isGTAOEnabled;
+    if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['aoEnabled']) {
+      gtaoPass.uniforms['aoEnabled'].value = isGTAOEnabled ? 1.0 : 0.0;
+    }
+    var btn = document.getElementById('city3dGtaoBtn');
+    if (btn) {
+      if (isGTAOEnabled) {
+        btn.classList.add('city-3d-btn-active');
+      } else {
+        btn.classList.remove('city-3d-btn-active');
+      }
+    }
+  }
+
+  function toggleEDL() {
+    isEDLEnabled = !isEDLEnabled;
+    if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['edlEnabled']) {
+      gtaoPass.uniforms['edlEnabled'].value = isEDLEnabled ? 1.0 : 0.0;
+    }
+    var btn = document.getElementById('city3dEdlBtn');
+    if (btn) {
+      if (isEDLEnabled) {
+        btn.classList.add('city-3d-btn-active');
+      } else {
+        btn.classList.remove('city-3d-btn-active');
+      }
     }
   }
 
@@ -14009,14 +14380,31 @@ var City3DEngine = (function() {
     var height = containerEl.clientHeight || window.innerHeight;
     if (width <= 0) width = window.innerWidth;
     if (height <= 0) height = window.innerHeight;
+    var pr = renderer.getPixelRatio() || 1;
+    var rw = Math.floor(width * pr);
+    var rh = Math.floor(height * pr);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
+    if (depthTexture) {
+      depthTexture.image.width = rw;
+      depthTexture.image.height = rh;
+    }
     if (composer) {
+      if (typeof composer.setPixelRatio === 'function') {
+        composer.setPixelRatio(pr);
+      }
       composer.setSize(width, height);
     }
+    if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['resolution']) {
+      gtaoPass.uniforms['resolution'].value.set(rw, rh);
+      gtaoPass.uniforms['cameraProjectionMatrixInverse'].value.copy(camera.projectionMatrixInverse);
+    }
     if (bloomPass && bloomPass.resolution) {
-      bloomPass.resolution.set(width, height);
+      bloomPass.resolution.set(rw, rh);
+    }
+    if (fxaaPass && fxaaPass.uniforms && fxaaPass.uniforms['resolution']) {
+      fxaaPass.uniforms['resolution'].value.set(1.0 / rw, 1.0 / rh);
     }
   }
 
@@ -14055,11 +14443,49 @@ var City3DEngine = (function() {
       });
   }
 
+  function setGTAODistance(radius) {
+    var r = parseFloat(radius) || GTAO_CONFIG.radius;
+    GTAO_CONFIG.radius = r;
+    if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['aoRadius']) {
+      gtaoPass.uniforms['aoRadius'].value = r;
+    }
+  }
+
+  function setGTAOIntensity(intensity) {
+    var i = parseFloat(intensity) || GTAO_CONFIG.intensity;
+    GTAO_CONFIG.intensity = i;
+    if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['aoIntensity']) {
+      gtaoPass.uniforms['aoIntensity'].value = i;
+    }
+  }
+
+  function setEDLParams(opts) {
+    opts = opts || {};
+    if (!gtaoPass || !gtaoPass.uniforms) return;
+    if (typeof opts.strength === 'number') {
+      GTAO_CONFIG.edlStrength = opts.strength;
+      gtaoPass.uniforms['edlStrength'].value = opts.strength;
+    }
+    if (typeof opts.radius === 'number') {
+      GTAO_CONFIG.edlRadius = opts.radius;
+      gtaoPass.uniforms['edlRadius'].value = opts.radius;
+    }
+    if (typeof opts.sobelStrength === 'number') {
+      GTAO_CONFIG.sobelStrength = opts.sobelStrength;
+      gtaoPass.uniforms['sobelStrength'].value = opts.sobelStrength;
+    }
+  }
+
   return {
     init: init,
     buildCity: buildCity,
     setDayNight: setDayNight,
     toggleDayNight: toggleDayNight,
+    toggleGTAO: toggleGTAO,
+    toggleEDL: toggleEDL,
+    setGTAODistance: setGTAODistance,
+    setGTAOIntensity: setGTAOIntensity,
+    setEDLParams: setEDLParams,
     syncWithTheme: syncWithTheme,
     toggleFlight: toggleFlight,
     toggleZenMode: toggleZenMode,
