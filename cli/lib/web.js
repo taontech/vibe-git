@@ -11533,35 +11533,58 @@ var City3DEngine = (function() {
         canvas: canvasEl,
         antialias: true,
         alpha: true,
+        logarithmicDepthBuffer: true,
         powerPreference: 'high-performance'
       });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(width, height);
+      if (typeof THREE.sRGBEncoding !== 'undefined') {
+        renderer.outputEncoding = THREE.sRGBEncoding;
+      }
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.4;
+      renderer.toneMappingExposure = 1.0;
 
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x060913);
       scene.fog = null; // Clean crystal-clear view, no murky fog!
 
-      camera = new THREE.PerspectiveCamera(50, width / height, 1, 3800);
+      camera = new THREE.PerspectiveCamera(50, width / height, 5, 2200);
       camera.position.set(160, 140, 220);
 
-      // Unreal Bloom Post-Processing Pipeline
+      // Unreal Bloom Post-Processing Pipeline with MSAA Antialiasing Support
       if (typeof THREE.EffectComposer !== 'undefined' && typeof THREE.UnrealBloomPass !== 'undefined') {
         try {
+          var renderTarget = null;
+          var isWebGL2 = renderer.capabilities && renderer.capabilities.isWebGL2;
+          if (isWebGL2 && typeof THREE.WebGLMultisampleRenderTarget !== 'undefined') {
+            renderTarget = new THREE.WebGLMultisampleRenderTarget(width, height, {
+              format: THREE.RGBAFormat,
+              encoding: THREE.sRGBEncoding,
+              samples: 4
+            });
+          } else if (typeof THREE.WebGLRenderTarget !== 'undefined') {
+            renderTarget = new THREE.WebGLRenderTarget(width, height, {
+              format: THREE.RGBAFormat,
+              encoding: THREE.sRGBEncoding
+            });
+          }
+
+          composer = renderTarget ? new THREE.EffectComposer(renderer, renderTarget) : new THREE.EffectComposer(renderer);
           renderPass = new THREE.RenderPass(scene, camera);
           bloomPass = new THREE.UnrealBloomPass(
             new THREE.Vector2(width, height),
             0.65, // strength
             0.25, // radius
-            1  // threshold (isolates true luminous highlights without blowing out text)
+            1.15  // threshold (isolates true luminous highlights without blowing out text)
           );
-          composer = new THREE.EffectComposer(renderer);
           composer.addPass(renderPass);
           composer.addPass(bloomPass);
+          if (typeof THREE.GammaCorrectionShader !== 'undefined' && typeof THREE.ShaderPass !== 'undefined') {
+            var gammaPass = new THREE.ShaderPass(THREE.GammaCorrectionShader);
+            composer.addPass(gammaPass);
+          }
         } catch (compErr) {
           console.warn('EffectComposer init fallback:', compErr);
           composer = null;
@@ -11615,7 +11638,7 @@ var City3DEngine = (function() {
   }
 
   function loadThreeScript(cb) {
-    if (typeof THREE !== 'undefined' && typeof THREE.EffectComposer !== 'undefined' && typeof THREE.UnrealBloomPass !== 'undefined') {
+    if (typeof THREE !== 'undefined' && typeof THREE.EffectComposer !== 'undefined' && typeof THREE.UnrealBloomPass !== 'undefined' && typeof THREE.GammaCorrectionShader !== 'undefined') {
       if (typeof cb === 'function') cb();
       return;
     }
@@ -11623,13 +11646,14 @@ var City3DEngine = (function() {
       'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/GammaCorrectionShader.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js',
       'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js'
     ];
     function loadNext(idx) {
-      if (idx >= list.length || typeof THREE !== 'undefined' && idx > 0 && typeof THREE.UnrealBloomPass !== 'undefined') {
+      if (idx >= list.length || (typeof THREE !== 'undefined' && idx > 0 && typeof THREE.UnrealBloomPass !== 'undefined' && typeof THREE.GammaCorrectionShader !== 'undefined')) {
         if (typeof cb === 'function') cb();
         return;
       }
@@ -11652,13 +11676,16 @@ var City3DEngine = (function() {
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 2048;
     sunLight.shadow.mapSize.height = 2048;
-    sunLight.shadow.camera.near = 10;
-    sunLight.shadow.camera.far = 900;
-    sunLight.shadow.camera.left = -300;
-    sunLight.shadow.camera.right = 300;
-    sunLight.shadow.camera.top = 300;
-    sunLight.shadow.camera.bottom = -300;
-    sunLight.shadow.bias = -0.0003;
+    sunLight.shadow.camera.near = 50;
+    sunLight.shadow.camera.far = 750;
+    sunLight.shadow.camera.left = -280;
+    sunLight.shadow.camera.right = 280;
+    sunLight.shadow.camera.top = 280;
+    sunLight.shadow.camera.bottom = -280;
+    sunLight.shadow.bias = -0.0001;
+    if (typeof sunLight.shadow.normalBias !== 'undefined') {
+      sunLight.shadow.normalBias = 0.05;
+    }
     scene.add(sunLight);
   }
 
@@ -11864,6 +11891,9 @@ var City3DEngine = (function() {
       var tex = new THREE.CanvasTexture(cvs);
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
+      if (typeof THREE.sRGBEncoding !== 'undefined') {
+        tex.encoding = THREE.sRGBEncoding;
+      }
 
       cyberScreenChannels.push({
         id: cfg.id,
@@ -12507,6 +12537,9 @@ var City3DEngine = (function() {
     var texture = new THREE.CanvasTexture(canvas);
     texture.minFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
+    if (typeof THREE.sRGBEncoding !== 'undefined') {
+      texture.encoding = THREE.sRGBEncoding;
+    }
 
     var spriteMat = new THREE.SpriteMaterial({
       map: texture,
@@ -12560,6 +12593,9 @@ var City3DEngine = (function() {
     ctx.fillText(text, 128, 40);
 
     var tex = new THREE.CanvasTexture(canvas);
+    if (typeof THREE.sRGBEncoding !== 'undefined') {
+      tex.encoding = THREE.sRGBEncoding;
+    }
     var faceMat = new THREE.MeshBasicMaterial({ map: tex });
     var faceGeo = new THREE.PlaneGeometry(signW * 0.96, signH * 0.88);
     var faceMesh = new THREE.Mesh(faceGeo, faceMat);
@@ -12617,6 +12653,9 @@ var City3DEngine = (function() {
     }
 
     var tex = new THREE.CanvasTexture(canvas);
+    if (typeof THREE.sRGBEncoding !== 'undefined') {
+      tex.encoding = THREE.sRGBEncoding;
+    }
     var holoMat = new THREE.MeshBasicMaterial({
       map: tex,
       transparent: true,
@@ -12666,6 +12705,9 @@ var City3DEngine = (function() {
     ctx.fillText('AV', 128, 128);
 
     var tex = new THREE.CanvasTexture(canvas);
+    if (typeof THREE.sRGBEncoding !== 'undefined') {
+      tex.encoding = THREE.sRGBEncoding;
+    }
     var decalMat = new THREE.MeshBasicMaterial({ map: tex });
     var decalGeo = new THREE.PlaneGeometry(size * 0.94, size * 0.94);
     var decalMesh = new THREE.Mesh(decalGeo, decalMat);
@@ -13113,6 +13155,9 @@ var City3DEngine = (function() {
         color: neonCol,
         transparent: true,
         opacity: 0.95,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
         toneMapped: false
       });
       edgeMat.userData = { pulseOffset: (styleSeed % 10) * 0.6 };
@@ -13134,6 +13179,9 @@ var City3DEngine = (function() {
         map: aoContactTex,
         transparent: true,
         opacity: 0.72,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
         depthWrite: false
       });
       var aoMesh = new THREE.Mesh(aoGeo, aoMat);
@@ -13638,12 +13686,12 @@ var City3DEngine = (function() {
       modeTransition += (targetVal - modeTransition) * 0.06;
 
       // Crystal Clear Studio Background (Zero Fog!)
-      var bgDay = new THREE.Color(0xf1f5f9);
+      var bgDay = new THREE.Color(0x060913);
       var bgNight = new THREE.Color(0x060913);
       scene.background = bgDay.clone().lerp(bgNight, modeTransition);
 
       // Balanced 1 Ambient Light + 1 Directional Light
-      var ambDay = new THREE.Color(0xffffff);
+      var ambDay = new THREE.Color(0xEEEEEE);
       var ambNight = new THREE.Color(0x1e293b);
       ambientLight.color = ambDay.clone().lerp(ambNight, modeTransition);
       ambientLight.intensity = (1.0 - modeTransition) * 0.75 + modeTransition * 0.55;
@@ -13681,10 +13729,10 @@ var City3DEngine = (function() {
       // Unreal Bloom Dynamic Adaptation (Gentle glow, zero text washout)
       if (bloomPass) {
         bloomPass.strength = modeTransition * 0.65;
-        bloomPass.threshold = 0.88;
+        bloomPass.threshold = 1.15;
         bloomPass.radius = 0.25;
       }
-      renderer.toneMappingExposure = 1.0;
+      renderer.toneMappingExposure = (1.0 - modeTransition) * 1.35 + modeTransition * 1.0;
     }
 
     // Dynamic Multi-Channel Cyberpunk Screens & Billboards Animation (Renders on whole building facades)
