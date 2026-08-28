@@ -6000,8 +6000,8 @@ body.sidebar-collapsed .city-3d-hud-left {
           <span id="city3dDayNightIcon">☀️</span>
           <span id="city3dDayNightText">白天</span>
         </button>
-        <button id="city3dGtaoBtn" class="city-3d-btn city-3d-btn-active" type="button" title="GTAO & GI 光影遮蔽" data-i18n-title="city3dGtao">
-          <span>✨</span>
+        <button id="city3dGtaoBtn" class="city-3d-btn city-3d-btn-active" type="button" title="GTAO & GI 光影遮蔽 (点击切换 SSAO/关闭)" data-i18n-title="city3dGtao">
+          <span id="city3dGtaoIcon">✨</span>
           <span id="city3dGtaoText">GTAO / GI</span>
         </button>
         <button id="city3dEdlBtn" class="city-3d-btn city-3d-btn-active" type="button" title="EDL / 建筑结构轮廓" data-i18n-title="city3dEdl">
@@ -7057,6 +7057,8 @@ var I18N = {
     city3dRain: '赛博雨夜',
     city3dClear: '晴朗晴空',
     city3dGtao: 'GTAO 光影遮蔽与全局光 (GI)',
+    city3dSsao: 'SSAO 经典环境光遮蔽',
+    city3dAoOff: 'AO 环境遮蔽已关闭',
     city3dSss: 'SSS 屏幕空间接触阴影',
     city3dSsr: 'SSR 屏幕空间湿面反射',
     city3dEdl: 'EDL / 建筑结构轮廓 (Sobel)',
@@ -7381,6 +7383,8 @@ var I18N = {
     city3dRain: 'Cyber Rain',
     city3dClear: 'Clear Sky',
     city3dGtao: 'GTAO & GI Ambient Occlusion',
+    city3dSsao: 'SSAO Ambient Occlusion',
+    city3dAoOff: 'AO Disabled',
     city3dSss: 'SSS Screen-Space Contact Shadows',
     city3dSsr: 'SSR Screen-Space Reflections',
     city3dEdl: 'EDL / Edge Outlines (Sobel)',
@@ -11446,9 +11450,11 @@ var City3DEngine = (function() {
   var fxaaPass = null;
   var depthTexture = null;
   var isGTAOEnabled = true;
+  var currentAOMode = 'gtao'; // 'gtao' | 'ssao' | 'off'
   var isEDLEnabled = true;
 
   var GTAO_CONFIG = {
+    mode: 'gtao',
     radius: 2.0,
     intensity: 3.45,
     giIntensity: 0.85,
@@ -11458,7 +11464,7 @@ var City3DEngine = (function() {
   };
 
   /* =========================================================================
-   * Post-Processing Shaders: Unified GTAO (AO + GI) & Pure Depth EDL + Sobel, FXAA 3.11
+   * Post-Processing Shaders: Unified GTAO & SSAO (AO + GI) & Pure Depth EDL + Sobel, FXAA 3.11
    * ========================================================================= */
   var City3DShaders = {
     GTAOShader: {
@@ -11470,6 +11476,7 @@ var City3DEngine = (function() {
         cameraFar: { value: 2200.0 },
         cameraProjectionMatrixInverse: { value: null },
         aoEnabled: { value: 1.0 },
+        aoMode: { value: 1.0 }, // 1.0: GTAO, 2.0: SSAO, 0.0: Off
         aoRadius: { value: 20.0 },
         aoIntensity: { value: 1.45 },
         giIntensity: { value: 0.35 },
@@ -11493,6 +11500,7 @@ var City3DEngine = (function() {
         'uniform float cameraFar;',
         'uniform mat4 cameraProjectionMatrixInverse;',
         'uniform float aoEnabled;',
+        'uniform float aoMode;',
         'uniform float aoRadius;',
         'uniform float aoIntensity;',
         'uniform float giIntensity;',
@@ -11501,6 +11509,12 @@ var City3DEngine = (function() {
         'uniform float edlRadius;',
         'uniform float sobelStrength;',
         'varying vec2 vUv;',
+        '',
+        '// Interleaved Gradient Noise by Jorge Jimenez (breaks stepping & concentric bands)',
+        'float interleavedGradientNoise(vec2 screenPos) {',
+        '  vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);',
+        '  return fract(magic.z * fract(dot(screenPos, magic.xy)));',
+        '}',
         '',
         'vec3 getViewPosition(vec2 uv, float d) {',
         '  vec4 clipSpace = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);',
@@ -11525,43 +11539,82 @@ var City3DEngine = (function() {
         '  vec2 texel = 1.0 / resolution;',
         '  float z = getLinearDepth(vUv);',
         '',
-        '  // 1. Ground Truth Ambient Occlusion (GTAO) + Multi-Bounce GI',
+        '  // 1. Ambient Occlusion: GTAO (Ground Truth) vs SSAO (Classic Hemisphere)',
         '  float aoMultiBounce = 1.0;',
         '  vec3 giBounce = vec3(0.0);',
-        '  if (aoEnabled > 0.5) {',
+        '  float effectiveAOMode = aoEnabled > 0.5 ? (aoMode > 0.5 ? aoMode : 1.0) : 0.0;',
+        '  if (effectiveAOMode > 0.5) {',
+        '    float noise = interleavedGradientNoise(gl_FragCoord.xy);',
         '    float projScale = resolution.y / max(-viewPos.z * 1.0, 0.1);',
-        '    float radiusSS = clamp(aoRadius * projScale, 2.0, min(resolution.x, resolution.y) * 0.22);',
-        '    float totalAO = 0.0;',
-        '    float totalWeight = 0.0001;',
-        '    const int NUM_SAMPLES = 16;',
-        '    const float GOLDEN_ANGLE = 2.39996323;',
-        '    for (int i = 1; i <= NUM_SAMPLES; i++) {',
-        '      float fi = float(i);',
-        '      float r = sqrt(fi / float(NUM_SAMPLES));',
-        '      float theta = fi * GOLDEN_ANGLE;',
-        '      vec2 offset = vec2(cos(theta), sin(theta)) * (r * radiusSS);',
-        '      vec2 sUv = vUv + offset / resolution;',
-        '      if (sUv.x < 0.0 || sUv.x > 1.0 || sUv.y < 0.0 || sUv.y > 1.0) continue;',
-        '      float sRawD = texture2D(tDepth, sUv).r;',
-        '      if (sRawD >= 0.9999) continue;',
-        '      vec3 sViewPos = getViewPosition(sUv, sRawD);',
-        '      vec3 sampleVec = sViewPos - viewPos;',
-        '      float dist = length(sampleVec);',
-        '      if (dist > 0.05 && dist < aoRadius * 1.5) {',
-        '        float cosH = max(0.0, dot(sampleVec / dist, normal));',
-        '        float distRatio = dist / aoRadius;',
-        '        float falloff = max(0.0, 1.0 - distRatio * distRatio);',
-        '        if (cosH > 0.02) {',
-        '          totalAO += cosH * falloff;',
+        '    float radiusSS = clamp(aoRadius * projScale, 2.0, min(resolution.x, resolution.y) * 0.20);',
+        '    if (effectiveAOMode < 1.5) {',
+        '      // Mode 1: GTAO with Dithered Spiral Sampling, Non-linear Step & Multi-Bounce GI',
+        '      float totalAO = 0.0;',
+        '      float totalWeight = 0.0001;',
+        '      const int NUM_SAMPLES = 16;',
+        '      const float GOLDEN_ANGLE = 2.39996323;',
+        '      for (int i = 1; i <= NUM_SAMPLES; i++) {',
+        '        float fi = float(i);',
+        '        float rNorm = pow((fi + fract(noise * 1.6180339)) / float(NUM_SAMPLES + 1), 1.35);',
+        '        float theta = fi * GOLDEN_ANGLE + noise * 6.2831853;',
+        '        vec2 offset = vec2(cos(theta), sin(theta)) * (rNorm * radiusSS);',
+        '        vec2 sUv = vUv + offset / resolution;',
+        '        if (sUv.x < 0.0 || sUv.x > 1.0 || sUv.y < 0.0 || sUv.y > 1.0) continue;',
+        '        float sRawD = texture2D(tDepth, sUv).r;',
+        '        if (sRawD >= 0.9999 || sRawD <= 0.0) continue;',
+        '        vec3 sViewPos = getViewPosition(sUv, sRawD);',
+        '        vec3 sampleVec = sViewPos - viewPos;',
+        '        float dist = length(sampleVec);',
+        '        if (dist > 0.02 && dist < aoRadius * 1.8) {',
+        '          float cosH = max(0.0, dot(sampleVec / dist, normal) - 0.04);',
+        '          float distRatio = dist / max(aoRadius, 0.01);',
+        '          float falloff = max(0.0, 1.0 - distRatio * distRatio);',
+        '          falloff *= falloff;',
+        '          if (cosH > 0.001) {',
+        '            totalAO += cosH * falloff;',
+        '          }',
+        '          totalWeight += 1.0;',
         '        }',
-        '        totalWeight += 1.0;',
         '      }',
+        '      float rawAO = clamp((totalAO / totalWeight) * aoIntensity, 0.0, 0.88);',
+        '      float aoFactor = 1.0 - rawAO;',
+        '      float rho = 0.35;',
+        '      aoMultiBounce = aoFactor / max(1.0 - rho * (1.0 - aoFactor), 0.001);',
+        '      giBounce = vec3(0.05, 0.08, 0.12) * (1.0 - aoMultiBounce) * giIntensity;',
+        '    } else {',
+        '      // Mode 2: SSAO - Soft & Diffuse Hemisphere Depth Sampling',
+        '      float totalSSAO = 0.0;',
+        '      float ssaoWeight = 0.0001;',
+        '      const int NUM_SSAO = 16;',
+        '      const float GOLDEN_ANGLE = 2.39996323;',
+        '      float ssaoRadiusSS = clamp(aoRadius * projScale * 0.75, 2.0, min(resolution.x, resolution.y) * 0.16);',
+        '      for (int j = 1; j <= NUM_SSAO; j++) {',
+        '        float fj = float(j);',
+        '        float rNorm = (fj + fract(noise * 2.7182818)) / float(NUM_SSAO + 1);',
+        '        float theta = fj * GOLDEN_ANGLE + noise * 6.2831853;',
+        '        vec2 offset = vec2(cos(theta), sin(theta)) * (rNorm * ssaoRadiusSS);',
+        '        vec2 sUv = vUv + offset / resolution;',
+        '        if (sUv.x < 0.0 || sUv.x > 1.0 || sUv.y < 0.0 || sUv.y > 1.0) continue;',
+        '        float sRawD = texture2D(tDepth, sUv).r;',
+        '        if (sRawD >= 0.9999 || sRawD <= 0.0) continue;',
+        '        vec3 sViewPos = getViewPosition(sUv, sRawD);',
+        '        vec3 sampleVec = sViewPos - viewPos;',
+        '        float dist = length(sampleVec);',
+        '        if (dist > 0.02) {',
+        '          float rangeCheck = smoothstep(0.0, 1.0, (aoRadius * 1.25) / max(dist, 0.001));',
+        '          float bias = 0.035;',
+        '          float isOccluded = (sViewPos.z >= viewPos.z + bias) ? 1.0 : 0.0;',
+        '          float normDot = max(0.0, dot(normalize(sampleVec), normal));',
+        '          totalSSAO += isOccluded * normDot * rangeCheck;',
+        '          ssaoWeight += 1.0;',
+        '        }',
+        '      }',
+        '      float rawSSAO = clamp((totalSSAO / ssaoWeight) * (aoIntensity * 1.2), 0.0, 0.85);',
+        '      float aoFactor = 1.0 - rawSSAO;',
+        '      float rho = 0.35;',
+        '      aoMultiBounce = aoFactor / max(1.0 - rho * (1.0 - aoFactor), 0.001);',
+        '      giBounce = vec3(0.04, 0.06, 0.09) * (1.0 - aoMultiBounce) * (giIntensity * 0.6);',
         '    }',
-        '    float rawAO = clamp((totalAO / totalWeight) * aoIntensity, 0.0, 0.88);',
-        '    float aoFactor = 1.0 - rawAO;',
-        '    float rho = 0.35;',
-        '    aoMultiBounce = aoFactor / max(1.0 - rho * (1.0 - aoFactor), 0.001);',
-        '    giBounce = vec3(0.05, 0.08, 0.12) * (1.0 - aoMultiBounce) * giIntensity;',
         '  }',
         '',
         '  // 2. Eye-Dome Lighting (EDL) + Pure Depth Sobel Architectural Outline',
@@ -11851,7 +11904,8 @@ var City3DEngine = (function() {
                 cameraNear: { value: camera.near },
                 cameraFar: { value: camera.far },
                 cameraProjectionMatrixInverse: { value: camera.projectionMatrixInverse.clone() },
-                aoEnabled: { value: isGTAOEnabled ? 1.0 : 0.0 },
+                aoEnabled: { value: currentAOMode !== 'off' ? 1.0 : 0.0 },
+                aoMode: { value: currentAOMode === 'ssao' ? 2.0 : (currentAOMode === 'gtao' ? 1.0 : 0.0) },
                 aoRadius: { value: GTAO_CONFIG.radius },
                 aoIntensity: { value: GTAO_CONFIG.intensity },
                 giIntensity: { value: GTAO_CONFIG.giIntensity },
@@ -14126,7 +14180,10 @@ var City3DEngine = (function() {
         gtaoPass.uniforms['cameraNear'].value = camera.near;
         gtaoPass.uniforms['cameraFar'].value = camera.far;
         gtaoPass.uniforms['cameraProjectionMatrixInverse'].value.copy(camera.projectionMatrixInverse);
-        gtaoPass.uniforms['aoEnabled'].value = isGTAOEnabled ? 1.0 : 0.0;
+        gtaoPass.uniforms['aoEnabled'].value = currentAOMode !== 'off' ? 1.0 : 0.0;
+        if (gtaoPass.uniforms['aoMode']) {
+          gtaoPass.uniforms['aoMode'].value = currentAOMode === 'ssao' ? 2.0 : (currentAOMode === 'gtao' ? 1.0 : 0.0);
+        }
         gtaoPass.uniforms['edlEnabled'].value = isEDLEnabled ? 1.0 : 0.0;
         if (depthTexture) {
           gtaoPass.uniforms['tDepth'].value = depthTexture;
@@ -14260,19 +14317,59 @@ var City3DEngine = (function() {
     }
   }
 
-  function toggleGTAO() {
-    isGTAOEnabled = !isGTAOEnabled;
-    if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['aoEnabled']) {
-      gtaoPass.uniforms['aoEnabled'].value = isGTAOEnabled ? 1.0 : 0.0;
-    }
+  function updateAOButtonUI() {
     var btn = document.getElementById('city3dGtaoBtn');
-    if (btn) {
-      if (isGTAOEnabled) {
-        btn.classList.add('city-3d-btn-active');
-      } else {
-        btn.classList.remove('city-3d-btn-active');
+    var iconEl = document.getElementById('city3dGtaoIcon');
+    var textEl = document.getElementById('city3dGtaoText');
+    if (!btn) return;
+    if (currentAOMode === 'gtao') {
+      btn.classList.add('city-3d-btn-active');
+      if (iconEl) iconEl.textContent = '✨';
+      if (textEl) textEl.textContent = 'GTAO / GI';
+      btn.setAttribute('title', (t('city3dGtao') || 'GTAO 光影遮蔽与全局光 (GI)') + ' (点击切换 SSAO)');
+    } else if (currentAOMode === 'ssao') {
+      btn.classList.add('city-3d-btn-active');
+      if (iconEl) iconEl.textContent = '🔮';
+      if (textEl) textEl.textContent = 'SSAO';
+      btn.setAttribute('title', (t('city3dSsao') || 'SSAO 经典环境光遮蔽') + ' (点击关闭 AO)');
+    } else {
+      btn.classList.remove('city-3d-btn-active');
+      if (iconEl) iconEl.textContent = '⚪';
+      if (textEl) textEl.textContent = t('city3dAoOff') || 'AO 关闭';
+      btn.setAttribute('title', (t('city3dAoOff') || 'AO 环境遮蔽已关闭') + ' (点击开启 GTAO)');
+    }
+  }
+
+  function setAOMode(mode) {
+    if (mode !== 'gtao' && mode !== 'ssao' && mode !== 'off') {
+      mode = 'gtao';
+    }
+    currentAOMode = mode;
+    isGTAOEnabled = (currentAOMode !== 'off');
+    GTAO_CONFIG.mode = currentAOMode;
+    if (gtaoPass && gtaoPass.uniforms) {
+      if (gtaoPass.uniforms['aoEnabled']) {
+        gtaoPass.uniforms['aoEnabled'].value = isGTAOEnabled ? 1.0 : 0.0;
+      }
+      if (gtaoPass.uniforms['aoMode']) {
+        gtaoPass.uniforms['aoMode'].value = currentAOMode === 'ssao' ? 2.0 : (currentAOMode === 'gtao' ? 1.0 : 0.0);
       }
     }
+    updateAOButtonUI();
+  }
+
+  function cycleAOMode() {
+    if (currentAOMode === 'gtao') {
+      setAOMode('ssao');
+    } else if (currentAOMode === 'ssao') {
+      setAOMode('off');
+    } else {
+      setAOMode('gtao');
+    }
+  }
+
+  function toggleGTAO() {
+    cycleAOMode();
   }
 
   function toggleEDL() {
@@ -14482,6 +14579,9 @@ var City3DEngine = (function() {
     setDayNight: setDayNight,
     toggleDayNight: toggleDayNight,
     toggleGTAO: toggleGTAO,
+    setAOMode: setAOMode,
+    cycleAOMode: cycleAOMode,
+    getAOMode: function() { return currentAOMode; },
     toggleEDL: toggleEDL,
     setGTAODistance: setGTAODistance,
     setGTAOIntensity: setGTAOIntensity,
