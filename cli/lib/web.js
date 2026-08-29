@@ -5793,9 +5793,11 @@ details[open] > .home-all-configs-summary .chevron {
 .city-3d-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-start;
   height: 32px;
-  padding: 0 12px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
   background: var(--topbar-bg);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -5805,16 +5807,41 @@ details[open] > .home-all-configs-summary .chevron {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  transition: all .18s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
   white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+  box-sizing: border-box;
+  vertical-align: middle;
 }
 .city-3d-btn:hover {
   background: var(--panel-soft);
   border-color: var(--accent);
   color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.20);
+}
+.city-3d-btn-icon {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.city-3d-btn-text {
+  display: inline-block;
+  opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding-right: 0;
+  transform: translateX(-4px);
 }
 .city-3d-btn-highlight {
   background: var(--accent-soft);
@@ -5991,6 +6018,7 @@ body.city-3d-zen-active .home-page {
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
@@ -6087,24 +6115,28 @@ body.city-3d-zen-active .home-page {
             </div>
             <div class="city-3d-hud-right">
               <button id="city3dFlightBtn" class="city-3d-btn" type="button" title="暂停/继续巡航" data-i18n-title="city3dCruise">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                <span id="city3dFlightText">巡航中</span>
+                <span class="city-3d-btn-icon">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                </span>
+                <span id="city3dFlightText" class="city-3d-btn-text">巡航中</span>
               </button>
               <button id="city3dDayNightBtn" class="city-3d-btn" type="button" title="昼夜切换" data-i18n-title="city3dDay">
-                <span id="city3dDayNightIcon">☀️</span>
-                <span id="city3dDayNightText">白天</span>
+                <span id="city3dDayNightIcon" class="city-3d-btn-icon">☀️</span>
+                <span id="city3dDayNightText" class="city-3d-btn-text">白天</span>
               </button>
               <button id="city3dGtaoBtn" class="city-3d-btn city-3d-btn-active" type="button" title="GTAO & GI 光影遮蔽 (点击切换 SSAO/关闭)" data-i18n-title="city3dGtao">
-                <span id="city3dGtaoIcon">✨</span>
-                <span id="city3dGtaoText">GTAO / GI</span>
+                <span id="city3dGtaoIcon" class="city-3d-btn-icon">✨</span>
+                <span id="city3dGtaoText" class="city-3d-btn-text">GTAO / GI</span>
               </button>
               <button id="city3dEdlBtn" class="city-3d-btn city-3d-btn-active" type="button" title="EDL / 建筑结构轮廓" data-i18n-title="city3dEdl">
-                <span>📐</span>
-                <span id="city3dEdlText">EDL 轮廓</span>
+                <span id="city3dEdlIcon" class="city-3d-btn-icon">📐</span>
+                <span id="city3dEdlText" class="city-3d-btn-text">EDL 轮廓</span>
               </button>
               <button id="city3dZenBtn" class="city-3d-btn city-3d-btn-highlight" type="button" title="全屏沉浸/显示概览" data-i18n-title="city3dZenMode">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
-                <span id="city3dZenText">全景沉浸</span>
+                <span class="city-3d-btn-icon">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+                </span>
+                <span id="city3dZenText" class="city-3d-btn-text">全景沉浸</span>
               </button>
             </div>
           </div>
@@ -14965,7 +14997,147 @@ var City3DEngine = (function() {
     }, { passive: false });
   }
 
+  function initCity3dButtonAnimations() {
+    var hudRight = document.querySelector('.city-3d-hud-right');
+    if (!hudRight) return;
+    var btns = hudRight.querySelectorAll('.city-3d-btn');
+    if (!btns || btns.length === 0) return;
+
+    for (var i = 0; i < btns.length; i++) {
+      (function(btn) {
+        var textEl = btn.querySelector('.city-3d-btn-text');
+        var iconEl = btn.querySelector('.city-3d-btn-icon');
+        if (!textEl) return;
+
+        btn.addEventListener('mouseenter', function() {
+          var textWidth = textEl.scrollWidth || 60;
+          var targetWidth = 32 + textWidth + 10;
+
+          if (typeof anime !== 'undefined') {
+            anime.remove(btn);
+            anime.remove(textEl);
+            if (iconEl) anime.remove(iconEl);
+
+            anime({
+              targets: btn,
+              width: targetWidth + 'px',
+              duration: 280,
+              easing: 'easeOutCubic'
+            });
+
+            anime({
+              targets: textEl,
+              opacity: [0, 1],
+              translateX: [-4, 0],
+              paddingRight: '10px',
+              maxWidth: (textWidth + 20) + 'px',
+              duration: 220,
+              delay: 30,
+              easing: 'easeOutQuad'
+            });
+
+            if (iconEl) {
+              anime({
+                targets: iconEl,
+                scale: [1, 1.18, 1],
+                duration: 260,
+                easing: 'easeInOutQuad'
+              });
+            }
+          } else {
+            btn.style.width = targetWidth + 'px';
+            textEl.style.opacity = '1';
+            textEl.style.maxWidth = '140px';
+            textEl.style.paddingRight = '10px';
+            textEl.style.transform = 'translateX(0)';
+          }
+        });
+
+        btn.addEventListener('mouseleave', function() {
+          if (typeof anime !== 'undefined') {
+            anime.remove(btn);
+            anime.remove(textEl);
+            if (iconEl) anime.remove(iconEl);
+
+            anime({
+              targets: textEl,
+              opacity: [1, 0],
+              translateX: [0, -4],
+              paddingRight: '0px',
+              maxWidth: '0px',
+              duration: 160,
+              easing: 'easeInQuad'
+            });
+
+            anime({
+              targets: btn,
+              width: '32px',
+              duration: 240,
+              delay: 40,
+              easing: 'easeOutCubic'
+            });
+          } else {
+            btn.style.width = '32px';
+            textEl.style.opacity = '0';
+            textEl.style.maxWidth = '0px';
+            textEl.style.paddingRight = '0px';
+            textEl.style.transform = 'translateX(-4px)';
+          }
+        });
+
+        btn.addEventListener('mousedown', function() {
+          if (typeof anime !== 'undefined') {
+            anime({
+              targets: btn,
+              scale: 0.92,
+              duration: 100,
+              easing: 'easeOutQuad'
+            });
+          }
+        });
+
+        btn.addEventListener('mouseup', function() {
+          if (typeof anime !== 'undefined') {
+            anime({
+              targets: btn,
+              scale: 1,
+              duration: 220,
+              easing: 'easeOutElastic(1, .6)'
+            });
+          }
+        });
+      })(btns[i]);
+    }
+  }
+
+  function updateHoveredBtnWidth(btn) {
+    if (!btn || !btn.matches || !btn.matches(':hover')) return;
+    var textEl = btn.querySelector('.city-3d-btn-text');
+    if (!textEl) return;
+    var textWidth = textEl.scrollWidth || 60;
+    var targetWidth = 32 + textWidth + 10;
+    if (typeof anime !== 'undefined') {
+      anime({
+        targets: btn,
+        width: targetWidth + 'px',
+        duration: 200,
+        easing: 'easeOutCubic'
+      });
+      anime({
+        targets: textEl,
+        maxWidth: (textWidth + 20) + 'px',
+        duration: 200,
+        easing: 'easeOutQuad'
+      });
+    } else {
+      btn.style.width = targetWidth + 'px';
+      textEl.style.maxWidth = (textWidth + 20) + 'px';
+    }
+  }
+
   function bindHudControls() {
+    initCity3dButtonAnimations();
+
     var flightBtn = document.getElementById('city3dFlightBtn');
     if (flightBtn) {
       flightBtn.addEventListener('click', function(e) {
@@ -15049,6 +15221,7 @@ var City3DEngine = (function() {
       if (textEl) textEl.textContent = t('city3dAoOff') || 'AO 关闭';
       btn.setAttribute('title', (t('city3dAoOff') || 'AO 环境遮蔽已关闭') + ' (点击开启 GTAO)');
     }
+    updateHoveredBtnWidth(btn);
   }
 
   function setAOMode(mode) {
@@ -15095,6 +15268,7 @@ var City3DEngine = (function() {
       } else {
         btn.classList.remove('city-3d-btn-active');
       }
+      updateHoveredBtnWidth(btn);
     }
   }
 
@@ -15116,6 +15290,15 @@ var City3DEngine = (function() {
     if (textEl) {
       textEl.textContent = isAutoCruising ? (t('city3dCruise') || '巡航中') : (t('city3dCruisePaused') || '已暂停');
     }
+    var btn = document.getElementById('city3dFlightBtn');
+    if (btn) {
+      if (isAutoCruising) {
+        btn.classList.add('city-3d-btn-active');
+      } else {
+        btn.classList.remove('city-3d-btn-active');
+      }
+      updateHoveredBtnWidth(btn);
+    }
   }
 
   function toggleDayNight() {
@@ -15128,6 +15311,11 @@ var City3DEngine = (function() {
     var textEl = document.getElementById('city3dDayNightText');
     if (iconEl) iconEl.textContent = targetMode === 'night' ? '🌙' : '☀️';
     if (textEl) textEl.textContent = targetMode === 'night' ? (t('city3dNight') || '夜间') : (t('city3dDay') || '白天');
+    var btn = document.getElementById('city3dDayNightBtn');
+    if (btn) {
+      btn.setAttribute('title', targetMode === 'night' ? (t('city3dNight') || '夜间模式') : (t('city3dDay') || '白天模式'));
+      updateHoveredBtnWidth(btn);
+    }
   }
 
   function syncWithTheme(themeId) {
@@ -15162,6 +15350,7 @@ var City3DEngine = (function() {
     if (zenBtn) {
       zenBtn.classList.toggle('city-3d-btn-active', isZenMode);
       zenBtn.setAttribute('title', isZenMode ? '退出全景沉浸 (按 Esc 或点击恢复)' : '全景沉浸/显示概览');
+      updateHoveredBtnWidth(zenBtn);
     }
     setTimeout(handleResize, 30);
     setTimeout(handleResize, 150);
@@ -15189,10 +15378,39 @@ var City3DEngine = (function() {
     }
 
     repoCardEl.hidden = false;
+    if (typeof anime !== 'undefined') {
+      anime.remove(repoCardEl);
+      anime({
+        targets: repoCardEl,
+        opacity: [0, 1],
+        translateY: [16, 0],
+        scale: [0.95, 1],
+        duration: 260,
+        easing: 'easeOutCubic'
+      });
+    }
   }
 
   function closeRepoDetail() {
-    if (repoCardEl) repoCardEl.hidden = true;
+    if (!repoCardEl || repoCardEl.hidden) return;
+    if (typeof anime !== 'undefined') {
+      anime.remove(repoCardEl);
+      anime({
+        targets: repoCardEl,
+        opacity: [1, 0],
+        translateY: [0, 12],
+        scale: [1, 0.96],
+        duration: 180,
+        easing: 'easeInQuad',
+        complete: function() {
+          repoCardEl.hidden = true;
+          repoCardEl.style.opacity = '1';
+          repoCardEl.style.transform = 'none';
+        }
+      });
+    } else {
+      repoCardEl.hidden = true;
+    }
   }
 
   function handleResize() {
