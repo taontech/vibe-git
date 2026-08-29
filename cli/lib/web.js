@@ -12142,169 +12142,107 @@ var City3DEngine = (function() {
     skyGroup.add(starField);
   }
 
-  // Dynamic Git Contribution Heatmap Light Texture (Weekly 7-Day Matrix on Tallest, Sparse Windows on Regulars)
-  function createContributionLightTexture(repo, item, bIndex, styleSeed, isTallest) {
-    var cacheKey = (repo ? repo.name : 'repo') + '_' + (item ? item.name : 'file') + '_' + bIndex + (isTallest ? '_tallest' : '_regular');
+  function computeRepoActivity(repo) {
+    if (!repo) return 0.2;
+    var contribs = repo.contributions || {};
+    var dates = Object.keys(contribs);
+    if (dates.length === 0) return 0.2;
+    dates.sort();
+    var totalCommits = 0;
+    var activeDays = 0;
+    var recentCommits = 0;
+    for (var i = 0; i < dates.length; i++) {
+      var d = dates[i];
+      var cnt = contribs[d] || 0;
+      totalCommits += cnt;
+      if (cnt > 0) activeDays++;
+      if (i >= dates.length - 14) {
+        recentCommits += cnt;
+      }
+    }
+    var score = Math.min(1.0, (activeDays / 60) * 0.4 + (recentCommits / 20) * 0.6);
+    return Math.max(0.1, score);
+  }
+
+  // Dynamic Git Contribution Heatmap Matrix Data Texture (Weekly Matrix for Tallest, Dev Activity for Regulars)
+  function createContributionDataTexture(repo, bays, floors, styleSeed, isTallest) {
+    var width = Math.max(1, bays || 7);
+    var height = Math.max(1, floors || 16);
+    var cacheKey = (repo ? (repo.name || repo.path) : 'repo') + '_' + width + 'x' + height + '_' + (isTallest ? 'tallest' : 'reg') + '_' + (styleSeed % 100);
     if (emissiveTexCache[cacheKey]) {
       return emissiveTexCache[cacheKey];
     }
 
-    var canvas = document.createElement('canvas');
-    var ctx = canvas.getContext('2d');
+    var size = width * height * 4;
+    var data = new Uint8Array(size);
 
-    if (isTallest) {
-      // 3. Highest Landmark Building in District: Weekly 7-Day Git Contribution Calendar Light Facade
-      canvas.width = 512;
-      canvas.height = 512;
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, 512, 512);
+    var contribs = (repo && repo.contributions) ? repo.contributions : {};
+    var dates = Object.keys(contribs);
+    dates.sort();
 
-      var bays = 7; // Exactly 7 days of the week per floor (Mon - Sun)
-      var floors = 24; // 24 consecutive weeks of history
-      var cellW = 512 / bays;
-      var cellH = 512 / floors;
-      var padX = 5.0;
-      var padY = 2.5;
-      var winW = cellW - padX * 2;
-      var winH = cellH - padY * 2;
-
-      // Extract Git contribution calendar commit frequencies
-      var contribs = (repo && repo.contributions) ? repo.contributions : {};
-      var dates = Object.keys(contribs);
-      dates.sort(); // Chronological order
-      var counts = [];
-      if (dates.length > 0) {
-        for (var d = 0; d < dates.length; d++) {
-          counts.push(contribs[dates[d]] || 0);
-        }
-      }
-
-      var totalDays = bays * floors;
-      var startOffset = Math.max(0, counts.length - totalDays);
-
-      for (var r = 0; r < floors; r++) {
-        for (var c = 0; c < bays; c++) {
-          var x = c * cellW + padX;
-          var y = r * cellH + padY;
-
-          var dayIdx = startOffset + (r * bays + c);
-          var commitCount = 0;
-          if (counts.length > 0) {
-            commitCount = (dayIdx < counts.length) ? (counts[dayIdx] || 0) : (counts[dayIdx % counts.length] || 0);
-          } else {
-            // Realistic dev rhythm pattern fallback (weekday sprints, lower weekends)
-            var dayOfWeek = c; // 0..6
-            var isWeekend = (dayOfWeek === 5 || dayOfWeek === 6);
-            var seedVal = ((styleSeed * 13 + r * 29 + c * 47) % 100);
-            if (isWeekend) {
-              commitCount = (seedVal > 75) ? Math.floor((seedVal - 75) / 6) : 0;
-            } else {
-              commitCount = (seedVal > 30) ? Math.floor((seedVal - 30) / 7) + 1 : 0;
-            }
-          }
-
-          if (commitCount > 0) {
-            var brightness = 0.50;
-            var winColor = 'rgba(187, 247, 208, '; // Soft mint
-            if (commitCount >= 10) {
-              brightness = 1.0;
-              winColor = 'rgba(255, 255, 255, '; // Blazing sprint white
-            } else if (commitCount >= 6) {
-              brightness = 0.90;
-              winColor = 'rgba(52, 211, 153, '; // Luminous emerald
-            } else if (commitCount >= 3) {
-              brightness = 0.75;
-              winColor = 'rgba(74, 222, 128, '; // Vibrant lime green
-            } else if (commitCount >= 1) {
-              brightness = 0.55;
-              winColor = 'rgba(254, 240, 138, '; // Soft golden amber
-            }
-
-            ctx.fillStyle = winColor + brightness + ')';
-            ctx.fillRect(x, y, winW, winH);
-
-            // Ceiling light gradient
-            var grad = ctx.createLinearGradient(x, y, x, y + winH);
-            grad.addColorStop(0, 'rgba(255, 255, 255, ' + (brightness * 0.9) + ')');
-            grad.addColorStop(0.4, 'rgba(255, 255, 255, ' + (brightness * 0.3) + ')');
-            grad.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
-            ctx.fillStyle = grad;
-            ctx.fillRect(x, y, winW, winH);
-
-            // Sleek horizontal blind slats
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-            ctx.fillRect(x, y + winH * 0.35, winW, 1.2);
-            ctx.fillRect(x, y + winH * 0.70, winW, 1.2);
-          } else {
-            // Unlit room / standby
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';
-            ctx.fillRect(x, y, winW, winH);
-          }
-        }
-      }
-    } else {
-      // Regular Buildings: Randomly lit windows, NOT too dense (15-20% lit)
-      canvas.width = 256;
-      canvas.height = 256;
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, 256, 256);
-
-      var bays = 8;
-      var floors = 8;
-      var cellW = 256 / bays;
-      var cellH = 256 / floors;
-      var padX = 3.5;
-      var padY = 3.5;
-      var winW = cellW - padX * 2;
-      var winH = cellH - padY * 2;
-
-      var fileHash = hashStr(item ? item.name : ('b_' + bIndex)) + (styleSeed || 0);
-
-      for (var r = 0; r < floors; r++) {
-        for (var c = 0; c < bays; c++) {
-          var x = c * cellW + padX;
-          var y = r * cellH + padY;
-
-          // Sparse random distribution (~18% of windows lit)
-          var randVal = ((fileHash * 37 + c * 23 + r * 41) % 100);
-          var isLit = (randVal < 18);
-
-          if (isLit) {
-            var colorType = (randVal % 3);
-            var winColor = 'rgba(254, 240, 138, '; // 60% warm amber
-            var brightness = 0.65;
-            if (colorType === 1) {
-              winColor = 'rgba(224, 242, 254, '; // 25% cool office white
-              brightness = 0.60;
-            } else if (colorType === 2) {
-              winColor = 'rgba(253, 186, 116, '; // 15% soft orange
-              brightness = 0.55;
-            }
-
-            ctx.fillStyle = winColor + brightness + ')';
-            ctx.fillRect(x, y, winW, winH);
-
-            var grad = ctx.createLinearGradient(x, y, x, y + winH);
-            grad.addColorStop(0, 'rgba(255, 255, 255, ' + (brightness * 0.8) + ')');
-            grad.addColorStop(0.35, 'rgba(255, 255, 255, ' + (brightness * 0.2) + ')');
-            grad.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
-            ctx.fillStyle = grad;
-            ctx.fillRect(x, y, winW, winH);
-
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-            ctx.fillRect(x, y + winH * 0.45, winW, 1.2);
-          } else if (randVal < 26) {
-            // Very faint standby monitor glow
-            ctx.fillStyle = 'rgba(56, 189, 248, 0.10)';
-            ctx.fillRect(x, y, winW, winH);
-          }
-        }
+    var counts = [];
+    if (dates.length > 0) {
+      for (var d = 0; d < dates.length; d++) {
+        counts.push(contribs[dates[d]] || 0);
       }
     }
 
-    var tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
+    var totalCells = width * height;
+    var startOffset = Math.max(0, counts.length - totalCells);
+
+    for (var r = 0; r < height; r++) {
+      for (var c = 0; c < width; c++) {
+        var idx = (r * width + c) * 4;
+        var commitCount = 0;
+
+        if (counts.length > 0) {
+          var cellIndex = startOffset + (r * width + c);
+          if (cellIndex < counts.length) {
+            commitCount = counts[cellIndex] || 0;
+          } else {
+            commitCount = counts[cellIndex % counts.length] || 0;
+          }
+        } else {
+          // Realistic procedural dev rhythm fallback (weekday sprints, lower weekends)
+          var dayOfWeek = c % 7;
+          var isWeekend = (dayOfWeek === 5 || dayOfWeek === 6);
+          var seedVal = ((styleSeed * 13 + r * 29 + c * 47) % 100);
+          if (isWeekend) {
+            commitCount = (seedVal > 78) ? Math.floor((seedVal - 78) / 6) : 0;
+          } else {
+            commitCount = (seedVal > 35) ? Math.floor((seedVal - 35) / 8) + 1 : 0;
+          }
+        }
+
+        var levelByte = 0;
+        var themeByte = 0;
+        if (commitCount >= 10) {
+          levelByte = 255;
+          themeByte = 255;
+        } else if (commitCount >= 6) {
+          levelByte = 200;
+          themeByte = 190;
+        } else if (commitCount >= 3) {
+          levelByte = 140;
+          themeByte = 130;
+        } else if (commitCount >= 1) {
+          levelByte = 80;
+          themeByte = 70;
+        }
+
+        data[idx] = levelByte;
+        data[idx + 1] = Math.min(255, commitCount * 25);
+        data[idx + 2] = themeByte;
+        data[idx + 3] = commitCount > 0 ? 255 : 0;
+      }
+    }
+
+    var tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
     emissiveTexCache[cacheKey] = tex;
     return tex;
   }
@@ -13797,15 +13735,11 @@ var City3DEngine = (function() {
   // Create Procedural Facade Material with Dynamic GPU Window Synthesis Shader
   function createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, isTallest, colHex, isGlass, bw, bd, bHeight) {
     var bayVariants = [4, 6, 8, 10, 12, 14];
-    var gridBays = bayVariants[(styleSeed % bayVariants.length)];
-    var gridFloors = Math.max(4, Math.min(28, Math.round(bHeight / (3.2 + (styleSeed % 3) * 0.8))));
+    var gridBays = isTallest ? 7 : bayVariants[(styleSeed % bayVariants.length)];
+    var gridFloors = isTallest ? Math.max(12, Math.min(28, Math.round(bHeight / 2.6))) : Math.max(4, Math.min(28, Math.round(bHeight / (3.2 + (styleSeed % 3) * 0.8))));
 
-    var contribTex = null;
-    if (isTallest) {
-      contribTex = createContributionLightTexture(repo, item, bIndex, styleSeed, true);
-    } else {
-      contribTex = getDummyEmissiveTexture();
-    }
+    var repoActivity = computeRepoActivity(repo);
+    var contribTex = createContributionDataTexture(repo, gridBays, gridFloors, styleSeed, isTallest);
 
     var mat = new THREE.MeshStandardMaterial({
       color: colHex,
@@ -13822,6 +13756,7 @@ var City3DEngine = (function() {
       bIndex: bIndex,
       gridBays: gridBays,
       gridFloors: gridFloors,
+      repoActivity: repoActivity,
       shader: null
     };
 
@@ -13829,9 +13764,11 @@ var City3DEngine = (function() {
       shader.uniforms.uTime = { value: totalElapsedTime };
       shader.uniforms.uSeed = { value: (styleSeed % 1000) * 1.37 + bIndex * 7.19 };
       shader.uniforms.uIsTallest = { value: isTallest ? 1.0 : 0.0 };
+      shader.uniforms.uRepoActivity = { value: repoActivity };
       shader.uniforms.uWindowGrid = { value: new THREE.Vector2(gridBays, gridFloors) };
       shader.uniforms.uNightTransition = { value: modeTransition };
       shader.uniforms.uOvertimeFreq = { value: ((styleSeed % 5 === 0) ? 0.75 : ((styleSeed % 3 === 0) ? 0.04 : 0.20)) };
+      shader.uniforms.uContribMap = { value: contribTex };
       mat.userData.shader = shader;
 
       var nl = String.fromCharCode(10);
@@ -13839,9 +13776,11 @@ var City3DEngine = (function() {
         'uniform float uTime;',
         'uniform float uSeed;',
         'uniform float uIsTallest;',
+        'uniform float uRepoActivity;',
         'uniform vec2 uWindowGrid;',
         'uniform float uNightTransition;',
-        'uniform float uOvertimeFreq;'
+        'uniform float uOvertimeFreq;',
+        'uniform sampler2D uContribMap;'
       ].join(nl);
 
       shader.fragmentShader = headerChunk + nl + shader.fragmentShader;
@@ -13849,46 +13788,74 @@ var City3DEngine = (function() {
       var emissiveChunk = [
         '#include <emissivemap_fragment>',
         'if (uNightTransition > 0.001) {',
-        '  if (uIsTallest > 0.5) {',
-        '    #ifdef USE_EMISSIVEMAP',
-        '      vec4 cMap = texture2D(emissiveMap, vUv);',
-        '      totalEmissiveRadiance += cMap.rgb * (uNightTransition * 1.25);',
-        '    #endif',
-        '  } else {',
-        '    vec2 gUv = fract(vUv * uWindowGrid);',
-        '    vec2 cId = floor(vUv * uWindowGrid);',
-        '    float padX = 0.16;',
-        '    float padY = 0.20;',
-        '    if (gUv.x > padX && gUv.x < (1.0 - padX) && gUv.y > padY && gUv.y < (1.0 - padY)) {',
-        '      float cHash = fract(sin(dot(cId + vec2(uSeed * 13.17, uSeed * 37.89), vec2(12.9898, 78.233))) * 43758.5453);',
-        '      float fHash = fract(sin((cId.y + uSeed * 41.53) * 12.9898) * 43758.5453);',
-        '      float fAct = (fHash > 0.84) ? 0.80 : ((fHash < 0.28) ? 0.03 : uOvertimeFreq);',
-        '      bool lit = (cHash < fAct);',
-        '      if (lit) {',
+        '  vec2 gUv = fract(vUv * uWindowGrid);',
+        '  vec2 cId = floor(vUv * uWindowGrid);',
+        '  float padX = 0.16;',
+        '  float padY = 0.20;',
+        '  if (gUv.x > padX && gUv.x < (1.0 - padX) && gUv.y > padY && gUv.y < (1.0 - padY)) {',
+        '    vec2 cNorm = (cId + vec2(0.5, 0.5)) / uWindowGrid;',
+        '    vec4 cData = texture2D(uContribMap, cNorm);',
+        '    float cHash = fract(sin(dot(cId + vec2(uSeed * 13.17, uSeed * 37.89), vec2(12.9898, 78.233))) * 43758.5453);',
+        '    float fHash = fract(sin((cId.y + uSeed * 41.53) * 12.9898) * 43758.5453);',
+        '    bool isLit = false;',
+        '    vec3 wCol = vec3(1.0, 0.94, 0.68);',
+        '    float br = 0.75;',
+        '    if (uIsTallest > 0.5) {',
+        '      float commitLevel = cData.r;',
+        '      if (commitLevel > 0.01) {',
+        '        isLit = true;',
+        '        if (commitLevel >= 0.85) {',
+        '          wCol = vec3(0.95, 1.0, 1.0);',
+        '          br = 0.95;',
+        '        } else if (commitLevel >= 0.60) {',
+        '          wCol = vec3(0.20, 0.92, 0.60);',
+        '          br = 0.85;',
+        '        } else if (commitLevel >= 0.35) {',
+        '          wCol = vec3(0.35, 0.88, 0.45);',
+        '          br = 0.75;',
+        '        } else {',
+        '          wCol = vec3(1.0, 0.94, 0.62);',
+        '          br = 0.65;',
+        '        }',
+        '      } else {',
+        '        float fAct = 0.08 + uRepoActivity * 0.12;',
+        '        isLit = (cHash < fAct);',
+        '        if (isLit) {',
+        '          wCol = vec3(0.85, 0.92, 1.0);',
+        '          br = 0.55;',
+        '        }',
+        '      }',
+        '    } else {',
+        '      float fAct = (fHash > 0.84) ? (0.65 + uRepoActivity * 0.25) : ((fHash < 0.28) ? 0.04 : (uOvertimeFreq + uRepoActivity * 0.18));',
+        '      isLit = (cHash < fAct);',
+        '      if (isLit) {',
         '        float tVal = fract(cHash * 91.3);',
-        '        vec3 wCol = vec3(1.0, 0.94, 0.68);',
-        '        float br = 0.75;',
-        '        if (tVal > 0.75) {',
+        '        if (tVal > 0.78) {',
         '          wCol = vec3(0.88, 0.96, 1.0);',
         '          br = 0.70;',
-        '        } else if (tVal > 0.52) {',
-        '          wCol = vec3(1.0, 0.74, 0.42);',
+        '        } else if (tVal > 0.50) {',
+        '          wCol = vec3(1.0, 0.76, 0.42);',
         '          br = 0.65;',
-        '        } else if (tVal > 0.42) {',
+        '        } else if (tVal > 0.38) {',
         '          wCol = vec3(0.0, 0.95, 1.0);',
         '          br = 0.60 + 0.30 * sin(uTime * 3.8 + cHash * 20.0);',
-        '        } else if (tVal < 0.12) {',
-        '          wCol = vec3(1.0, 1.0, 1.0);',
-        '          br = 0.95;',
+        '        } else if (tVal < (0.12 + uRepoActivity * 0.15)) {',
+        '          wCol = vec3(0.30, 0.90, 0.55);',
+        '          br = 0.85;',
+        '        } else {',
+        '          wCol = vec3(1.0, 0.94, 0.68);',
+        '          br = 0.75;',
         '        }',
-        '        float normY = (gUv.y - padY) / (1.0 - 2.0 * padY);',
-        '        float cGlow = 0.45 + 0.55 * normY;',
-        '        float bld = 0.75 + 0.25 * step(0.35, fract(normY * 4.0));',
-        '        float flk = 1.0 + 0.05 * sin(uTime * 4.2 + cHash * 50.0);',
-        '        totalEmissiveRadiance += wCol * (br * cGlow * bld * flk * uNightTransition * 0.95);',
-        '      } else if (cHash < fAct + 0.06) {',
-        '        totalEmissiveRadiance += vec3(0.15, 0.45, 0.85) * (0.12 * uNightTransition);',
         '      }',
+        '    }',
+        '    if (isLit) {',
+        '      float normY = (gUv.y - padY) / (1.0 - 2.0 * padY);',
+        '      float cGlow = 0.45 + 0.55 * normY;',
+        '      float bld = 0.75 + 0.25 * step(0.35, fract(normY * 4.0));',
+        '      float flk = 1.0 + 0.05 * sin(uTime * 4.2 + cHash * 50.0);',
+        '      totalEmissiveRadiance += wCol * (br * cGlow * bld * flk * uNightTransition * 0.95);',
+        '    } else if (cHash < (0.22 + uRepoActivity * 0.08)) {',
+        '      totalEmissiveRadiance += vec3(0.15, 0.45, 0.85) * (0.12 * uNightTransition);',
         '    }',
         '  }',
         '}'
