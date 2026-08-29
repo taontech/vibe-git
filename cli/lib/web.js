@@ -13788,11 +13788,14 @@ var City3DEngine = (function() {
       var emissiveChunk = [
         '#include <emissivemap_fragment>',
         'if (uNightTransition > 0.001) {',
+        '  vec3 nightBaseColor = vec3(0.015, 0.02, 0.035);',
+        '  diffuseColor.rgb = mix(diffuseColor.rgb, nightBaseColor, uNightTransition);',
         '  vec2 gUv = fract(vUv * uWindowGrid);',
         '  vec2 cId = floor(vUv * uWindowGrid);',
         '  float padX = 0.16;',
         '  float padY = 0.20;',
         '  if (gUv.x > padX && gUv.x < (1.0 - padX) && gUv.y > padY && gUv.y < (1.0 - padY)) {',
+        '    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.005, 0.008, 0.012), uNightTransition);',
         '    vec2 cNorm = (cId + vec2(0.5, 0.5)) / uWindowGrid;',
         '    vec4 cData = texture2D(uContribMap, cNorm);',
         '    float cHash = fract(sin(dot(cId + vec2(uSeed * 13.17, uSeed * 37.89), vec2(12.9898, 78.233))) * 43758.5453);',
@@ -14575,7 +14578,7 @@ var City3DEngine = (function() {
     cityGroup.add(districtGroup);
   }
 
-  // 1 & 4. True High-Altitude Birds-Eye Aerial View (飞机航拍俯瞰视角)
+  // Airplane Cruise Flight Spline (moves the sphere center along the central avenue)
   function buildFlightSpline(districts) {
     var waypoints = [];
     if (districts && districts.length > 0) {
@@ -14583,46 +14586,39 @@ var City3DEngine = (function() {
       var minX = districts[0].center.x - 70;
       var maxX = districts[N - 1].center.x + 70;
 
-      var maxH = 45;
-      for (var d = 0; d < N; d++) {
-        if (districts[d].height > maxH) maxH = districts[d].height;
-      }
-      // Lowered flight cruising altitude (~240 units above ground, half of former altitude)
-      var flightH = Math.max(maxH * 2.4 + 110, 240);
-
       var steps = Math.max(4, Math.min(14, N * 2));
 
-      // 1. Forward Leg (West to East: High above the central avenue at Z = 0 looking straight down)
+      // 1. Forward Leg (West to East along the central avenue at Z = 0)
       for (var i = 0; i <= steps; i++) {
         var u = i / steps;
         var wx = minX + u * (maxX - minX);
-        waypoints.push(new THREE.Vector3(wx, flightH, 0.0));
+        waypoints.push(new THREE.Vector3(wx, 15.0, 0.0));
       }
 
       // 2. Smooth Right-Turn Turnaround at East end
-      waypoints.push(new THREE.Vector3(maxX + 30, flightH, 8.0));
-      waypoints.push(new THREE.Vector3(maxX + 45, flightH, 0.0));
-      waypoints.push(new THREE.Vector3(maxX + 30, flightH, -8.0));
+      waypoints.push(new THREE.Vector3(maxX + 30, 15.0, 8.0));
+      waypoints.push(new THREE.Vector3(maxX + 45, 15.0, 0.0));
+      waypoints.push(new THREE.Vector3(maxX + 30, 15.0, -8.0));
 
-      // 3. Return Leg (East to West: High above the central avenue at Z = 0 looking straight down)
+      // 3. Return Leg (East to West along the central avenue at Z = 0)
       for (var j = steps; j >= 0; j--) {
         var v = j / steps;
         var rx = minX + v * (maxX - minX);
-        waypoints.push(new THREE.Vector3(rx, flightH, 0.0));
+        waypoints.push(new THREE.Vector3(rx, 15.0, 0.0));
       }
 
       // 4. Smooth Left-Turn Turnaround at West end
-      waypoints.push(new THREE.Vector3(minX - 30, flightH, -8.0));
-      waypoints.push(new THREE.Vector3(minX - 45, flightH, 0.0));
-      waypoints.push(new THREE.Vector3(minX - 30, flightH, 8.0));
+      waypoints.push(new THREE.Vector3(minX - 30, 15.0, -8.0));
+      waypoints.push(new THREE.Vector3(minX - 45, 15.0, 0.0));
+      waypoints.push(new THREE.Vector3(minX - 30, 15.0, 8.0));
     }
 
     if (waypoints.length < 4) {
       waypoints = [
-        new THREE.Vector3(140, 240, 0),
-        new THREE.Vector3(-140, 240, 0),
-        new THREE.Vector3(-140, 240, 0),
-        new THREE.Vector3(140, 240, 0)
+        new THREE.Vector3(140, 15.0, 0),
+        new THREE.Vector3(-140, 15.0, 0),
+        new THREE.Vector3(-140, 15.0, 0),
+        new THREE.Vector3(140, 15.0, 0)
       ];
     }
 
@@ -14638,7 +14634,7 @@ var City3DEngine = (function() {
     if (r < 1) r = 1;
     orbit.radius = r;
     orbit.phi = Math.acos(Math.max(-1, Math.min(1, dy / r)));
-    if (orbit.phi < 0.05) orbit.phi = 0.05;
+    if (orbit.phi < 0.01) orbit.phi = 0.01;
     if (orbit.phi > Math.PI / 2.05) orbit.phi = Math.PI / 2.05;
     orbit.theta = Math.atan2(dx, dz);
   }
@@ -14649,7 +14645,7 @@ var City3DEngine = (function() {
     var maxX = districtData[districtData.length - 1].center.x + 70;
     var span = maxX - minX;
     if (span > 0) {
-      var u = (camera.position.x - minX) / span;
+      var u = (orbit.target.x - minX) / span;
       u = Math.max(0, Math.min(1, u));
       cruiseProgress = u * 0.45;
     }
@@ -14790,25 +14786,19 @@ var City3DEngine = (function() {
       }
     }
 
-    // 1 & 4. Airplane High-Altitude Flight Cruise (True Overhead Top-Down Birds-Eye View, Street is Horizontal on Screen)
+    // Airplane Cruise Flight (Sphere center moves along the flight spline, camera orientation is preserved)
     if (isAutoCruising && flightSpline) {
       cruiseProgress = (cruiseProgress + dt * cruiseSpeed * 0.0022) % 1.0;
-      var camPos = flightSpline.getPointAt(cruiseProgress);
-      var actualFlightH = camPos.y + cruiseAltitudeOffset;
-
-      // Keep Street Horizontally Aligned: Screen Left-Right is X, Screen Top-Down is Z
-      camera.up.set(0, 0, -1);
-      camera.position.set(camPos.x, actualFlightH, camPos.z);
-      camera.lookAt(camPos.x, 0, camPos.z);
-      orbit.target.x = camPos.x;
-      orbit.target.y = 0;
-      orbit.target.z = camPos.z;
+      var targetPos = flightSpline.getPointAt(cruiseProgress);
+      orbit.target.x = targetPos.x;
+      orbit.target.y = targetPos.y;
+      orbit.target.z = targetPos.z;
 
       if (districtData.length > 0) {
         var closestDist = districtData[0];
-        var minDist = Math.abs(camPos.x - closestDist.center.x);
+        var minDist = Math.abs(targetPos.x - closestDist.center.x);
         for (var dIdx = 1; dIdx < districtData.length; dIdx++) {
-          var curDist = Math.abs(camPos.x - districtData[dIdx].center.x);
+          var curDist = Math.abs(targetPos.x - districtData[dIdx].center.x);
           if (curDist < minDist) {
             minDist = curDist;
             closestDist = districtData[dIdx];
@@ -14824,19 +14814,15 @@ var City3DEngine = (function() {
           }
         }
       }
-    } else {
-      // Dynamic camera.up based on tilt angle to avoid gimbal lock when top-down
-      if (orbit.phi < 0.15) {
-        camera.up.set(0, 0, -1);
-      } else {
-        camera.up.set(0, 1, 0);
-      }
-      var ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
-      var oy = orbit.target.y + orbit.radius * Math.cos(orbit.phi);
-      var oz = orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta);
-      camera.position.set(ox, oy, oz);
-      camera.lookAt(orbit.target.x, orbit.target.y, orbit.target.z);
     }
+
+    // Camera sits on the sphere around orbit.target with angles (theta, phi) and radius
+    camera.up.set(0, 1, 0);
+    var ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
+    var oy = orbit.target.y + orbit.radius * Math.cos(orbit.phi);
+    var oz = orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta);
+    camera.position.set(ox, oy, oz);
+    camera.lookAt(orbit.target.x, orbit.target.y, orbit.target.z);
 
     // Mouse Hover Intersections
     if (raycaster && mouse && camera && repoBadges.length > 0) {
@@ -14920,26 +14906,22 @@ var City3DEngine = (function() {
       previousPointer = { x: e.clientX, y: e.clientY };
 
       if (isRightDragging) {
-        // Right-Click Drag: Pan camera position horizontally without changing altitude Y
-        var curHeight = camera.position.y || 240;
-        var hView = 2.0 * Math.tan((camera.fov * Math.PI / 360)) * curHeight;
+        // Right-Click Drag: Pan camera position horizontally across ground with constant speed at all tilt angles
+        var targetDist = orbit.radius || 240;
+        var hView = 2.0 * Math.tan((camera.fov * Math.PI / 360)) * targetDist;
         var panScale = hView / (canvasEl.clientHeight || window.innerHeight || 300);
 
         // Vector pointing right in camera space projected onto horizontal ground
-        var vRight = new THREE.Vector3(camera.matrixWorld.elements[0], 0, camera.matrixWorld.elements[2]).normalize();
-        // Vector pointing up (forward) in camera space projected onto horizontal ground
-        var vUp = new THREE.Vector3(camera.matrixWorld.elements[4], 0, camera.matrixWorld.elements[6]).normalize();
-        if (vUp.lengthSq() < 0.001) {
-          // If looking straight down (top-down), camera forward is -Z
-          vUp = new THREE.Vector3(-camera.matrixWorld.elements[8], 0, -camera.matrixWorld.elements[10]).normalize();
-        }
+        var vRight = new THREE.Vector3(Math.cos(orbit.theta), 0, -Math.sin(orbit.theta));
+        // Vector pointing forward (up in screen) in camera space projected onto horizontal ground
+        var vForward = new THREE.Vector3(-Math.sin(orbit.theta), 0, -Math.cos(orbit.theta));
 
         var moveX = -dx * panScale;
-        var moveY = dy * panScale;
+        var moveY = -dy * panScale;
 
         var panDelta = new THREE.Vector3()
           .addScaledVector(vRight, moveX)
-          .addScaledVector(vUp, moveY);
+          .addScaledVector(vForward, moveY);
         panDelta.y = 0; // Strictly keep altitude / height unchanged!
 
         orbit.target.x += panDelta.x;
@@ -14948,7 +14930,7 @@ var City3DEngine = (function() {
       } else if (isLeftDragging) {
         // Left-Click Drag: Orbit angle rotation
         orbit.theta -= dx * 0.006;
-        orbit.phi = Math.max(0.05, Math.min(Math.PI / 2.05, orbit.phi + dy * 0.006));
+        orbit.phi = Math.max(0.01, Math.min(Math.PI / 2.05, orbit.phi + dy * 0.006));
       }
     });
 
@@ -14971,12 +14953,7 @@ var City3DEngine = (function() {
 
     canvasEl.addEventListener('wheel', function(e) {
       e.preventDefault();
-      if (isAutoCruising) {
-        // Zoom in/out airplane cruising altitude freely with mouse wheel!
-        cruiseAltitudeOffset = Math.max(-120, Math.min(250, cruiseAltitudeOffset + e.deltaY * 0.35));
-      } else {
-        orbit.radius = Math.max(40, Math.min(850, orbit.radius + e.deltaY * 0.3));
-      }
+      orbit.radius = Math.max(40, Math.min(850, orbit.radius + e.deltaY * 0.3));
       clearTimeout(userInteractionTimer);
       userInteractionTimer = setTimeout(function() {
         if (!isAutoCruising) {
