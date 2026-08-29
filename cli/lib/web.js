@@ -11489,12 +11489,12 @@ var City3DEngine = (function() {
 
   var GTAO_CONFIG = {
     mode: 'gtao',
-    radius: 2.0,
-    intensity: 3.45,
+    radius: 9.0,
+    intensity: 2.45,
     giIntensity: 0.85,
     edlStrength: 0.85,
     edlRadius: 1.0,
-    sobelStrength: 0.55
+    sobelStrength: 0.35
   };
 
   /* =========================================================================
