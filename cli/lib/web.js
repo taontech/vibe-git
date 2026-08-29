@@ -11885,9 +11885,9 @@ var City3DEngine = (function() {
       scene.background = new THREE.Color(0x060913);
       scene.fog = null; // Clean crystal-clear view, no murky fog!
 
-      // High-Altitude Telephoto Lens (13° narrow FOV = ~200mm telephoto compression)
-      camera = new THREE.PerspectiveCamera(13, width / height, 10, 6000);
-      camera.position.set(180, 480, 0);
+      // High-Altitude Telephoto Perspective (18° FOV for rich architectural detail)
+      camera = new THREE.PerspectiveCamera(18, width / height, 10, 5000);
+      camera.position.set(180, 240, 0);
 
       // Post-Processing Pipeline: Scene -> GTAO (AO + GI + EDL + Sobel) -> Bloom -> Gamma -> FXAA
       if (typeof THREE.EffectComposer !== 'undefined') {
@@ -14441,7 +14441,7 @@ var City3DEngine = (function() {
     cityGroup.add(districtGroup);
   }
 
-  // 1 & 4. True High-Altitude Stratosphere Telephoto Birds-Eye View (平流层长焦镜头俯瞰视角)
+  // 1 & 4. True High-Altitude Birds-Eye Aerial View (飞机航拍俯瞰视角)
   function buildFlightSpline(districts) {
     var waypoints = [];
     if (districts && districts.length > 0) {
@@ -14453,8 +14453,8 @@ var City3DEngine = (function() {
       for (var d = 0; d < N; d++) {
         if (districts[d].height > maxH) maxH = districts[d].height;
       }
-      // High-altitude stratosphere telephoto cruising altitude (~520 units above ground)
-      var flightH = Math.max(maxH * 5.2 + 280, 520);
+      // Lowered flight cruising altitude (~240 units above ground, half of former altitude)
+      var flightH = Math.max(maxH * 2.4 + 110, 240);
 
       var steps = Math.max(4, Math.min(14, N * 2));
 
@@ -14485,14 +14485,40 @@ var City3DEngine = (function() {
 
     if (waypoints.length < 4) {
       waypoints = [
-        new THREE.Vector3(140, 520, 0),
-        new THREE.Vector3(-140, 520, 0),
-        new THREE.Vector3(-140, 520, 0),
-        new THREE.Vector3(140, 520, 0)
+        new THREE.Vector3(140, 240, 0),
+        new THREE.Vector3(-140, 240, 0),
+        new THREE.Vector3(-140, 240, 0),
+        new THREE.Vector3(140, 240, 0)
       ];
     }
 
     flightSpline = new THREE.CatmullRomCurve3(waypoints, true, 'catmullrom', 0.5);
+  }
+
+  function syncOrbitFromCamera() {
+    if (!camera) return;
+    var dx = camera.position.x - orbit.target.x;
+    var dy = camera.position.y - orbit.target.y;
+    var dz = camera.position.z - orbit.target.z;
+    var r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (r < 1) r = 1;
+    orbit.radius = r;
+    orbit.phi = Math.acos(Math.max(-1, Math.min(1, dy / r)));
+    if (orbit.phi < 0.05) orbit.phi = 0.05;
+    if (orbit.phi > Math.PI / 2.05) orbit.phi = Math.PI / 2.05;
+    orbit.theta = Math.atan2(dx, dz);
+  }
+
+  function syncCruiseProgressFromCameraX() {
+    if (!flightSpline || districtData.length === 0) return;
+    var minX = districtData[0].center.x - 70;
+    var maxX = districtData[districtData.length - 1].center.x + 70;
+    var span = maxX - minX;
+    if (span > 0) {
+      var u = (camera.position.x - minX) / span;
+      u = Math.max(0, Math.min(1, u));
+      cruiseProgress = u * 0.45;
+    }
   }
 
   function calcBankAngle(spline, t) {
@@ -14665,7 +14691,12 @@ var City3DEngine = (function() {
         }
       }
     } else {
-      camera.up.set(0, 1, 0);
+      // Dynamic camera.up based on tilt angle to avoid gimbal lock when top-down
+      if (orbit.phi < 0.15) {
+        camera.up.set(0, 0, -1);
+      } else {
+        camera.up.set(0, 1, 0);
+      }
       var ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
       var oy = orbit.target.y + orbit.radius * Math.cos(orbit.phi);
       var oz = orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta);
@@ -14724,6 +14755,11 @@ var City3DEngine = (function() {
     });
 
     canvasEl.addEventListener('pointerdown', function(e) {
+      if (isAutoCruising) {
+        isAutoCruising = false;
+        updateFlightButton();
+        syncOrbitFromCamera();
+      }
       if (e.button === 2) {
         // Right Mouse Button: Pan / Move camera position
         isRightDragging = true;
@@ -14751,13 +14787,7 @@ var City3DEngine = (function() {
 
       if (isRightDragging) {
         // Right-Click Drag: Pan camera position horizontally without changing altitude Y
-        if (isAutoCruising) {
-          isAutoCruising = false;
-          updateFlightButton();
-        }
-
-        // Calculate dynamic pan scale based on camera FOV and altitude
-        var curHeight = camera.position.y || 500;
+        var curHeight = camera.position.y || 240;
         var hView = 2.0 * Math.tan((camera.fov * Math.PI / 360)) * curHeight;
         var panScale = hView / (canvasEl.clientHeight || window.innerHeight || 300);
 
@@ -14770,28 +14800,21 @@ var City3DEngine = (function() {
           vUp = new THREE.Vector3(-camera.matrixWorld.elements[8], 0, -camera.matrixWorld.elements[10]).normalize();
         }
 
-        var moveX = dx * panScale;
-        var moveY = -dy * panScale;
+        var moveX = -dx * panScale;
+        var moveY = dy * panScale;
 
         var panDelta = new THREE.Vector3()
           .addScaledVector(vRight, moveX)
           .addScaledVector(vUp, moveY);
         panDelta.y = 0; // Strictly keep altitude / height unchanged!
 
-        camera.position.add(panDelta);
-        orbit.target.x -= panDelta.x;
-        orbit.target.y -= panDelta.y;
-        orbit.target.z -= panDelta.z;
+        orbit.target.x += panDelta.x;
+        orbit.target.z += panDelta.z;
 
       } else if (isLeftDragging) {
         // Left-Click Drag: Orbit angle rotation
         orbit.theta -= dx * 0.006;
-        orbit.phi = Math.max(0.1, Math.min(Math.PI / 2.2, orbit.phi + dy * 0.006));
-
-        if (isAutoCruising) {
-          isAutoCruising = false;
-          updateFlightButton();
-        }
+        orbit.phi = Math.max(0.05, Math.min(Math.PI / 2.05, orbit.phi + dy * 0.006));
       }
     });
 
@@ -14806,6 +14829,7 @@ var City3DEngine = (function() {
       userInteractionTimer = setTimeout(function() {
         if (!isAutoCruising) {
           isAutoCruising = true;
+          syncCruiseProgressFromCameraX();
           updateFlightButton();
         }
       }, 15000);
@@ -14815,14 +14839,15 @@ var City3DEngine = (function() {
       e.preventDefault();
       if (isAutoCruising) {
         // Zoom in/out airplane cruising altitude freely with mouse wheel!
-        cruiseAltitudeOffset = Math.max(-120, Math.min(350, cruiseAltitudeOffset + e.deltaY * 0.35));
+        cruiseAltitudeOffset = Math.max(-120, Math.min(250, cruiseAltitudeOffset + e.deltaY * 0.35));
       } else {
-        orbit.radius = Math.max(60, Math.min(1250, orbit.radius + e.deltaY * 0.3));
+        orbit.radius = Math.max(40, Math.min(850, orbit.radius + e.deltaY * 0.3));
       }
       clearTimeout(userInteractionTimer);
       userInteractionTimer = setTimeout(function() {
         if (!isAutoCruising) {
           isAutoCruising = true;
+          syncCruiseProgressFromCameraX();
           updateFlightButton();
         }
       }, 15000);
@@ -14968,8 +14993,9 @@ var City3DEngine = (function() {
       if (!flightSpline) {
         buildFlightSpline(districtData);
       }
-      if (!currentLookAt) currentLookAt = new THREE.Vector3(0, 15, 0);
-      if (!targetLookAt) targetLookAt = new THREE.Vector3(0, 15, 0);
+      syncCruiseProgressFromCameraX();
+    } else {
+      syncOrbitFromCamera();
     }
     updateFlightButton();
   }
