@@ -2354,7 +2354,7 @@ function getRepoCityData(repoPath, repoName, force) {
     }
 
     textFiles.sort(function (a, b) { return b.size - a.size; });
-    var sampled = textFiles.slice(0, 150);
+    var sampled = textFiles.slice(0, 32);
 
     var data = {
       name: repoName || path.basename(root),
@@ -12774,14 +12774,17 @@ var City3DEngine = (function() {
     return Math.abs(hash);
   }
 
-  function computeBuildingHeight(fileSize, jitter) {
-    var size = fileSize || 100;
+  function computeBuildingHeight(fileSize, jitter, isWide) {
+    var size = fileSize || 1000;
     var logS = Math.log(size + 10) / Math.LN10;
-    var h = Math.max(5, Math.min(110, 4.0 + Math.pow(logS, 2.08) * 3.8 + Math.sqrt(size) * 0.032));
+    var h = 7.0 + Math.pow(Math.max(1, logS), 1.60) * 2.6 + Math.min(8.0, Math.sqrt(size) * 0.012);
     if (jitter != null) {
-      h *= (1 + (jitter - 0.5) * 0.24);
+      h *= (0.85 + jitter * 0.3);
     }
-    return Math.max(4.5, h);
+    if (isWide) {
+      h = Math.max(7.5, Math.min(17.0, h * 0.60));
+    }
+    return Math.max(7.0, Math.min(86.0, h));
   }
 
   function clusterBuildings(files, tallestFile) {
@@ -12830,7 +12833,8 @@ var City3DEngine = (function() {
       clusters.push(createClusterItem(currentGroup));
     }
 
-    return landmarks.concat(clusters);
+    var all = landmarks.concat(clusters);
+    return all.slice(0, 14);
   }
 
   function createClusterItem(group) {
@@ -13899,29 +13903,61 @@ var City3DEngine = (function() {
     return mat;
   }
 
-  function buildArchitecturalStructure(districtGroup, item, bIndex, slot, repo, posX, posZ, isNight, isTallest, roofMat, groundMat, buildingSeed, isMegaScreen, districtIndex, districtCtx, hasVerticalSign) {
+  function buildArchitecturalStructure(districtGroup, item, bIndex, slot, repo, posX, posZ, isNight, isTallest, groundMat, buildingSeed, isMegaScreen, districtIndex, districtCtx, hasVerticalSign) {
     var styleSeed = hashStr(item.name || ('file_' + bIndex)) + buildingSeed;
-    var styleType = isTallest ? 0 : (item.type === 'compound' ? 4 : (styleSeed % 6));
-
-    var jitter = ((styleSeed % 100) / 100);
-    var bHeight = computeBuildingHeight(item.size, isTallest ? 0.5 : jitter);
-    if (isTallest) {
-      bHeight = Math.max(bHeight, 55);
-    }
-
     var isCompound = item.type === 'compound';
-    var bw = Math.max(6.0, slot.w * (isCompound ? 1.35 : (0.85 + (styleSeed % 3) * 0.1)));
-    var bd = Math.max(6.0, slot.d * (isCompound ? 1.35 : (0.85 + ((styleSeed + 1) % 3) * 0.1)));
+
+    // Architectural Style (Tallest landmark can be any of the 8 diverse architectural typologies!)
+    var styleType = isCompound ? ((styleSeed % 2 === 0) ? 1 : 4) : (styleSeed % 8);
+
+    var maxW = slot.w;
+    var maxD = slot.d;
+
+    // Building footprint: expands proportionally when plot area is spacious
+    var isWideStyle = (styleType === 1 || styleType === 4 || styleType === 7 || (maxW >= 22 && maxD >= 18));
+    var bw = Math.max(8.0, isWideStyle ? Math.min(maxW * 0.94, maxW - 0.8) : Math.min(maxW * 0.88, maxW - 1.6));
+    var bd = Math.max(8.0, isWideStyle ? Math.min(maxD * 0.94, maxD - 0.8) : Math.min(maxD * 0.88, maxD - 1.6));
+
     var bx = slot.x;
     var bz = slot.z;
 
+    var jitter = ((styleSeed % 100) / 100);
+    var bHeight = computeBuildingHeight(item.size, isTallest ? 0.5 : jitter, isWideStyle);
+    if (isTallest) {
+      bHeight = Math.max(48.0, Math.min(62.0, bHeight * 1.5));
+      bw = Math.min(maxW * 0.94, maxW - 0.8);
+      bd = Math.min(maxD * 0.94, maxD - 0.8);
+    }
+
+    // Facade Base Color
     var palColors = [0x1e3a8a, 0x0284c7, 0xf8fafc, 0xd8cfbe, 0x94a3b8, 0xc25e3e, 0x065f46, 0x1e293b];
     var colHex = palColors[styleSeed % palColors.length];
     var isGlass = (styleSeed % 3 === 0);
 
-    // 3. Dynamic Procedural GPU Window Synthesis Shader Material
-    var facadeMat = createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, isTallest, colHex, isGlass, bw, bd, bHeight);
+    // Rich & Diverse Rooftop Color Palettes (Eco Garden, Solar Navy, Terracotta, Sandstone, Titanium, Slate, Patina, Indigo)
+    var roofPalettes = [
+      { color: 0x15803d, accent: 0x78350f, rough: 0.85, metal: 0.05, type: 'garden' },     // Emerald Eco Garden Lawn
+      { color: 0x1e3a8a, accent: 0x00f2fe, rough: 0.20, metal: 0.80, type: 'solar' },      // Solar Photovoltaic Deep Navy
+      { color: 0x9a3412, accent: 0xd97706, rough: 0.70, metal: 0.15, type: 'terracotta' }, // Warm Terracotta Brick
+      { color: 0xd4a373, accent: 0x92400e, rough: 0.65, metal: 0.10, type: 'sandstone' },  // Sandstone / Desert Beige
+      { color: 0xe2e8f0, accent: 0x0284c7, rough: 0.25, metal: 0.85, type: 'titanium' },   // Titanium Platinum Silver
+      { color: 0x0f172a, accent: 0xf43f5e, rough: 0.80, metal: 0.20, type: 'slate' },      // Charcoal Slate with Neon Accent
+      { color: 0x0d9488, accent: 0xb45309, rough: 0.40, metal: 0.60, type: 'patina' },     // Oxidized Patina Teal Copper
+      { color: 0x312e81, accent: 0x818cf8, rough: 0.15, metal: 0.85, type: 'indigo' }      // Midnight Indigo Glass
+    ];
+    var roofPal = roofPalettes[(styleSeed + styleType * 3) % roofPalettes.length];
+    var roofMat = new THREE.MeshStandardMaterial({
+      color: roofPal.color,
+      roughness: roofPal.rough,
+      metalness: roofPal.metal
+    });
+    var accentMat = new THREE.MeshStandardMaterial({
+      color: roofPal.accent,
+      roughness: 0.30,
+      metalness: 0.75
+    });
 
+    var facadeMat = createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, isTallest, colHex, isGlass, bw, bd, bHeight);
     var multiMats = [facadeMat, facadeMat, roofMat, groundMat, facadeMat, facadeMat];
 
     var megaFaceIdx = -1;
@@ -13957,18 +13993,12 @@ var City3DEngine = (function() {
       mesh.add(edgeLines);
     };
 
-    var accentMat = new THREE.MeshStandardMaterial({
-      color: 0x0284c7,
-      roughness: 0.25,
-      metalness: 0.8
-    });
-
     if (aoContactTex) {
-      var aoGeo = new THREE.PlaneGeometry(bw * 1.45, bd * 1.45);
+      var aoGeo = new THREE.PlaneGeometry(bw * 1.04, bd * 1.04);
       var aoMat = new THREE.MeshBasicMaterial({
         map: aoContactTex,
         transparent: true,
-        opacity: 0.72,
+        opacity: 0.65,
         polygonOffset: true,
         polygonOffsetFactor: -1,
         polygonOffsetUnits: -1,
@@ -13984,11 +14014,24 @@ var City3DEngine = (function() {
     var buildingCenterX = posX + bx;
     var buildingCenterZ = posZ + bz;
 
+    var addLandmarkBeacon = function(topY, offsetZ) {
+      var spireGeo = new THREE.CylinderGeometry(0.15, 0.40, 6.0, 6);
+      var spireMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.95, roughness: 0.1 });
+      var spireMesh = new THREE.Mesh(spireGeo, spireMat);
+      spireMesh.position.set(bx, topY + 3.0, bz + (offsetZ || 0));
+      districtGroup.add(spireMesh);
+
+      var beaconDot = new THREE.Mesh(new THREE.SphereGeometry(0.4, 6, 6), new THREE.MeshBasicMaterial({ color: 0xff0044, toneMapped: false }));
+      beaconDot.position.set(bx, topY + 6.3, bz + (offsetZ || 0));
+      districtGroup.add(beaconDot);
+      return topY + 6.6;
+    };
+
     if (styleType === 0) {
-      // Style 0: Stepped Skyscraper
-      var t1H = bHeight * 0.45;
+      // Style 0: Stepped Setback Skyscraper
+      var t1H = bHeight * 0.44;
       var t2H = bHeight * 0.33;
-      var t3H = bHeight * 0.22;
+      var t3H = bHeight * 0.23;
 
       var t1Geo = new THREE.BoxGeometry(bw, t1H, bd);
       applyBuildingUVs(t1Geo, bw, t1H, bd, isMegaScreen ? megaFaceIdx : -1);
@@ -13999,16 +14042,16 @@ var City3DEngine = (function() {
       addEdgeOutline(t1Mesh, t1Geo);
       districtGroup.add(t1Mesh);
 
-      var t2Geo = new THREE.BoxGeometry(bw * 0.76, t2H, bd * 0.76);
-      applyBuildingUVs(t2Geo, bw * 0.76, t2H, bd * 0.76, isMegaScreen ? megaFaceIdx : -1);
+      var t2Geo = new THREE.BoxGeometry(bw * 0.74, t2H, bd * 0.74);
+      applyBuildingUVs(t2Geo, bw * 0.74, t2H, bd * 0.74, isMegaScreen ? megaFaceIdx : -1);
       var t2Mesh = new THREE.Mesh(t2Geo, multiMats);
       t2Mesh.position.set(bx, 1.8 + t1H + t2H / 2, bz);
       t2Mesh.castShadow = true;
       addEdgeOutline(t2Mesh, t2Geo);
       districtGroup.add(t2Mesh);
 
-      var t3Geo = new THREE.BoxGeometry(bw * 0.52, t3H, bd * 0.52);
-      applyBuildingUVs(t3Geo, bw * 0.52, t3H, bd * 0.52, isMegaScreen ? megaFaceIdx : -1);
+      var t3Geo = new THREE.BoxGeometry(bw * 0.50, t3H, bd * 0.50);
+      applyBuildingUVs(t3Geo, bw * 0.50, t3H, bd * 0.50, isMegaScreen ? megaFaceIdx : -1);
       var t3Mesh = new THREE.Mesh(t3Geo, multiMats);
       t3Mesh.position.set(bx, 1.8 + t1H + t2H + t3H / 2, bz);
       t3Mesh.castShadow = true;
@@ -14016,17 +14059,182 @@ var City3DEngine = (function() {
       addEdgeOutline(t3Mesh, t3Geo);
       districtGroup.add(t3Mesh);
 
-      var capGeo = new THREE.BoxGeometry(bw * 0.44, 1.6, bd * 0.44);
+      var capGeo = new THREE.BoxGeometry(bw * 0.40, 1.6, bd * 0.40);
       var capMesh = new THREE.Mesh(capGeo, accentMat);
       capMesh.position.set(bx, buildingTopY + 0.8, bz);
       districtGroup.add(capMesh);
 
       buildingTopY += 1.6;
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, 0);
+      }
 
     } else if (styleType === 1) {
-      // Style 1: Cylindrical Glass Rotunda Tower
+      // Style 1: Modern Tech Campus / Corporate Headquarters Pavilion
+      var campusGeo = new THREE.BoxGeometry(bw, bHeight, bd);
+      applyBuildingUVs(campusGeo, bw, bHeight, bd, isMegaScreen ? megaFaceIdx : -1);
+      var campusMesh = new THREE.Mesh(campusGeo, multiMats);
+      campusMesh.position.set(bx, 1.8 + bHeight / 2, bz);
+      campusMesh.castShadow = true;
+      campusMesh.receiveShadow = true;
+      campusMesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(campusMesh, campusGeo);
+      districtGroup.add(campusMesh);
+
+      // Rooftop Terrace Garden Deck
+      var deckGeo = new THREE.BoxGeometry(bw * 0.88, 0.4, bd * 0.88);
+      var deckMesh = new THREE.Mesh(deckGeo, roofMat);
+      deckMesh.position.set(bx, buildingTopY + 0.2, bz);
+      districtGroup.add(deckMesh);
+
+      // Central Glass Atrium Skylight
+      var skylightGeo = new THREE.BoxGeometry(bw * 0.40, 1.4, bd * 0.40);
+      var skylightMat = new THREE.MeshStandardMaterial({
+        color: 0x00f2fe,
+        emissive: new THREE.Color(0x00f2fe),
+        emissiveIntensity: targetMode === 'night' ? 1.2 : 0.2,
+        roughness: 0.1,
+        metalness: 0.9,
+        transparent: true,
+        opacity: 0.85
+      });
+      var skylightMesh = new THREE.Mesh(skylightGeo, skylightMat);
+      skylightMesh.position.set(bx, buildingTopY + 1.1, bz);
+      districtGroup.add(skylightMesh);
+
+      buildingTopY += 1.8;
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, 0);
+      }
+
+    } else if (styleType === 2) {
+      // Style 2: Stepped Terrace & Podium City Block
+      var podH = Math.max(3.2, Math.min(6.0, bHeight * 0.38));
+      var twH = bHeight - podH;
+
+      var pGeo = new THREE.BoxGeometry(bw, podH, bd);
+      applyBuildingUVs(pGeo, bw, podH, bd, isMegaScreen ? megaFaceIdx : -1);
+      var pMesh = new THREE.Mesh(pGeo, multiMats);
+      pMesh.position.set(bx, 1.8 + podH / 2, bz);
+      pMesh.castShadow = true;
+      pMesh.receiveShadow = true;
+      districtGroup.add(pMesh);
+
+      var twW = bw * 0.72;
+      var twD = bd * 0.72;
+      var offX = ((styleSeed % 2 === 0) ? 1 : -1) * (bw * 0.12);
+      var offZ = (((styleSeed + 1) % 2 === 0) ? 1 : -1) * (bd * 0.12);
+
+      var twGeo = new THREE.BoxGeometry(twW, twH, twD);
+      applyBuildingUVs(twGeo, twW, twH, twD, isMegaScreen ? megaFaceIdx : -1);
+      var twMesh = new THREE.Mesh(twGeo, multiMats);
+      twMesh.position.set(bx + offX, 1.8 + podH + twH / 2, bz + offZ);
+      twMesh.castShadow = true;
+      twMesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(twMesh, twGeo);
+      districtGroup.add(twMesh);
+
+      var capM = new THREE.Mesh(new THREE.BoxGeometry(twW * 0.88, 1.0, twD * 0.88), accentMat);
+      capM.position.set(bx + offX, buildingTopY + 0.5, bz + offZ);
+      districtGroup.add(capM);
+
+      buildingTopY += 1.0;
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, offZ);
+      }
+
+    } else if (styleType === 3) {
+      // Style 3: Interconnected Skybridge Twin Towers
+      var twW3 = bw * 0.42;
+      var twD3 = bd * 0.84;
+      var twOff3 = bw * 0.26;
+
+      var tA3Geo = new THREE.BoxGeometry(twW3, bHeight, twD3);
+      applyBuildingUVs(tA3Geo, twW3, bHeight, twD3, isMegaScreen ? megaFaceIdx : -1);
+      var tA3 = new THREE.Mesh(tA3Geo, multiMats);
+      tA3.position.set(bx - twOff3, 1.8 + bHeight / 2, bz);
+      tA3.castShadow = true;
+      tA3.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(tA3, tA3Geo);
+      districtGroup.add(tA3);
+
+      var tB3Geo = new THREE.BoxGeometry(twW3, bHeight * 0.94, twD3);
+      applyBuildingUVs(tB3Geo, twW3, bHeight * 0.94, twD3, isMegaScreen ? megaFaceIdx : -1);
+      var tB3 = new THREE.Mesh(tB3Geo, multiMats);
+      tB3.position.set(bx + twOff3, 1.8 + (bHeight * 0.94) / 2, bz);
+      tB3.castShadow = true;
+      addEdgeOutline(tB3, tB3Geo);
+      districtGroup.add(tB3);
+
+      var bridgeGeo = new THREE.BoxGeometry(twOff3 * 2 + twW3 * 0.4, 2.8, twD3 * 0.45);
+      var bridgeMat = new THREE.MeshStandardMaterial({
+        color: 0x00f2fe,
+        emissive: new THREE.Color(0x00f2fe),
+        emissiveIntensity: targetMode === 'night' ? 1.5 : 0.2,
+        roughness: 0.2
+      });
+      var bridgeMesh = new THREE.Mesh(bridgeGeo, bridgeMat);
+      bridgeMesh.position.set(bx, 1.8 + bHeight * 0.60, bz);
+      districtGroup.add(bridgeMesh);
+
+      var rA3 = new THREE.Mesh(new THREE.BoxGeometry(twW3 * 0.88, 1.2, twD3 * 0.88), roofMat);
+      rA3.position.set(bx - twOff3, buildingTopY + 0.6, bz);
+      districtGroup.add(rA3);
+
+      var rB3 = new THREE.Mesh(new THREE.BoxGeometry(twW3 * 0.88, 1.2, twD3 * 0.88), accentMat);
+      rB3.position.set(bx + twOff3, 1.8 + bHeight * 0.94 + 0.6, bz);
+      districtGroup.add(rB3);
+
+      buildingTopY += 1.2;
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, 0);
+      }
+
+    } else if (styleType === 4) {
+      // Style 4: Modern L-Shaped / Cantilever Urban Block
+      var mainW = bw * 0.54;
+      var mainD = bd;
+      var mainH = bHeight;
+
+      var subW = bw - mainW;
+      var subD = bd * 0.52;
+      var subH = bHeight * 0.72;
+
+      var mainGeo = new THREE.BoxGeometry(mainW, mainH, mainD);
+      applyBuildingUVs(mainGeo, mainW, mainH, mainD, isMegaScreen ? megaFaceIdx : -1);
+      var mainMesh = new THREE.Mesh(mainGeo, multiMats);
+      mainMesh.position.set(bx - (bw - mainW) / 2, 1.8 + mainH / 2, bz);
+      mainMesh.castShadow = true;
+      mainMesh.receiveShadow = true;
+      mainMesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(mainMesh, mainGeo);
+      districtGroup.add(mainMesh);
+
+      var subGeo = new THREE.BoxGeometry(subW, subH, subD);
+      applyBuildingUVs(subGeo, subW, subH, subD, isMegaScreen ? megaFaceIdx : -1);
+      var subMesh = new THREE.Mesh(subGeo, multiMats);
+      subMesh.position.set(bx + mainW / 2, 1.8 + subH / 2, bz - (bd - subD) / 2);
+      subMesh.castShadow = true;
+      addEdgeOutline(subMesh, subGeo);
+      districtGroup.add(subMesh);
+
+      var rMain = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.88, 1.0, mainD * 0.88), roofMat);
+      rMain.position.set(bx - (bw - mainW) / 2, buildingTopY + 0.5, bz);
+      districtGroup.add(rMain);
+
+      var rSub = new THREE.Mesh(new THREE.BoxGeometry(subW * 0.88, 1.0, subD * 0.88), accentMat);
+      rSub.position.set(bx + mainW / 2, 1.8 + subH + 0.5, bz - (bd - subD) / 2);
+      districtGroup.add(rSub);
+
+      buildingTopY += 1.0;
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, 0);
+      }
+
+    } else if (styleType === 5) {
+      // Style 5: Cylindrical Glass Rotunda / Rounded Pavilion Tower
       var cylR = Math.min(bw, bd) * 0.46;
-      var cylGeo = new THREE.CylinderGeometry(cylR, cylR * 1.05, bHeight, 20);
+      var cylGeo = new THREE.CylinderGeometry(cylR, cylR * 1.04, bHeight, 20);
       var cylMesh = new THREE.Mesh(cylGeo, facadeMat);
       cylMesh.position.set(bx, 1.8 + bHeight / 2, bz);
       cylMesh.castShadow = true;
@@ -14035,173 +14243,115 @@ var City3DEngine = (function() {
       addEdgeOutline(cylMesh, cylGeo);
       districtGroup.add(cylMesh);
 
-      var crownDiskGeo = new THREE.CylinderGeometry(cylR * 0.92, cylR, 1.4, 20);
-      var crownDiskMesh = new THREE.Mesh(crownDiskGeo, accentMat);
+      var crownDiskGeo = new THREE.CylinderGeometry(cylR * 0.94, cylR * 1.02, 1.4, 20);
+      var crownDiskMesh = new THREE.Mesh(crownDiskGeo, roofMat);
       crownDiskMesh.position.set(bx, buildingTopY + 0.7, bz);
       districtGroup.add(crownDiskMesh);
 
-      buildingTopY += 1.4;
+      var innerDiskGeo = new THREE.CylinderGeometry(cylR * 0.55, cylR * 0.55, 0.8, 16);
+      var innerDiskMesh = new THREE.Mesh(innerDiskGeo, accentMat);
+      innerDiskMesh.position.set(bx, buildingTopY + 1.8, bz);
+      districtGroup.add(innerDiskMesh);
 
-    } else if (styleType === 2) {
-      // Style 2: Beveled Crystal Diamond Prism
-      var prismH = bHeight * 0.78;
-      var pyrH = bHeight * 0.22;
+      buildingTopY += 2.2;
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, 0);
+      }
 
-      var bGeo2 = new THREE.BoxGeometry(bw, prismH, bd);
-      applyBuildingUVs(bGeo2, bw, prismH, bd, isMegaScreen ? megaFaceIdx : -1);
-      var bMesh2 = new THREE.Mesh(bGeo2, multiMats);
-      bMesh2.position.set(bx, 1.8 + prismH / 2, bz);
-      bMesh2.castShadow = true;
-      bMesh2.receiveShadow = true;
-      bMesh2.userData = { repo: repo, item: item, height: bHeight };
-      addEdgeOutline(bMesh2, bGeo2);
-      districtGroup.add(bMesh2);
+    } else if (styleType === 6) {
+      // Style 6: Crystalline Faceted Diamond Prism
+      var prismH = bHeight * 0.80;
+      var pyrH = bHeight * 0.20;
 
-      var pyrGeo = new THREE.ConeGeometry(Math.min(bw, bd) * 0.68, pyrH, 4);
-      var pyrMat = new THREE.MeshStandardMaterial({
-        color: 0x0284c7,
-        roughness: 0.2,
-        metalness: 0.85
-      });
-      var pyrMesh = new THREE.Mesh(pyrGeo, pyrMat);
+      var bGeo6 = new THREE.BoxGeometry(bw, prismH, bd);
+      applyBuildingUVs(bGeo6, bw, prismH, bd, isMegaScreen ? megaFaceIdx : -1);
+      var bMesh6 = new THREE.Mesh(bGeo6, multiMats);
+      bMesh6.position.set(bx, 1.8 + prismH / 2, bz);
+      bMesh6.castShadow = true;
+      bMesh6.receiveShadow = true;
+      bMesh6.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(bMesh6, bGeo6);
+      districtGroup.add(bMesh6);
+
+      var pyrGeo = new THREE.ConeGeometry(Math.min(bw, bd) * 0.65, pyrH, 4);
+      var pyrMesh = new THREE.Mesh(pyrGeo, accentMat);
       pyrMesh.rotation.y = Math.PI / 4;
       pyrMesh.position.set(bx, 1.8 + prismH + pyrH / 2, bz);
       addEdgeOutline(pyrMesh, pyrGeo);
       districtGroup.add(pyrMesh);
 
       buildingTopY = 1.8 + prismH + pyrH;
-
-    } else if (styleType === 3) {
-      // Style 3: Interconnected Skybridge Twin Tower
-      var twW = bw * 0.42;
-      var twD = bd * 0.82;
-      var twOff = bw * 0.28;
-
-      var tAGeo = new THREE.BoxGeometry(twW, bHeight, twD);
-      applyBuildingUVs(tAGeo, twW, bHeight, twD, isMegaScreen ? megaFaceIdx : -1);
-      var tA = new THREE.Mesh(tAGeo, multiMats);
-      tA.position.set(bx - twOff, 1.8 + bHeight / 2, bz);
-      tA.castShadow = true;
-      tA.userData = { repo: repo, item: item, height: bHeight };
-      addEdgeOutline(tA, tAGeo);
-      districtGroup.add(tA);
-
-      var tBGeo = new THREE.BoxGeometry(twW, bHeight * 0.92, twD);
-      applyBuildingUVs(tBGeo, twW, bHeight * 0.92, twD, isMegaScreen ? megaFaceIdx : -1);
-      var tB = new THREE.Mesh(tBGeo, multiMats);
-      tB.position.set(bx + twOff, 1.8 + (bHeight * 0.92) / 2, bz);
-      tB.castShadow = true;
-      addEdgeOutline(tB, tBGeo);
-      districtGroup.add(tB);
-
-      var bridgeGeo = new THREE.BoxGeometry(twOff * 2 + twW * 0.5, 3.2, twD * 0.45);
-      var bridgeMat = new THREE.MeshStandardMaterial({
-        color: 0x00f2fe,
-        emissive: new THREE.Color(0x00f2fe),
-        emissiveIntensity: targetMode === 'night' ? 1.5 : 0.2,
-        roughness: 0.2
-      });
-      var bridgeMesh = new THREE.Mesh(bridgeGeo, bridgeMat);
-      bridgeMesh.position.set(bx, 1.8 + bHeight * 0.62, bz);
-      districtGroup.add(bridgeMesh);
-
-      var rA = new THREE.Mesh(new THREE.BoxGeometry(twW * 0.85, 1.2, twD * 0.85), roofMat);
-      rA.position.set(bx - twOff, buildingTopY + 0.6, bz);
-      districtGroup.add(rA);
-
-      buildingTopY += 1.2;
-
-    } else if (styleType === 4) {
-      // Style 4: Modern Compound / Campus Wing Complex
-      var podH = 3.4;
-      var podGeo = new THREE.BoxGeometry(bw * 1.35, podH, bd * 1.35);
-      var podMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.75 });
-      var podMesh = new THREE.Mesh(podGeo, podMat);
-      podMesh.position.set(bx, 1.8 + podH / 2, bz);
-      podMesh.receiveShadow = true;
-      districtGroup.add(podMesh);
-
-      var mainW = bw * 0.78;
-      var mainD = bd * 0.72;
-      var mainH = bHeight;
-      var mainGeo = new THREE.BoxGeometry(mainW, mainH, mainD);
-      applyBuildingUVs(mainGeo, mainW, mainH, mainD, isMegaScreen ? megaFaceIdx : -1);
-      var mainMesh = new THREE.Mesh(mainGeo, multiMats);
-      mainMesh.position.set(bx - bw * 0.22, 1.8 + podH + (mainH - podH) / 2, bz - bd * 0.1);
-      mainMesh.castShadow = true;
-      mainMesh.userData = { repo: repo, item: item, height: bHeight };
-      addEdgeOutline(mainMesh, mainGeo);
-      districtGroup.add(mainMesh);
-
-      var subW = bw * 0.7;
-      var subD = bd * 0.7;
-      var subH = (bHeight - podH) * 0.62;
-      var subGeo = new THREE.BoxGeometry(subW, subH, subD);
-      applyBuildingUVs(subGeo, subW, subH, subD, isMegaScreen ? megaFaceIdx : -1);
-      var subMesh = new THREE.Mesh(subGeo, multiMats);
-      subMesh.position.set(bx + bw * 0.26, 1.8 + podH + subH / 2, bz + bd * 0.15);
-      subMesh.castShadow = true;
-      addEdgeOutline(subMesh, subGeo);
-      districtGroup.add(subMesh);
-
-      var rMain = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.88, 1.2, mainD * 0.88), roofMat);
-      rMain.position.set(bx - bw * 0.22, 1.8 + mainH + 0.6, bz - bd * 0.1);
-      districtGroup.add(rMain);
-
-      buildingTopY = 1.8 + mainH + 1.2;
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, 0);
+      }
 
     } else {
-      // Style 5: High-Tech Glass Tower
-      var coreGeo = new THREE.BoxGeometry(bw, bHeight, bd);
-      applyBuildingUVs(coreGeo, bw, bHeight, bd, isMegaScreen ? megaFaceIdx : -1);
-      var coreMesh = new THREE.Mesh(coreGeo, multiMats);
-      coreMesh.position.set(bx, 1.8 + bHeight / 2, bz);
-      coreMesh.castShadow = true;
-      coreMesh.receiveShadow = true;
-      coreMesh.userData = { repo: repo, item: item, height: bHeight };
-      addEdgeOutline(coreMesh, coreGeo);
-      districtGroup.add(coreMesh);
+      // Style 7: Wide Modernist Data Center / Cube Block with Solar Matrix
+      var cubeGeo = new THREE.BoxGeometry(bw, bHeight, bd);
+      applyBuildingUVs(cubeGeo, bw, bHeight, bd, isMegaScreen ? megaFaceIdx : -1);
+      var cubeMesh = new THREE.Mesh(cubeGeo, multiMats);
+      cubeMesh.position.set(bx, 1.8 + bHeight / 2, bz);
+      cubeMesh.castShadow = true;
+      cubeMesh.receiveShadow = true;
+      cubeMesh.userData = { repo: repo, item: item, height: bHeight };
+      addEdgeOutline(cubeMesh, cubeGeo);
+      districtGroup.add(cubeMesh);
 
-      var roofCap = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.85, 1.2, bd * 0.85), roofMat);
-      roofCap.position.set(bx, buildingTopY + 0.6, bz);
-      districtGroup.add(roofCap);
+      var cubeRoofCap = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.90, 0.8, bd * 0.90), roofMat);
+      cubeRoofCap.position.set(bx, buildingTopY + 0.4, bz);
+      districtGroup.add(cubeRoofCap);
+
+      // Rooftop Photovoltaic Solar Panel Grid
+      var solarPanelGeo = new THREE.BoxGeometry(bw * 0.65, 0.35, bd * 0.65);
+      var solarMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.15, metalness: 0.85 });
+      var solarMesh = new THREE.Mesh(solarPanelGeo, solarMat);
+      solarMesh.position.set(bx, buildingTopY + 1.0, bz);
+      districtGroup.add(solarMesh);
 
       buildingTopY += 1.2;
-    }
-
-    // 1. Helipads count strictly 1-3 per district (楼顶停机坪数量控制在1-3个)
-    if (!isTallest && bHeight > 22 && Math.min(bw, bd) >= 7.0) {
-      if (districtCtx && districtCtx.helipadsCount < districtCtx.maxHelipads && ((styleSeed % 4) === 0)) {
-        // Rooftop AV Landing Pad (Limited to 1-3 per district)
-        var helipad = createAVHelipadMesh(Math.min(bw, bd) * 0.82);
-        helipad.position.set(bx, buildingTopY, bz);
-        districtGroup.add(helipad);
-        districtCtx.helipadsCount++;
-      } else if (styleSeed % 3 === 0) {
-        // Mechanical Penthouse Units (HVAC)
-        var hvacGeo = new THREE.BoxGeometry(bw * 0.4, 2.2, bd * 0.4);
-        var hvacMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7 });
-        var hvacMesh = new THREE.Mesh(hvacGeo, hvacMat);
-        hvacMesh.position.set(bx, buildingTopY + 1.1, bz);
-        districtGroup.add(hvacMesh);
-      } else if (styleSeed % 3 === 1) {
-        // Sleek Communication Mast
-        var mastGeo = new THREE.CylinderGeometry(0.18, 0.35, 8.0, 6);
-        var mastMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.9 });
-        var mastMesh = new THREE.Mesh(mastGeo, mastMat);
-        mastMesh.position.set(bx, buildingTopY + 4.0, bz);
-        districtGroup.add(mastMesh);
-      } else {
-        // Solar Array Panel / Roof Cap
-        var solarGeo = new THREE.BoxGeometry(bw * 0.5, 0.6, bd * 0.5);
-        var solarMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.2, metalness: 0.8 });
-        var solarMesh = new THREE.Mesh(solarGeo, solarMat);
-        solarMesh.position.set(bx, buildingTopY + 0.3, bz);
-        districtGroup.add(solarMesh);
+      if (isTallest) {
+        buildingTopY = addLandmarkBeacon(buildingTopY, 0);
       }
     }
 
-    // 2. Vertical Building Side Signboard with File Name (大楼侧面招牌，垂直书写)
+    // Rooftop Props & Architectural Elements (Strictly within building boundaries)
+    if (!isTallest && bHeight > 16.0 && Math.min(bw, bd) >= 9.0) {
+      if (districtCtx && districtCtx.helipadsCount < districtCtx.maxHelipads && ((styleSeed % 5) === 0)) {
+        // Rooftop AV Landing Pad (Strictly 1-2 per district)
+        var padSize = Math.min(bw, bd) * 0.72;
+        var helipad = createAVHelipadMesh(padSize);
+        helipad.position.set(bx, buildingTopY, bz);
+        districtGroup.add(helipad);
+        districtCtx.helipadsCount++;
+      } else if (styleSeed % 4 === 0) {
+        // Mechanical Penthouse Units (HVAC)
+        var hvacGeo = new THREE.BoxGeometry(bw * 0.35, 1.8, bd * 0.35);
+        var hvacMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7 });
+        var hvacMesh = new THREE.Mesh(hvacGeo, hvacMat);
+        hvacMesh.position.set(bx, buildingTopY + 0.9, bz);
+        districtGroup.add(hvacMesh);
+      } else if (styleSeed % 4 === 1) {
+        // Sleek Communication Mast with Red Aviation Warning LED
+        var mastGeo = new THREE.CylinderGeometry(0.12, 0.28, 6.0, 6);
+        var mastMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.9 });
+        var mastMesh = new THREE.Mesh(mastGeo, mastMat);
+        mastMesh.position.set(bx, buildingTopY + 3.0, bz);
+        districtGroup.add(mastMesh);
+
+        var redLed = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 6), new THREE.MeshBasicMaterial({ color: 0xff0044, toneMapped: false }));
+        redLed.position.set(bx, buildingTopY + 6.1, bz);
+        districtGroup.add(redLed);
+      } else if (styleSeed % 4 === 2) {
+        // Glass Skylight
+        var gSkyGeo = new THREE.BoxGeometry(bw * 0.38, 0.8, bd * 0.38);
+        var gSkyMat = new THREE.MeshStandardMaterial({ color: 0x00f2fe, roughness: 0.2, metalness: 0.8, transparent: true, opacity: 0.8 });
+        var gSkyMesh = new THREE.Mesh(gSkyGeo, gSkyMat);
+        gSkyMesh.position.set(bx, buildingTopY + 0.4, bz);
+        districtGroup.add(gSkyMesh);
+      }
+    }
+
+    // Vertical Building Side Signboard with File Name (flush against facade)
     if (hasVerticalSign && item && item.name) {
       var signMesh = createVerticalSignboardMesh(item.name, neonCol, bw, bd, bHeight, sDir, styleSeed);
       signMesh.position.x += bx;
@@ -14238,12 +14388,11 @@ var City3DEngine = (function() {
     curbMesh.position.y = 0.3;
     districtGroup.add(curbMesh);
 
-    var roofMat = new THREE.MeshStandardMaterial({ color: 0x1e2430, roughness: 0.75, metalness: 0.25 });
     var groundMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 });
 
     var nonTextCount = repo.nonTextCount || 0;
-    var parkW = Math.min(42, Math.max(14, 12 + Math.sqrt(nonTextCount) * 4.5));
-    var parkD = parkW;
+    var parkW = Math.min(32, Math.max(16, 14 + Math.sqrt(nonTextCount) * 3.5));
+    var parkD = Math.min(26, Math.max(14, 12 + Math.sqrt(nonTextCount) * 3.0));
     var parkPosX = 0;
     var parkPosZ = 0;
 
@@ -14258,7 +14407,7 @@ var City3DEngine = (function() {
     lawnMesh.receiveShadow = true;
     districtGroup.add(lawnMesh);
 
-    var numTrees = Math.min(18, Math.max(2, Math.floor(nonTextCount * 0.75)));
+    var numTrees = Math.min(12, Math.max(2, Math.floor(nonTextCount * 0.6)));
     if (nonTextCount === 0) numTrees = 2;
 
     var trunkGeo = new THREE.CylinderGeometry(0.35, 0.5, 3.2, 6);
@@ -14268,9 +14417,9 @@ var City3DEngine = (function() {
     for (var t = 0; t < numTrees; t++) {
       var treeGroup = new THREE.Group();
       var angle = (t / numTrees) * Math.PI * 2 + Math.random() * 0.5;
-      var dist = 3.5 + Math.random() * (parkW * 0.38);
+      var dist = 3.0 + Math.random() * (parkW * 0.34);
       var tx = parkPosX + Math.cos(angle) * dist;
-      var tz = parkPosZ + Math.sin(angle) * dist;
+      var tz = parkPosZ + Math.sin(angle) * (dist * (parkD / parkW));
 
       var trunk = new THREE.Mesh(trunkGeo, trunkMat);
       trunk.position.y = 1.6;
@@ -14278,15 +14427,15 @@ var City3DEngine = (function() {
 
       var folCol = foliageColors[t % foliageColors.length];
       var folMat = new THREE.MeshStandardMaterial({ color: folCol, roughness: 0.7 });
-      var folGeo1 = new THREE.ConeGeometry(2.0, 3.5, 6);
+      var folGeo1 = new THREE.ConeGeometry(1.8, 3.2, 6);
       var fol1 = new THREE.Mesh(folGeo1, folMat);
-      fol1.position.y = 4.2;
+      fol1.position.y = 4.0;
       fol1.castShadow = true;
       treeGroup.add(fol1);
 
-      var folGeo2 = new THREE.ConeGeometry(1.5, 2.8, 6);
+      var folGeo2 = new THREE.ConeGeometry(1.3, 2.5, 6);
       var fol2 = new THREE.Mesh(folGeo2, folMat);
-      fol2.position.y = 5.8;
+      fol2.position.y = 5.4;
       treeGroup.add(fol2);
 
       treeGroup.position.set(tx, 2.0, tz);
@@ -14294,7 +14443,7 @@ var City3DEngine = (function() {
     }
 
     if (nonTextCount >= 4) {
-      var pondGeo = new THREE.CylinderGeometry(parkW * 0.18, parkW * 0.18, 0.4, 16);
+      var pondGeo = new THREE.CylinderGeometry(parkW * 0.16, parkW * 0.16, 0.4, 16);
       var pondMat = new THREE.MeshStandardMaterial({
         color: 0x0284c7,
         roughness: 0.1,
@@ -14314,31 +14463,47 @@ var City3DEngine = (function() {
     var clusteredItems = clusterBuildings(buildingFiles, repo.tallest);
     var itemCount = clusteredItems.length;
 
-    var slots = [];
-    var gridSize = Math.max(3, Math.ceil(Math.sqrt(itemCount + 4)));
-    var cellW = BW / gridSize;
-    var cellD = BD / gridSize;
+    // Generate Non-Overlapping Grid Slots
+    var gridCols = 4;
+    var gridRows = 3;
+    if (itemCount <= 8) {
+      gridCols = 3;
+      gridRows = 3;
+    } else if (itemCount > 10) {
+      gridCols = 4;
+      gridRows = 4;
+    }
 
-    for (var gx = 0; gx < gridSize; gx++) {
-      for (var gz = 0; gz < gridSize; gz++) {
+    var cellW = BW / gridCols;
+    var cellD = BD / gridRows;
+    var alleyGapX = 3.2;
+    var alleyGapZ = 3.2;
+    var usableSlotW = cellW - alleyGapX;
+    var usableSlotD = cellD - alleyGapZ;
+
+    var slots = [];
+    for (var gx = 0; gx < gridCols; gx++) {
+      for (var gz = 0; gz < gridRows; gz++) {
         var sx = -BW / 2 + (gx + 0.5) * cellW;
         var sz = -BD / 2 + (gz + 0.5) * cellD;
-        if (Math.abs(sx - parkPosX) < parkW * 0.55 && Math.abs(sz - parkPosZ) < parkD * 0.55) {
+
+        // Skip central park region
+        if (Math.abs(sx - parkPosX) < parkW * 0.52 && Math.abs(sz - parkPosZ) < parkD * 0.52) {
           continue;
         }
 
-        var isEdge = (gx === 0 || gx === gridSize - 1 || gz === 0 || gz === gridSize - 1);
+        var isEdge = (gx === 0 || gx === gridCols - 1 || gz === 0 || gz === gridRows - 1);
         var sDir = null;
         if (gz === 0) sDir = 'N';
-        else if (gz === gridSize - 1) sDir = 'S';
-        else if (gx === gridSize - 1) sDir = 'E';
+        else if (gz === gridRows - 1) sDir = 'S';
+        else if (gx === gridCols - 1) sDir = 'E';
         else if (gx === 0) sDir = 'W';
 
         slots.push({
           x: sx,
           z: sz,
-          w: Math.min(cellW * 0.85, 16),
-          d: Math.min(cellD * 0.85, 16),
+          w: usableSlotW,
+          d: usableSlotD,
           isStreetEdge: isEdge,
           streetDir: sDir
         });
@@ -14346,6 +14511,7 @@ var City3DEngine = (function() {
     }
 
     var repoSeed = hashStr(repo.name || ('repo_' + index));
+    // Deterministic shuffle of slots
     for (var s = slots.length - 1; s > 0; s--) {
       var randIdx = (repoSeed + s * 23) % (s + 1);
       var tmp = slots[s];
@@ -14357,17 +14523,18 @@ var City3DEngine = (function() {
     var maxHeight = 0;
     var tallestFileName = repo.tallest ? (repo.tallest.name || repo.tallest.path) : '';
 
-    // 1. Helipads count: 1-3 per district
-    var maxDistrictHelipads = 1 + (repoSeed % 3);
+    // Helipads: strictly 1-2 per district
+    var maxDistrictHelipads = 1 + (repoSeed % 2);
     var districtCtx = { helipadsCount: 0, maxHelipads: maxDistrictHelipads };
 
-    // 2. Select 2-4 random buildings to have vertical side signboards with filenames
-    var numSigns = Math.min(itemCount, Math.max(2, 2 + (repoSeed % 3)));
+    // File signboard buildings: select 2-3 prominent buildings
+    var numToPlace = Math.min(itemCount, slots.length);
+    var numSigns = Math.min(numToPlace, Math.max(2, 2 + (repoSeed % 2)));
     var signBuildingIndices = [];
-    var megaBldgIdx = (repoSeed % itemCount);
+    var megaBldgIdx = (repoSeed % numToPlace);
 
-    for (var cand = 0; cand < itemCount && signBuildingIndices.length < numSigns; cand++) {
-      var cIdx = (repoSeed * 7 + cand * 11) % itemCount;
+    for (var cand = 0; cand < numToPlace && signBuildingIndices.length < numSigns; cand++) {
+      var cIdx = (repoSeed * 7 + cand * 11) % numToPlace;
       var cItem = clusteredItems[cIdx];
       var isLandmark = (cIdx === 0 && cItem.type === 'landmark') || (cItem.name === tallestFileName);
       if (!isLandmark && cIdx !== megaBldgIdx && signBuildingIndices.indexOf(cIdx) === -1) {
@@ -14375,16 +14542,16 @@ var City3DEngine = (function() {
       }
     }
 
-    for (var b = 0; b < itemCount; b++) {
+    for (var b = 0; b < numToPlace; b++) {
       var item = clusteredItems[b];
-      var slot = slots[b % slots.length];
+      var slot = slots[b]; // Strictly 1 building per unique slot! Zero overlap guarantee!
       if (!slot) break;
 
       var isTallest = (b === 0 && item.type === 'landmark') || (item.name === tallestFileName);
       var isMega = (b === megaBldgIdx);
       var hasSign = (signBuildingIndices.indexOf(b) !== -1);
 
-      var bInfo = buildArchitecturalStructure(districtGroup, item, b, slot, repo, posX, posZ, targetMode === 'night', isTallest, roofMat, groundMat, (repoSeed + b * 17), isMega, index, districtCtx, hasSign);
+      var bInfo = buildArchitecturalStructure(districtGroup, item, b, slot, repo, posX, posZ, targetMode === 'night', isTallest, groundMat, (repoSeed + b * 17), isMega, index, districtCtx, hasSign);
 
       if (bInfo.height > maxHeight || isTallest) {
         maxHeight = Math.max(maxHeight, bInfo.height);
