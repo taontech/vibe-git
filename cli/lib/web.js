@@ -14875,7 +14875,7 @@ var City3DEngine = (function() {
     });
 
     canvasEl.addEventListener('pointerdown', function(e) {
-      if (isAutoCruising) {
+      if (isAutoCruising && e.button === 2) {
         isAutoCruising = false;
         updateFlightButton();
         syncOrbitFromCamera();
@@ -14917,7 +14917,7 @@ var City3DEngine = (function() {
         var vForward = new THREE.Vector3(-Math.sin(orbit.theta), 0, -Math.cos(orbit.theta));
 
         var moveX = -dx * panScale;
-        var moveY = -dy * panScale;
+        var moveY = dy * panScale;
 
         var panDelta = new THREE.Vector3()
           .addScaledVector(vRight, moveX)
