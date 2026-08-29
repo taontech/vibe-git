@@ -5707,26 +5707,20 @@ details[open] > .home-all-configs-summary .chevron {
   flex-shrink: 0;
 }
 
-/* 3D City Background Scene */
+/* 3D City Slender Strip View (Default) */
 .city-3d-container {
-  position: fixed;
-  top: 0;
-  left: var(--sidebar-w);
-  right: 0;
-  bottom: 0;
-  z-index: 1;
+  position: relative;
+  width: 100%;
+  height: 210px;
+  margin-bottom: 24px;
+  border-radius: 16px;
   overflow: hidden;
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  background: #060913;
+  z-index: 10;
   pointer-events: auto;
-  transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity .35s ease;
-}
-.sidebar.collapsed ~ .city-3d-container,
-body.sidebar-collapsed .city-3d-container {
-  left: 0;
-}
-@media (max-width: 960px) {
-  .city-3d-container {
-    left: 0;
-  }
+  transition: height 0.35s cubic-bezier(0.16, 1, 0.3, 1), border-radius 0.35s ease, opacity .35s ease;
 }
 .city-3d-canvas {
   width: 100%;
@@ -5742,53 +5736,49 @@ body.sidebar-collapsed .city-3d-container {
   pointer-events: none;
 }
 .city-3d-hud-left {
-  position: fixed;
-  top: 76px;
-  left: calc(var(--sidebar-w) + 24px);
+  position: absolute;
+  top: 12px;
+  left: 16px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   z-index: 100;
   pointer-events: auto;
-  transition: left 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.sidebar.collapsed + .shell .city-3d-hud-left,
-body.sidebar-collapsed .city-3d-hud-left {
-  left: 24px;
-}
-@media (max-width: 960px) {
-  .city-3d-hud-left {
-    left: 24px;
-  }
 }
 .city-3d-hud-right {
-  position: fixed;
-  top: 76px;
-  right: 24px;
+  position: absolute;
+  top: 12px;
+  right: 16px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
   z-index: 100;
   pointer-events: auto;
 }
 @media (max-width: 960px) {
+  .city-3d-hud-left {
+    top: 10px;
+    left: 10px;
+  }
   .city-3d-hud-right {
-    right: 14px;
+    top: 10px;
+    right: 10px;
+    gap: 6px;
   }
 }
 .city-3d-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 14px;
+  padding: 5px 12px;
   background: var(--topbar-bg);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--line);
   border-radius: 20px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text);
 }
@@ -5803,16 +5793,16 @@ body.sidebar-collapsed .city-3d-hud-left {
 .city-3d-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 16px;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
   background: var(--topbar-bg);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 16px;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
@@ -5823,7 +5813,7 @@ body.sidebar-collapsed .city-3d-hud-left {
   background: var(--panel-soft);
   border-color: var(--accent);
   color: var(--accent);
-  transform: translateX(-4px);
+  transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 .city-3d-btn-highlight {
@@ -5854,7 +5844,7 @@ body.sidebar-collapsed .city-3d-hud-left {
   box-shadow: var(--shadow);
   padding: 16px 18px;
   pointer-events: auto;
-  z-index: 120;
+  z-index: 1020;
   animation: slideUp .2s ease-out;
 }
 .city-3d-card-header {
@@ -5932,19 +5922,64 @@ body.sidebar-collapsed .city-3d-hud-left {
   opacity: 0.92;
   transform: translateY(-1px);
 }
+
+/* Zen Mode: Expanded Full-Screen 3D City View */
+body.city-3d-zen-active {
+  overflow: hidden !important;
+}
+body.city-3d-zen-active .sidebar,
+body.city-3d-zen-active .topbar,
+body.city-3d-zen-active .home-page > *:not(.city-3d-container) {
+  display: none !important;
+}
+body.city-3d-zen-active .shell {
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: none !important;
+  transform: none !important;
+  transition: none !important;
+}
+body.city-3d-zen-active .home-page {
+  gap: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: none !important;
+  animation: none !important;
+  transform: none !important;
+  transition: none !important;
+}
+.city-3d-container.zen-mode {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  border: none !important;
+  z-index: 99999 !important;
+}
+.city-3d-container.zen-mode .city-3d-hud-left {
+  position: fixed !important;
+  top: 20px !important;
+  left: 24px !important;
+  z-index: 100000 !important;
+  pointer-events: auto !important;
+}
+.city-3d-container.zen-mode .city-3d-hud-right {
+  position: fixed !important;
+  top: 20px !important;
+  right: 24px !important;
+  z-index: 100000 !important;
+  pointer-events: auto !important;
+}
 .home-page {
   position: relative;
   z-index: 5;
-  margin-top: 400px;
-  transition: opacity .3s ease, transform .3s ease;
-}
-.home-page.zen-mode {
-  opacity: 0 !important;
-  pointer-events: none !important;
-  transform: scale(0.98);
-}
-.city-3d-container.zen-mode {
-  pointer-events: auto;
+  margin-top: 0;
+  transition: opacity .3s ease;
 }
 .home-hero {
   backdrop-filter: blur(16px);
@@ -5981,68 +6016,6 @@ body.sidebar-collapsed .city-3d-hud-left {
     </div>
     <div id="repoList" class="repo-list"></div>
   </aside>
-
-  <div id="city3dContainer" class="city-3d-container">
-    <canvas id="city3dCanvas" class="city-3d-canvas"></canvas>
-    <div class="city-3d-hud">
-      <div class="city-3d-hud-left">
-        <div class="city-3d-status-pill">
-          <span class="city-3d-pulse-dot"></span>
-          <span id="city3dCurrentRepoBadge" class="city-3d-repo-badge">City 3D Tour</span>
-        </div>
-      </div>
-      <div class="city-3d-hud-right">
-        <button id="city3dFlightBtn" class="city-3d-btn" type="button" title="暂停/继续巡航" data-i18n-title="city3dCruise">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          <span id="city3dFlightText">巡航中</span>
-        </button>
-        <button id="city3dDayNightBtn" class="city-3d-btn" type="button" title="昼夜切换" data-i18n-title="city3dDay">
-          <span id="city3dDayNightIcon">☀️</span>
-          <span id="city3dDayNightText">白天</span>
-        </button>
-        <button id="city3dGtaoBtn" class="city-3d-btn city-3d-btn-active" type="button" title="GTAO & GI 光影遮蔽 (点击切换 SSAO/关闭)" data-i18n-title="city3dGtao">
-          <span id="city3dGtaoIcon">✨</span>
-          <span id="city3dGtaoText">GTAO / GI</span>
-        </button>
-        <button id="city3dEdlBtn" class="city-3d-btn city-3d-btn-active" type="button" title="EDL / 建筑结构轮廓" data-i18n-title="city3dEdl">
-          <span>📐</span>
-          <span id="city3dEdlText">EDL 轮廓</span>
-        </button>
-        <button id="city3dZenBtn" class="city-3d-btn city-3d-btn-highlight" type="button" title="全屏沉浸/显示概览" data-i18n-title="city3dZenMode">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
-          <span id="city3dZenText">全景沉浸</span>
-        </button>
-      </div>
-    </div>
-    <div id="city3dRepoCard" class="city-3d-repo-card" hidden>
-      <div class="city-3d-card-header">
-        <div class="city-3d-card-title-wrap">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-          <span id="city3dCardRepoName" class="city-3d-card-title">repo</span>
-        </div>
-        <button id="city3dCardCloseBtn" class="city-3d-card-close" type="button">×</button>
-      </div>
-      <div class="city-3d-card-body">
-        <div class="city-3d-card-stat">
-          <span class="city-3d-card-label" data-i18n="city3dBuildings">建筑数量 (文本文件)</span>
-          <span id="city3dCardBuildings" class="city-3d-card-val">-</span>
-        </div>
-        <div class="city-3d-card-stat">
-          <span class="city-3d-card-label" data-i18n="city3dGreenSpace">绿化区域 (非文本文件)</span>
-          <span id="city3dCardGreens" class="city-3d-card-val">-</span>
-        </div>
-        <div class="city-3d-card-stat">
-          <span class="city-3d-card-label" data-i18n="city3dTallest">最高建筑 (最大文件)</span>
-          <span id="city3dCardTallest" class="city-3d-card-val">-</span>
-        </div>
-      </div>
-      <div class="city-3d-card-foot">
-        <button id="city3dCardEnterBtn" class="city-3d-enter-btn" type="button">
-          <span data-i18n="city3dEnterRepo">进入此仓库</span> →
-        </button>
-      </div>
-    </div>
-  </div>
 
   <main class="shell">
     <header class="topbar">
@@ -6103,6 +6076,67 @@ body.sidebar-collapsed .city-3d-hud-left {
     </header>
     <div class="shell-inner">
       <div id="homePage" class="home-page" hidden>
+        <div id="city3dContainer" class="city-3d-container">
+          <canvas id="city3dCanvas" class="city-3d-canvas"></canvas>
+          <div class="city-3d-hud">
+            <div class="city-3d-hud-left">
+              <div class="city-3d-status-pill">
+                <span class="city-3d-pulse-dot"></span>
+                <span id="city3dCurrentRepoBadge" class="city-3d-repo-badge">City 3D Tour</span>
+              </div>
+            </div>
+            <div class="city-3d-hud-right">
+              <button id="city3dFlightBtn" class="city-3d-btn" type="button" title="暂停/继续巡航" data-i18n-title="city3dCruise">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span id="city3dFlightText">巡航中</span>
+              </button>
+              <button id="city3dDayNightBtn" class="city-3d-btn" type="button" title="昼夜切换" data-i18n-title="city3dDay">
+                <span id="city3dDayNightIcon">☀️</span>
+                <span id="city3dDayNightText">白天</span>
+              </button>
+              <button id="city3dGtaoBtn" class="city-3d-btn city-3d-btn-active" type="button" title="GTAO & GI 光影遮蔽 (点击切换 SSAO/关闭)" data-i18n-title="city3dGtao">
+                <span id="city3dGtaoIcon">✨</span>
+                <span id="city3dGtaoText">GTAO / GI</span>
+              </button>
+              <button id="city3dEdlBtn" class="city-3d-btn city-3d-btn-active" type="button" title="EDL / 建筑结构轮廓" data-i18n-title="city3dEdl">
+                <span>📐</span>
+                <span id="city3dEdlText">EDL 轮廓</span>
+              </button>
+              <button id="city3dZenBtn" class="city-3d-btn city-3d-btn-highlight" type="button" title="全屏沉浸/显示概览" data-i18n-title="city3dZenMode">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+                <span id="city3dZenText">全景沉浸</span>
+              </button>
+            </div>
+          </div>
+          <div id="city3dRepoCard" class="city-3d-repo-card" hidden>
+            <div class="city-3d-card-header">
+              <div class="city-3d-card-title-wrap">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                <span id="city3dCardRepoName" class="city-3d-card-title">repo</span>
+              </div>
+              <button id="city3dCardCloseBtn" class="city-3d-card-close" type="button">×</button>
+            </div>
+            <div class="city-3d-card-body">
+              <div class="city-3d-card-stat">
+                <span class="city-3d-card-label" data-i18n="city3dBuildings">建筑数量 (文本文件)</span>
+                <span id="city3dCardBuildings" class="city-3d-card-val">-</span>
+              </div>
+              <div class="city-3d-card-stat">
+                <span class="city-3d-card-label" data-i18n="city3dGreenSpace">绿化区域 (非文本文件)</span>
+                <span id="city3dCardGreens" class="city-3d-card-val">-</span>
+              </div>
+              <div class="city-3d-card-stat">
+                <span class="city-3d-card-label" data-i18n="city3dTallest">最高建筑 (最大文件)</span>
+                <span id="city3dCardTallest" class="city-3d-card-val">-</span>
+              </div>
+            </div>
+            <div class="city-3d-card-foot">
+              <button id="city3dCardEnterBtn" class="city-3d-enter-btn" type="button">
+                <span data-i18n="city3dEnterRepo">进入此仓库</span> →
+              </button>
+            </div>
+          </div>
+        </div>
         <div class="home-hero">
           <div class="home-hero-glow" aria-hidden="true"></div>
           <div class="home-hero-content">
@@ -11777,14 +11811,17 @@ var City3DEngine = (function() {
   var isAutoCruising = true;
   var cruiseSpeed = 1.0;
   var cruiseProgress = 0.0;
+  var cruiseAltitudeOffset = 0;
   var flightSpline = null;
   var bankAngle = 0;
   var targetBankAngle = 0;
   var currentLookAt = null;
   var targetLookAt = null;
 
-  // Free Orbit Controls
+  // Free Orbit Controls & Pan Controls
   var isDragging = false;
+  var isLeftDragging = false;
+  var isRightDragging = false;
   var previousPointer = { x: 0, y: 0 };
   var orbit = { theta: 0.8, phi: 0.62, radius: 240, target: { x: 0, y: 15, z: 0 } };
   var userInteractionTimer = null;
@@ -11848,8 +11885,9 @@ var City3DEngine = (function() {
       scene.background = new THREE.Color(0x060913);
       scene.fog = null; // Clean crystal-clear view, no murky fog!
 
-      camera = new THREE.PerspectiveCamera(50, width / height, 5, 2200);
-      camera.position.set(160, 140, 220);
+      // High-Altitude Telephoto Lens (13° narrow FOV = ~200mm telephoto compression)
+      camera = new THREE.PerspectiveCamera(13, width / height, 10, 6000);
+      camera.position.set(180, 480, 0);
 
       // Post-Processing Pipeline: Scene -> GTAO (AO + GI + EDL + Sobel) -> Bloom -> Gamma -> FXAA
       if (typeof THREE.EffectComposer !== 'undefined') {
@@ -12040,16 +12078,16 @@ var City3DEngine = (function() {
     scene.add(ambientLight);
 
     sunLight = new THREE.DirectionalLight(0xfff5e0, 1.35);
-    sunLight.position.set(220, 320, 180);
+    sunLight.position.set(280, 420, 200);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 2048;
     sunLight.shadow.mapSize.height = 2048;
     sunLight.shadow.camera.near = 50;
-    sunLight.shadow.camera.far = 750;
-    sunLight.shadow.camera.left = -280;
-    sunLight.shadow.camera.right = 280;
-    sunLight.shadow.camera.top = 280;
-    sunLight.shadow.camera.bottom = -280;
+    sunLight.shadow.camera.far = 2200;
+    sunLight.shadow.camera.left = -480;
+    sunLight.shadow.camera.right = 480;
+    sunLight.shadow.camera.top = 480;
+    sunLight.shadow.camera.bottom = -480;
     sunLight.shadow.bias = -0.0001;
     if (typeof sunLight.shadow.normalBias !== 'undefined') {
       sunLight.shadow.normalBias = 0.05;
@@ -12104,92 +12142,162 @@ var City3DEngine = (function() {
     skyGroup.add(starField);
   }
 
-  // Dynamic Git Contribution Heatmap Light Texture (Reflects ONLY Surface Luminance, Preserves Building Color)
-  function createContributionLightTexture(repo, item, bIndex, styleSeed) {
-    var cacheKey = (repo ? repo.name : 'repo') + '_' + (item ? item.name : 'file') + '_' + bIndex;
+  // Dynamic Git Contribution Heatmap Light Texture (Weekly 7-Day Matrix on Tallest, Sparse Windows on Regulars)
+  function createContributionLightTexture(repo, item, bIndex, styleSeed, isTallest) {
+    var cacheKey = (repo ? repo.name : 'repo') + '_' + (item ? item.name : 'file') + '_' + bIndex + (isTallest ? '_tallest' : '_regular');
     if (emissiveTexCache[cacheKey]) {
       return emissiveTexCache[cacheKey];
     }
 
     var canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
     var ctx = canvas.getContext('2d');
 
-    // Emissive base is strictly pure black (0 emission on walls and spandrels)
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, 256, 256);
+    if (isTallest) {
+      // 3. Highest Landmark Building in District: Weekly 7-Day Git Contribution Calendar Light Facade
+      canvas.width = 512;
+      canvas.height = 512;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, 512, 512);
 
-    // Extract Git contribution calendar commit frequencies
-    var contribs = (repo && repo.contributions) ? repo.contributions : {};
-    var dates = Object.keys(contribs);
-    var counts = [];
-    if (dates.length > 0) {
-      for (var d = 0; d < dates.length; d++) {
-        counts.push(contribs[dates[d]] || 0);
+      var bays = 7; // Exactly 7 days of the week per floor (Mon - Sun)
+      var floors = 24; // 24 consecutive weeks of history
+      var cellW = 512 / bays;
+      var cellH = 512 / floors;
+      var padX = 5.0;
+      var padY = 2.5;
+      var winW = cellW - padX * 2;
+      var winH = cellH - padY * 2;
+
+      // Extract Git contribution calendar commit frequencies
+      var contribs = (repo && repo.contributions) ? repo.contributions : {};
+      var dates = Object.keys(contribs);
+      dates.sort(); // Chronological order
+      var counts = [];
+      if (dates.length > 0) {
+        for (var d = 0; d < dates.length; d++) {
+          counts.push(contribs[dates[d]] || 0);
+        }
       }
-    }
 
-    var bays = 8;
-    var floors = 8;
-    var cellW = 256 / bays;
-    var cellH = 256 / floors;
-    var padX = 3.2;
-    var padY = 3.2;
-    var winW = cellW - padX * 2;
-    var winH = cellH - padY * 2;
+      var totalDays = bays * floors;
+      var startOffset = Math.max(0, counts.length - totalDays);
 
-    var fileHash = hashStr(item ? item.name : ('b_' + bIndex)) + (styleSeed || 0);
+      for (var r = 0; r < floors; r++) {
+        for (var c = 0; c < bays; c++) {
+          var x = c * cellW + padX;
+          var y = r * cellH + padY;
 
-    for (var r = 0; r < floors; r++) {
-      for (var c = 0; c < bays; c++) {
-        var x = c * cellW + padX;
-        var y = r * cellH + padY;
-
-        // Map cell to Git contribution calendar index
-        var cellIdx = (c + r * bays + (fileHash % 37)) % Math.max(1, counts.length || 64);
-        var commitCount = counts.length > 0 ? (counts[cellIdx] || 0) : 0;
-
-        // Realistic baseline developer activity distribution
-        var pseudoActivity = ((fileHash * 17 + c * 23 + r * 31) % 100);
-        var effectiveCount = commitCount > 0 ? commitCount : (pseudoActivity > 50 ? Math.floor(pseudoActivity / 18) : 0);
-
-        if (effectiveCount > 0) {
-          var brightness = 0.55;
-          var winColor = 'rgba(255, 243, 199, '; // Warm golden white
-          if (effectiveCount >= 8) {
-            brightness = 1.0; // 1.0 * 1.25 emissiveIntensity = 1.25x HDR peak brightness
-            winColor = 'rgba(255, 255, 255, '; // Blazing sprint white
-          } else if (effectiveCount >= 4) {
-            brightness = 0.85;
-            winColor = 'rgba(254, 240, 138, '; // Bright yellow
-          } else if (effectiveCount >= 2) {
-            brightness = 0.70;
-            winColor = 'rgba(253, 186, 116, '; // Amber
+          var dayIdx = startOffset + (r * bays + c);
+          var commitCount = 0;
+          if (counts.length > 0) {
+            commitCount = (dayIdx < counts.length) ? (counts[dayIdx] || 0) : (counts[dayIdx % counts.length] || 0);
           } else {
-            brightness = 0.50;
-            winColor = 'rgba(224, 242, 254, '; // Soft cyan/white
+            // Realistic dev rhythm pattern fallback (weekday sprints, lower weekends)
+            var dayOfWeek = c; // 0..6
+            var isWeekend = (dayOfWeek === 5 || dayOfWeek === 6);
+            var seedVal = ((styleSeed * 13 + r * 29 + c * 47) % 100);
+            if (isWeekend) {
+              commitCount = (seedVal > 75) ? Math.floor((seedVal - 75) / 6) : 0;
+            } else {
+              commitCount = (seedVal > 30) ? Math.floor((seedVal - 30) / 7) + 1 : 0;
+            }
           }
 
-          ctx.fillStyle = winColor + brightness + ')';
-          ctx.fillRect(x, y, winW, winH);
+          if (commitCount > 0) {
+            var brightness = 0.50;
+            var winColor = 'rgba(187, 247, 208, '; // Soft mint
+            if (commitCount >= 10) {
+              brightness = 1.0;
+              winColor = 'rgba(255, 255, 255, '; // Blazing sprint white
+            } else if (commitCount >= 6) {
+              brightness = 0.90;
+              winColor = 'rgba(52, 211, 153, '; // Luminous emerald
+            } else if (commitCount >= 3) {
+              brightness = 0.75;
+              winColor = 'rgba(74, 222, 128, '; // Vibrant lime green
+            } else if (commitCount >= 1) {
+              brightness = 0.55;
+              winColor = 'rgba(254, 240, 138, '; // Soft golden amber
+            }
 
-          // Realistic ceiling hot-spot
-          var grad = ctx.createLinearGradient(x, y, x, y + winH);
-          grad.addColorStop(0, 'rgba(255, 255, 255, ' + (brightness * 0.9) + ')');
-          grad.addColorStop(0.35, 'rgba(255, 255, 255, ' + (brightness * 0.25) + ')');
-          grad.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
-          ctx.fillStyle = grad;
-          ctx.fillRect(x, y, winW, winH);
+            ctx.fillStyle = winColor + brightness + ')';
+            ctx.fillRect(x, y, winW, winH);
 
-          // Horizontal window blind silhouettes
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-          ctx.fillRect(x, y + winH * 0.3, winW, 1.5);
-          ctx.fillRect(x, y + winH * 0.6, winW, 1.5);
-        } else if ((fileHash + c * 7 + r * 11) % 8 === 0) {
-          // Faint standby ambient monitor glow in unoccupied rooms
-          ctx.fillStyle = 'rgba(255, 180, 80, 0.18)';
-          ctx.fillRect(x, y, winW, winH);
+            // Ceiling light gradient
+            var grad = ctx.createLinearGradient(x, y, x, y + winH);
+            grad.addColorStop(0, 'rgba(255, 255, 255, ' + (brightness * 0.9) + ')');
+            grad.addColorStop(0.4, 'rgba(255, 255, 255, ' + (brightness * 0.3) + ')');
+            grad.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(x, y, winW, winH);
+
+            // Sleek horizontal blind slats
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(x, y + winH * 0.35, winW, 1.2);
+            ctx.fillRect(x, y + winH * 0.70, winW, 1.2);
+          } else {
+            // Unlit room / standby
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';
+            ctx.fillRect(x, y, winW, winH);
+          }
+        }
+      }
+    } else {
+      // Regular Buildings: Randomly lit windows, NOT too dense (15-20% lit)
+      canvas.width = 256;
+      canvas.height = 256;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, 256, 256);
+
+      var bays = 8;
+      var floors = 8;
+      var cellW = 256 / bays;
+      var cellH = 256 / floors;
+      var padX = 3.5;
+      var padY = 3.5;
+      var winW = cellW - padX * 2;
+      var winH = cellH - padY * 2;
+
+      var fileHash = hashStr(item ? item.name : ('b_' + bIndex)) + (styleSeed || 0);
+
+      for (var r = 0; r < floors; r++) {
+        for (var c = 0; c < bays; c++) {
+          var x = c * cellW + padX;
+          var y = r * cellH + padY;
+
+          // Sparse random distribution (~18% of windows lit)
+          var randVal = ((fileHash * 37 + c * 23 + r * 41) % 100);
+          var isLit = (randVal < 18);
+
+          if (isLit) {
+            var colorType = (randVal % 3);
+            var winColor = 'rgba(254, 240, 138, '; // 60% warm amber
+            var brightness = 0.65;
+            if (colorType === 1) {
+              winColor = 'rgba(224, 242, 254, '; // 25% cool office white
+              brightness = 0.60;
+            } else if (colorType === 2) {
+              winColor = 'rgba(253, 186, 116, '; // 15% soft orange
+              brightness = 0.55;
+            }
+
+            ctx.fillStyle = winColor + brightness + ')';
+            ctx.fillRect(x, y, winW, winH);
+
+            var grad = ctx.createLinearGradient(x, y, x, y + winH);
+            grad.addColorStop(0, 'rgba(255, 255, 255, ' + (brightness * 0.8) + ')');
+            grad.addColorStop(0.35, 'rgba(255, 255, 255, ' + (brightness * 0.2) + ')');
+            grad.addColorStop(1, 'rgba(0, 0, 0, 0.4)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(x, y, winW, winH);
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+            ctx.fillRect(x, y + winH * 0.45, winW, 1.2);
+          } else if (randVal < 26) {
+            // Very faint standby monitor glow
+            ctx.fillStyle = 'rgba(56, 189, 248, 0.10)';
+            ctx.fillRect(x, y, winW, winH);
+          }
         }
       }
     }
@@ -13060,14 +13168,14 @@ var City3DEngine = (function() {
     ctx.fillStyle = '#1e293b';
     ctx.fillRect(0, 0, 256, 256);
 
-    // Glowing Neon Yellow Runway Circle & "AV" marking
+    // Glowing Neon Yellow Runway Circle & "GMC" marking
     ctx.strokeStyle = '#facc15';
     ctx.lineWidth = 10;
     ctx.beginPath();
     ctx.arc(128, 128, 96, 0, Math.PI * 2);
     ctx.stroke();
 
-    ctx.font = '900 82px sans-serif';
+    ctx.font = '900 78px sans-serif';
     ctx.fillStyle = '#00f2fe';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -13096,6 +13204,117 @@ var City3DEngine = (function() {
     }
 
     return group;
+  }
+
+  // 2. Vertical Building Side Signboard (垂直书写招牌贴在大楼表面)
+  function createVerticalSignboardMesh(fileName, colorHex, bw, bd, bHeight, streetDir, styleSeed) {
+    var cleanName = String(fileName || 'file').trim();
+    if (cleanName.indexOf('/') !== -1) {
+      var p1 = cleanName.split('/');
+      cleanName = p1[p1.length - 1];
+    }
+    if (cleanName.indexOf(String.fromCharCode(92)) !== -1) {
+      var p2 = cleanName.split(String.fromCharCode(92));
+      cleanName = p2[p2.length - 1];
+    }
+    if (cleanName.length > 10) {
+      cleanName = cleanName.slice(0, 9) + '…';
+    }
+
+    var canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 512;
+    var ctx = canvas.getContext('2d');
+
+    // High-tech dark translucent acrylic signboard base
+    ctx.fillStyle = 'rgba(6, 11, 24, 0.95)';
+    ctx.fillRect(0, 0, 128, 512);
+
+    // Glowing outer border
+    var hexStr = (typeof colorHex === 'number') ? ('#' + ('000000' + colorHex.toString(16)).slice(-6)) : (colorHex || '#00f2fe');
+    ctx.strokeStyle = hexStr;
+    ctx.lineWidth = 6;
+    ctx.strokeRect(6, 6, 116, 500);
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(12, 12, 104, 488);
+
+    // Top Header Icon
+    ctx.fillStyle = hexStr;
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('▼ GMC', 64, 34);
+
+    // Vertical Text Characters (Top to Bottom)
+    var chars = cleanName.toUpperCase().split('');
+    var numChars = Math.max(1, chars.length);
+    var availH = 400;
+    var charH = Math.min(38, Math.floor(availH / numChars));
+    var startY = 65 + Math.floor((availH - (numChars * charH)) / 2) + charH / 2;
+
+    ctx.font = '900 ' + Math.min(26, Math.floor(charH * 0.78)) + 'px -apple-system, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = hexStr;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#ffffff';
+
+    for (var i = 0; i < chars.length; i++) {
+      ctx.fillText(chars[i], 64, startY + i * charH);
+    }
+    ctx.shadowBlur = 0;
+
+    // Bottom Status Pill
+    ctx.fillStyle = hexStr;
+    ctx.fillRect(20, 474, 88, 22);
+    ctx.fillStyle = '#060913';
+    ctx.font = '900 13px monospace';
+    ctx.fillText('● LIVE', 64, 485);
+
+    var tex = new THREE.CanvasTexture(canvas);
+    if (typeof THREE.sRGBEncoding !== 'undefined') {
+      tex.encoding = THREE.sRGBEncoding;
+    }
+
+    var signW = Math.max(2.8, Math.min(bw, bd) * 0.28);
+    var signH = Math.min(bHeight * 0.58, 22.0);
+
+    var signMat = new THREE.MeshStandardMaterial({
+      map: tex,
+      emissiveMap: tex,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: targetMode === 'night' ? 1.4 : 0.4,
+      roughness: 0.3,
+      metalness: 0.7
+    });
+    if (buildingMaterials.indexOf(signMat) === -1) buildingMaterials.push(signMat);
+
+    var backMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8, metalness: 0.5 });
+    var boxGeo = new THREE.BoxGeometry(signW, signH, 0.35);
+    var boxMats = [backMat, backMat, backMat, backMat, signMat, backMat];
+    var signMesh = new THREE.Mesh(boxGeo, boxMats);
+
+    var signY = 1.8 + bHeight * 0.52;
+    var offLateral = ((styleSeed % 2 === 0) ? 1 : -1) * (bw * 0.24);
+
+    if (streetDir === 'N') {
+      signMesh.position.set(offLateral, signY, -bd / 2 - 0.2);
+      signMesh.rotation.y = Math.PI;
+    } else if (streetDir === 'E') {
+      signMesh.position.set(bw / 2 + 0.2, signY, offLateral);
+      signMesh.rotation.y = Math.PI / 2;
+    } else if (streetDir === 'W') {
+      signMesh.position.set(-bw / 2 - 0.2, signY, offLateral);
+      signMesh.rotation.y = -Math.PI / 2;
+    } else {
+      // Default South (+Z)
+      signMesh.position.set(offLateral, signY, bd / 2 + 0.2);
+      signMesh.rotation.y = 0;
+    }
+
+    return signMesh;
   }
 
   function buildCity(cityDataList) {
@@ -13162,20 +13381,21 @@ var City3DEngine = (function() {
       }
     ];
 
+    // 4. Linear Street Layout (区域布局分布到一条街上，横向分布)
     var N = repos.length;
-    var cols = Math.max(1, Math.ceil(Math.sqrt(N)));
-    var rows = Math.max(1, Math.ceil(N / cols));
+    var cols = N;
+    var rows = 1;
 
     var BW = 110;
-    var BD = 110;
-    var RW = 34;
+    var BD = 80;
+    var RW = 28;
     var stepX = BW + RW;
-    var stepZ = BD + RW;
-    var originX = -(cols - 1) * stepX / 2;
-    var originZ = -(rows - 1) * stepZ / 2;
+    var stepZ = 0;
+    var originX = -(N - 1) * stepX / 2;
+    var originZ = 0;
 
-    var totalCityW = cols * stepX + 160;
-    var totalCityD = rows * stepZ + 160;
+    var totalCityW = N * stepX + 240;
+    var totalCityD = BD + RW * 2 + 100;
 
     var groundGeo = new THREE.PlaneGeometry(totalCityW, totalCityD);
     var groundMat = new THREE.MeshStandardMaterial({
@@ -13193,10 +13413,8 @@ var City3DEngine = (function() {
 
     for (var i = 0; i < N; i++) {
       var repo = repos[i];
-      var col = i % cols;
-      var row = Math.floor(i / cols);
-      var posX = originX + col * stepX;
-      var posZ = originZ + row * stepZ;
+      var posX = originX + i * stepX;
+      var posZ = 0;
 
       buildDistrict(repo, i, posX, posZ, BW, BD);
       buildAvenueStreetTrees(posX, posZ, BW, BD);
@@ -13222,118 +13440,96 @@ var City3DEngine = (function() {
     var lineMatCyan = new THREE.MeshBasicMaterial({ color: 0x00f2fe, toneMapped: false });
     var zebraMat = new THREE.MeshBasicMaterial({ color: 0xe2e8f0, toneMapped: false });
 
-    // 1. Continuous Asphalt Road Surface Grid
+    // 1. Continuous Grand Boulevards along X (North Boulevard & South Boulevard)
+    var southAvenueZ = BD / 2 + RW / 2;
+    var northAvenueZ = -(BD / 2 + RW / 2);
+
+    var roadSouth = new THREE.Mesh(new THREE.PlaneGeometry(totalW, RW), roadMat);
+    roadSouth.rotation.x = -Math.PI / 2;
+    roadSouth.position.set(0, 0.05, southAvenueZ);
+    roadSouth.receiveShadow = true;
+    cityGroup.add(roadSouth);
+
+    var roadNorth = new THREE.Mesh(new THREE.PlaneGeometry(totalW, RW), roadMat);
+    roadNorth.rotation.x = -Math.PI / 2;
+    roadNorth.position.set(0, 0.05, northAvenueZ);
+    roadNorth.receiveShadow = true;
+    cityGroup.add(roadNorth);
+
+    // 2. North-South Connecting Cross Streets between Districts
     for (var c = 0; c <= cols; c++) {
       var rx = originX + (c - 0.5) * stepX;
-      var roadV = new THREE.Mesh(new THREE.PlaneGeometry(RW, totalD), roadMat);
+      var roadV = new THREE.Mesh(new THREE.PlaneGeometry(RW, BD + RW * 2), roadMat);
       roadV.rotation.x = -Math.PI / 2;
       roadV.position.set(rx, 0.05, 0);
       roadV.receiveShadow = true;
       cityGroup.add(roadV);
+
+      // Connecting Cross Street Double Yellow Centerline
+      var vDiv = new THREE.Mesh(new THREE.PlaneGeometry(0.8, BD - 10), lineMatYellow);
+      vDiv.rotation.x = -Math.PI / 2;
+      vDiv.position.set(rx, 0.08, 0);
+      cityGroup.add(vDiv);
     }
 
-    for (var r = 0; r <= rows; r++) {
-      var rz = originZ + (r - 0.5) * stepZ;
-      var roadH = new THREE.Mesh(new THREE.PlaneGeometry(totalW, RW), roadMat);
-      roadH.rotation.x = -Math.PI / 2;
-      roadH.position.set(0, 0.05, rz);
-      roadH.receiveShadow = true;
-      cityGroup.add(roadH);
+    // 3. Boulevard Markings (Double Yellow Line + Lane Dividers along East-West)
+    for (var hc = 0; hc < cols; hc++) {
+      var hrx = originX + hc * stepX;
+      var hSegLen = Math.max(10, BW - 12);
+
+      // South Boulevard Centerline & Lanes
+      var hDivS = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.8), lineMatYellow);
+      hDivS.rotation.x = -Math.PI / 2;
+      hDivS.position.set(hrx, 0.08, southAvenueZ);
+      cityGroup.add(hDivS);
+
+      var hLaneS1 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
+      hLaneS1.rotation.x = -Math.PI / 2;
+      hLaneS1.position.set(hrx, 0.07, southAvenueZ - 6.5);
+      cityGroup.add(hLaneS1);
+
+      var hLaneS2 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
+      hLaneS2.rotation.x = -Math.PI / 2;
+      hLaneS2.position.set(hrx, 0.07, southAvenueZ + 6.5);
+      cityGroup.add(hLaneS2);
+
+      // North Boulevard Centerline & Lanes
+      var hDivN = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.8), lineMatYellow);
+      hDivN.rotation.x = -Math.PI / 2;
+      hDivN.position.set(hrx, 0.08, northAvenueZ);
+      cityGroup.add(hDivN);
+
+      var hLaneN1 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
+      hLaneN1.rotation.x = -Math.PI / 2;
+      hLaneN1.position.set(hrx, 0.07, northAvenueZ - 6.5);
+      cityGroup.add(hLaneN1);
+
+      var hLaneN2 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
+      hLaneN2.rotation.x = -Math.PI / 2;
+      hLaneN2.position.set(hrx, 0.07, northAvenueZ + 6.5);
+      cityGroup.add(hLaneN2);
     }
 
-    // 2. Road Markings (ONLY on road segments BETWEEN intersections - NEVER cut across intersections!)
-    // Vertical Street Segments (North-South)
-    for (var vc = 0; vc <= cols; vc++) {
-      var vrx = originX + (vc - 0.5) * stepX;
-      for (var vr = 0; vr < rows; vr++) {
-        var vrz = originZ + vr * stepZ;
-        var vSegLen = Math.max(10, BD - 14); // Buffer before crosswalks
-
-        // Double Yellow Centerline
-        var vDiv = new THREE.Mesh(new THREE.PlaneGeometry(0.8, vSegLen), lineMatYellow);
-        vDiv.rotation.x = -Math.PI / 2;
-        vDiv.position.set(vrx, 0.08, vrz);
-        cityGroup.add(vDiv);
-
-        // Lane Guide Lines
-        var vLane1 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, vSegLen), lineMatCyan);
-        vLane1.rotation.x = -Math.PI / 2;
-        vLane1.position.set(vrx - 7.5, 0.07, vrz);
-        cityGroup.add(vLane1);
-
-        var vLane2 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, vSegLen), lineMatCyan);
-        vLane2.rotation.x = -Math.PI / 2;
-        vLane2.position.set(vrx + 7.5, 0.07, vrz);
-        cityGroup.add(vLane2);
-      }
-    }
-
-    // Horizontal Street Segments (East-West)
-    for (var hr = 0; hr <= rows; hr++) {
-      var hrz = originZ + (hr - 0.5) * stepZ;
-      for (var hc = 0; hc < cols; hc++) {
-        var hrx = originX + hc * stepX;
-        var hSegLen = Math.max(10, BW - 14); // Buffer before crosswalks
-
-        // Double Yellow Centerline
-        var hDiv = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.8), lineMatYellow);
-        hDiv.rotation.x = -Math.PI / 2;
-        hDiv.position.set(hrx, 0.08, hrz);
-        cityGroup.add(hDiv);
-
-        // Lane Guide Lines
-        var hLane1 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
-        hLane1.rotation.x = -Math.PI / 2;
-        hLane1.position.set(hrx, 0.07, hrz - 7.5);
-        cityGroup.add(hLane1);
-
-        var hLane2 = new THREE.Mesh(new THREE.PlaneGeometry(hSegLen, 0.35), lineMatCyan);
-        hLane2.rotation.x = -Math.PI / 2;
-        hLane2.position.set(hrx, 0.07, hrz + 7.5);
-        cityGroup.add(hLane2);
-      }
-    }
-
-    // 3. Intersection Crosswalks (斑马线) on all 4 approaches of every intersection (Center of crossing is clean!)
-    var zebraBarGeo = new THREE.PlaneGeometry(1.2, 4.2);
+    // 4. Crosswalk Markings at Intersections
+    var zebraBarGeo = new THREE.PlaneGeometry(1.2, 4.0);
+    var crossZList = [southAvenueZ, northAvenueZ];
     for (var ic = 0; ic <= cols; ic++) {
-      for (var ir = 0; ir <= rows; ir++) {
-        var ix = originX + (ic - 0.5) * stepX;
-        var iz = originZ + (ir - 0.5) * stepZ;
-        var crossOff = RW * 0.5 - 2.8;
+      var ix = originX + (ic - 0.5) * stepX;
+      for (var zIdx = 0; zIdx < crossZList.length; zIdx++) {
+        var iz = crossZList[zIdx];
+        var crossOff = RW * 0.5 - 2.5;
 
-        // North Approach Crosswalk
-        for (var bN = -3; bN <= 3; bN++) {
+        // North & South Crossing Approaches
+        for (var b = -3; b <= 3; b++) {
           var zN = new THREE.Mesh(zebraBarGeo, zebraMat);
           zN.rotation.x = -Math.PI / 2;
-          zN.position.set(ix + bN * 2.2, 0.09, iz - crossOff);
+          zN.position.set(ix + b * 2.2, 0.09, iz - crossOff);
           cityGroup.add(zN);
-        }
 
-        // South Approach Crosswalk
-        for (var bS = -3; bS <= 3; bS++) {
           var zS = new THREE.Mesh(zebraBarGeo, zebraMat);
           zS.rotation.x = -Math.PI / 2;
-          zS.position.set(ix + bS * 2.2, 0.09, iz + crossOff);
+          zS.position.set(ix + b * 2.2, 0.09, iz + crossOff);
           cityGroup.add(zS);
-        }
-
-        // West Approach Crosswalk
-        for (var bW = -3; bW <= 3; bW++) {
-          var zW = new THREE.Mesh(zebraBarGeo, zebraMat);
-          zW.rotation.x = -Math.PI / 2;
-          zW.rotation.z = Math.PI / 2;
-          zW.position.set(ix - crossOff, 0.09, iz + bW * 2.2);
-          cityGroup.add(zW);
-        }
-
-        // East Approach Crosswalk
-        for (var bE = -3; bE <= 3; bE++) {
-          var zE = new THREE.Mesh(zebraBarGeo, zebraMat);
-          zE.rotation.x = -Math.PI / 2;
-          zE.rotation.z = Math.PI / 2;
-          zE.position.set(ix + crossOff, 0.09, iz + bE * 2.2);
-          cityGroup.add(zE);
         }
       }
     }
@@ -13350,15 +13546,15 @@ var City3DEngine = (function() {
 
     var halfW = BW / 2 - 2.5;
     var halfD = BD / 2 - 2.5;
-    var steps = 6;
+    var steps = 5;
 
     for (var s = 0; s < steps; s++) {
       var tOffset = -halfW + (s + 0.5) * (BW / steps);
       var treeCoords = [
         [tOffset, -halfD],
         [tOffset, halfD],
-        [-halfW, tOffset],
-        [halfW, tOffset]
+        [-halfW, ((s % 2 === 0) ? -halfD * 0.5 : halfD * 0.5)],
+        [halfW, ((s % 2 === 0) ? -halfD * 0.5 : halfD * 0.5)]
       ];
 
       for (var tc = 0; tc < treeCoords.length; tc++) {
@@ -13395,70 +13591,315 @@ var City3DEngine = (function() {
     var decalGeo = new THREE.PlaneGeometry(10.0, 10.0);
 
     for (var c = 0; c < cols; c++) {
-      for (var r = 0; r < rows; r++) {
-        var px = originX + c * stepX;
-        var pz = originZ + r * stepZ;
+      var px = originX + c * stepX;
+      var pz = 0;
 
-        var lampOffsets = [
-          [-BW / 2 - 2.5, -25, -Math.PI / 2],
-          [-BW / 2 - 2.5, 25, -Math.PI / 2],
-          [BW / 2 + 2.5, -25, Math.PI / 2],
-          [BW / 2 + 2.5, 25, Math.PI / 2],
-          [-25, -BD / 2 - 2.5, Math.PI],
-          [25, -BD / 2 - 2.5, Math.PI],
-          [-25, BD / 2 + 2.5, 0],
-          [25, BD / 2 + 2.5, 0]
-        ];
+      var lampOffsets = [
+        [-BW / 2 - 2.5, -BD / 2 - 2.5, -Math.PI / 2],
+        [BW / 2 + 2.5, -BD / 2 - 2.5, Math.PI / 2],
+        [-BW / 2 - 2.5, BD / 2 + 2.5, -Math.PI / 2],
+        [BW / 2 + 2.5, BD / 2 + 2.5, Math.PI / 2],
+        [-25, -BD / 2 - 3.0, Math.PI],
+        [25, -BD / 2 - 3.0, Math.PI],
+        [-25, BD / 2 + 3.0, 0],
+        [25, BD / 2 + 3.0, 0]
+      ];
 
-        for (var l = 0; l < lampOffsets.length; l++) {
-          var lx = px + lampOffsets[l][0];
-          var lz = pz + lampOffsets[l][1];
-          var rot = lampOffsets[l][2];
+      for (var l = 0; l < lampOffsets.length; l++) {
+        var lx = px + lampOffsets[l][0];
+        var lz = pz + lampOffsets[l][1];
+        var rot = lampOffsets[l][2];
 
-          var lampGroup = new THREE.Group();
-          lampGroup.position.set(lx, 0, lz);
-          lampGroup.rotation.y = rot;
+        var lampGroup = new THREE.Group();
+        lampGroup.position.set(lx, 0, lz);
+        lampGroup.rotation.y = rot;
 
-          var post = new THREE.Mesh(poleGeo, poleMat);
-          post.position.y = 4.0;
-          lampGroup.add(post);
+        var post = new THREE.Mesh(poleGeo, poleMat);
+        post.position.y = 4.0;
+        lampGroup.add(post);
 
-          var arm = new THREE.Mesh(armGeo, poleMat);
-          arm.position.set(1.4, 7.8, 0);
-          lampGroup.add(arm);
+        var arm = new THREE.Mesh(armGeo, poleMat);
+        arm.position.set(1.4, 7.8, 0);
+        lampGroup.add(arm);
 
-          var lensMat = new THREE.MeshStandardMaterial({
-            color: 0xfef08a,
-            emissive: new THREE.Color(0xfbbf24),
-            emissiveIntensity: targetMode === 'night' ? 2.5 : 0.2
+        var lensMat = new THREE.MeshStandardMaterial({
+          color: 0xfef08a,
+          emissive: new THREE.Color(0xfbbf24),
+          emissiveIntensity: targetMode === 'night' ? 2.5 : 0.2
+        });
+        var head = new THREE.Mesh(headGeo, lensMat);
+        head.position.set(2.8, 7.6, 0);
+        lampGroup.add(head);
+        streetlightLenses.push(lensMat);
+
+        streetlightsGroup.add(lampGroup);
+
+        if (lampGlowTex) {
+          var decalMat = new THREE.MeshBasicMaterial({
+            map: lampGlowTex,
+            transparent: true,
+            opacity: targetMode === 'night' ? 0.45 : 0.0,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
           });
-          var head = new THREE.Mesh(headGeo, lensMat);
-          head.position.set(2.8, 7.6, 0);
-          lampGroup.add(head);
-          streetlightLenses.push(lensMat);
-
-          streetlightsGroup.add(lampGroup);
-
-          if (lampGlowTex) {
-            var decalMat = new THREE.MeshBasicMaterial({
-              map: lampGlowTex,
-              transparent: true,
-              opacity: targetMode === 'night' ? 0.45 : 0.0,
-              depthWrite: false,
-              blending: THREE.AdditiveBlending
-            });
-            var decal = new THREE.Mesh(decalGeo, decalMat);
-            decal.rotation.x = -Math.PI / 2;
-            decal.position.set(lx + Math.sin(rot) * 2.8, 0.08, lz + Math.cos(rot) * 2.8);
-            streetlightsGroup.add(decal);
-            streetlightGlowDecals.push(decalMat);
-          }
+          var decal = new THREE.Mesh(decalGeo, decalMat);
+          decal.rotation.x = -Math.PI / 2;
+          decal.position.set(lx + Math.sin(rot) * 2.8, 0.08, lz + Math.cos(rot) * 2.8);
+          streetlightsGroup.add(decal);
+          streetlightGlowDecals.push(decalMat);
         }
       }
     }
   }
 
-  function buildArchitecturalStructure(districtGroup, item, bIndex, slot, repo, posX, posZ, isNight, isTallest, roofMat, groundMat, buildingSeed, isMegaScreen, districtIndex) {
+  // Animated Boulevard Traffic System
+  function buildTrafficCars(cols, rows, stepX, stepZ, originX, originZ, totalCityW, totalCityD) {
+    if (!trafficGroup) {
+      trafficGroup = new THREE.Group();
+      scene.add(trafficGroup);
+    }
+    trafficCars = [];
+
+    var carCount = Math.max(16, cols * 8);
+    var southZ = (80 / 2 + 28 / 2);
+    var northZ = -(80 / 2 + 28 / 2);
+    var halfW = totalCityW / 2 - 20;
+
+    var carGeo = new THREE.BoxGeometry(4.2, 1.4, 2.0);
+    var carMats = [
+      new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.3, metalness: 0.7 }),
+      new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.3, metalness: 0.7 }),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3, metalness: 0.7 }),
+      new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.3, metalness: 0.7 }),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.2, metalness: 0.8 }),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.6 })
+    ];
+
+    var headLightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    var tailLightMat = new THREE.MeshBasicMaterial({ color: 0xff0044 });
+    var lightGeo = new THREE.BoxGeometry(0.3, 0.3, 0.5);
+
+    for (var i = 0; i < carCount; i++) {
+      var isEastBound = (i % 2 === 0);
+      var laneZ = isEastBound ? (southZ - 4.5 + (i % 2) * 4.0) : (northZ + 4.5 - (i % 2) * 4.0);
+      var startX = -halfW + Math.random() * (halfW * 2);
+
+      var carMesh = new THREE.Group();
+      var body = new THREE.Mesh(carGeo, carMats[i % carMats.length]);
+      body.position.y = 0.85;
+      body.castShadow = true;
+      carMesh.add(body);
+
+      // Headlights & Taillights
+      var hl1 = new THREE.Mesh(lightGeo, isEastBound ? headLightMat : tailLightMat);
+      hl1.position.set(2.1, 0.8, 0.7);
+      carMesh.add(hl1);
+
+      var hl2 = new THREE.Mesh(lightGeo, isEastBound ? headLightMat : tailLightMat);
+      hl2.position.set(2.1, 0.8, -0.7);
+      carMesh.add(hl2);
+
+      var tl1 = new THREE.Mesh(lightGeo, isEastBound ? tailLightMat : headLightMat);
+      tl1.position.set(-2.1, 0.8, 0.7);
+      carMesh.add(tl1);
+
+      var tl2 = new THREE.Mesh(lightGeo, isEastBound ? tailLightMat : headLightMat);
+      tl2.position.set(-2.1, 0.8, -0.7);
+      carMesh.add(tl2);
+
+      if (!isEastBound) {
+        carMesh.rotation.y = Math.PI;
+      }
+      carMesh.position.set(startX, 0, laneZ);
+      trafficGroup.add(carMesh);
+
+      trafficCars.push({
+        mesh: carMesh,
+        speed: (isEastBound ? 1 : -1) * (18 + Math.random() * 14),
+        minX: -halfW - 10,
+        maxX: halfW + 10,
+        laneZ: laneZ
+      });
+    }
+  }
+
+  // Futuristic Flying Vehicles Corridor
+  function buildFlyingAVs(totalCityW, totalCityD) {
+    if (!avTrafficGroup) {
+      avTrafficGroup = new THREE.Group();
+      scene.add(avTrafficGroup);
+    }
+    flyingAVs = [];
+
+    var avCount = 8;
+    var halfW = totalCityW / 2;
+    var avBodyGeo = new THREE.BoxGeometry(6.0, 1.2, 2.8);
+    var avMat = new THREE.MeshStandardMaterial({ color: 0x00f2fe, roughness: 0.2, metalness: 0.85 });
+    var glowMat = new THREE.MeshBasicMaterial({ color: 0x00f2fe });
+    var glowGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.6, 6);
+
+    for (var a = 0; a < avCount; a++) {
+      var avGroup = new THREE.Group();
+      var body = new THREE.Mesh(avBodyGeo, avMat);
+      avGroup.add(body);
+
+      var thruster1 = new THREE.Mesh(glowGeo, glowMat);
+      thruster1.rotation.z = Math.PI / 2;
+      thruster1.position.set(-3.1, 0, 1.0);
+      avGroup.add(thruster1);
+
+      var thruster2 = new THREE.Mesh(glowGeo, glowMat);
+      thruster2.rotation.z = Math.PI / 2;
+      thruster2.position.set(-3.1, 0, -1.0);
+      avGroup.add(thruster2);
+
+      var isEast = (a % 2 === 0);
+      var altY = 36 + (a % 4) * 8;
+      var laneZ = (a % 2 === 0 ? 30 : -30) + (Math.random() - 0.5) * 15;
+      var posX = -halfW + Math.random() * (halfW * 2);
+
+      if (!isEast) avGroup.rotation.y = Math.PI;
+      avGroup.position.set(posX, altY, laneZ);
+      avTrafficGroup.add(avGroup);
+
+      flyingAVs.push({
+        mesh: avGroup,
+        speed: (isEast ? 1 : -1) * (28 + Math.random() * 16),
+        minX: -halfW - 20,
+        maxX: halfW + 20,
+        baseY: altY,
+        baseZ: laneZ,
+        phase: Math.random() * Math.PI * 2
+      });
+    }
+  }
+
+  function buildGroundMist(cols, rows, stepX, stepZ, originX, originZ) {
+    if (!groundMistGroup) {
+      groundMistGroup = new THREE.Group();
+      scene.add(groundMistGroup);
+    }
+  }
+
+  var dummyEmissiveTex = null;
+  function getDummyEmissiveTexture() {
+    if (!dummyEmissiveTex && typeof THREE !== 'undefined' && THREE.DataTexture) {
+      dummyEmissiveTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat);
+      dummyEmissiveTex.needsUpdate = true;
+    }
+    return dummyEmissiveTex;
+  }
+
+  // Create Procedural Facade Material with Dynamic GPU Window Synthesis Shader
+  function createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, isTallest, colHex, isGlass, bw, bd, bHeight) {
+    var bayVariants = [4, 6, 8, 10, 12, 14];
+    var gridBays = bayVariants[(styleSeed % bayVariants.length)];
+    var gridFloors = Math.max(4, Math.min(28, Math.round(bHeight / (3.2 + (styleSeed % 3) * 0.8))));
+
+    var contribTex = null;
+    if (isTallest) {
+      contribTex = createContributionLightTexture(repo, item, bIndex, styleSeed, true);
+    } else {
+      contribTex = getDummyEmissiveTexture();
+    }
+
+    var mat = new THREE.MeshStandardMaterial({
+      color: colHex,
+      roughness: isGlass ? 0.22 : 0.65,
+      metalness: isGlass ? 0.80 : 0.20,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: contribTex,
+      emissiveIntensity: 0.0 // Fully computed on GPU shader
+    });
+
+    mat.userData = {
+      isTallest: isTallest,
+      styleSeed: styleSeed,
+      bIndex: bIndex,
+      gridBays: gridBays,
+      gridFloors: gridFloors,
+      shader: null
+    };
+
+    mat.onBeforeCompile = function(shader) {
+      shader.uniforms.uTime = { value: totalElapsedTime };
+      shader.uniforms.uSeed = { value: (styleSeed % 1000) * 1.37 + bIndex * 7.19 };
+      shader.uniforms.uIsTallest = { value: isTallest ? 1.0 : 0.0 };
+      shader.uniforms.uWindowGrid = { value: new THREE.Vector2(gridBays, gridFloors) };
+      shader.uniforms.uNightTransition = { value: modeTransition };
+      shader.uniforms.uOvertimeFreq = { value: ((styleSeed % 5 === 0) ? 0.75 : ((styleSeed % 3 === 0) ? 0.04 : 0.20)) };
+      mat.userData.shader = shader;
+
+      var nl = String.fromCharCode(10);
+      var headerChunk = [
+        'uniform float uTime;',
+        'uniform float uSeed;',
+        'uniform float uIsTallest;',
+        'uniform vec2 uWindowGrid;',
+        'uniform float uNightTransition;',
+        'uniform float uOvertimeFreq;'
+      ].join(nl);
+
+      shader.fragmentShader = headerChunk + nl + shader.fragmentShader;
+
+      var emissiveChunk = [
+        '#include <emissivemap_fragment>',
+        'if (uNightTransition > 0.001) {',
+        '  if (uIsTallest > 0.5) {',
+        '    #ifdef USE_EMISSIVEMAP',
+        '      vec4 cMap = texture2D(emissiveMap, vUv);',
+        '      totalEmissiveRadiance += cMap.rgb * (uNightTransition * 1.25);',
+        '    #endif',
+        '  } else {',
+        '    vec2 gUv = fract(vUv * uWindowGrid);',
+        '    vec2 cId = floor(vUv * uWindowGrid);',
+        '    float padX = 0.16;',
+        '    float padY = 0.20;',
+        '    if (gUv.x > padX && gUv.x < (1.0 - padX) && gUv.y > padY && gUv.y < (1.0 - padY)) {',
+        '      float cHash = fract(sin(dot(cId + vec2(uSeed * 13.17, uSeed * 37.89), vec2(12.9898, 78.233))) * 43758.5453);',
+        '      float fHash = fract(sin((cId.y + uSeed * 41.53) * 12.9898) * 43758.5453);',
+        '      float fAct = (fHash > 0.84) ? 0.80 : ((fHash < 0.28) ? 0.03 : uOvertimeFreq);',
+        '      bool lit = (cHash < fAct);',
+        '      if (lit) {',
+        '        float tVal = fract(cHash * 91.3);',
+        '        vec3 wCol = vec3(1.0, 0.94, 0.68);',
+        '        float br = 0.75;',
+        '        if (tVal > 0.75) {',
+        '          wCol = vec3(0.88, 0.96, 1.0);',
+        '          br = 0.70;',
+        '        } else if (tVal > 0.52) {',
+        '          wCol = vec3(1.0, 0.74, 0.42);',
+        '          br = 0.65;',
+        '        } else if (tVal > 0.42) {',
+        '          wCol = vec3(0.0, 0.95, 1.0);',
+        '          br = 0.60 + 0.30 * sin(uTime * 3.8 + cHash * 20.0);',
+        '        } else if (tVal < 0.12) {',
+        '          wCol = vec3(1.0, 1.0, 1.0);',
+        '          br = 0.95;',
+        '        }',
+        '        float normY = (gUv.y - padY) / (1.0 - 2.0 * padY);',
+        '        float cGlow = 0.45 + 0.55 * normY;',
+        '        float bld = 0.75 + 0.25 * step(0.35, fract(normY * 4.0));',
+        '        float flk = 1.0 + 0.05 * sin(uTime * 4.2 + cHash * 50.0);',
+        '        totalEmissiveRadiance += wCol * (br * cGlow * bld * flk * uNightTransition * 0.95);',
+        '      } else if (cHash < fAct + 0.06) {',
+        '        totalEmissiveRadiance += vec3(0.15, 0.45, 0.85) * (0.12 * uNightTransition);',
+        '      }',
+        '    }',
+        '  }',
+        '}'
+      ].join(nl);
+
+      shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', emissiveChunk);
+    };
+
+    if (buildingMaterials.indexOf(mat) === -1) {
+      buildingMaterials.push(mat);
+    }
+    return mat;
+  }
+
+  function buildArchitecturalStructure(districtGroup, item, bIndex, slot, repo, posX, posZ, isNight, isTallest, roofMat, groundMat, buildingSeed, isMegaScreen, districtIndex, districtCtx, hasVerticalSign) {
     var styleSeed = hashStr(item.name || ('file_' + bIndex)) + buildingSeed;
     var styleType = isTallest ? 0 : (item.type === 'compound' ? 4 : (styleSeed % 6));
 
@@ -13474,32 +13915,15 @@ var City3DEngine = (function() {
     var bx = slot.x;
     var bz = slot.z;
 
-    // Distinct Procedural Building Material Colors (Restored Original Rich Vibrant Palette)
-    // 0x1e3a8a: Sapphire Blue, 0x0284c7: Sky Cyan Glass, 0xf8fafc: Architectural Platinum,
-    // 0xd8cfbe: Warm Sandstone Limestone, 0x94a3b8: Slate Aluminum Steel, 0xc25e3e: Terracotta Brick,
-    // 0x065f46: Emerald Glass, 0x1e293b: Dark Titanium
     var palColors = [0x1e3a8a, 0x0284c7, 0xf8fafc, 0xd8cfbe, 0x94a3b8, 0xc25e3e, 0x065f46, 0x1e293b];
     var colHex = palColors[styleSeed % palColors.length];
     var isGlass = (styleSeed % 3 === 0);
 
-    // Git Contribution Heatmap Emissive Light Texture (Window radiance)
-    var contribLightTex = createContributionLightTexture(repo, item, bIndex, styleSeed);
-    var curEmissiveIntensity = (targetMode === 'night') ? 0.90 : 0.0;
+    // 3. Dynamic Procedural GPU Window Synthesis Shader Material
+    var facadeMat = createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, isTallest, colHex, isGlass, bw, bd, bHeight);
 
-    var facadeMat = new THREE.MeshStandardMaterial({
-      color: colHex,
-      roughness: isGlass ? 0.22 : 0.65,
-      metalness: isGlass ? 0.80 : 0.20,
-      emissiveMap: contribLightTex,
-      emissive: new THREE.Color(0xffffff),
-      emissiveIntensity: curEmissiveIntensity
-    });
-    if (buildingMaterials.indexOf(facadeMat) === -1) buildingMaterials.push(facadeMat);
-
-    // Multi-Material Array: [Right(+X), Left(-X), Top(+Y Roof), Bottom(-Y), Front(+Z), Back(-Z)]
     var multiMats = [facadeMat, facadeMat, roofMat, groundMat, facadeMat, facadeMat];
 
-    // Determine street-facing face direction
     var megaFaceIdx = -1;
     var sDir = slot.streetDir || ((bIndex % 2 === 0) ? 'S' : 'N');
     if (sDir === 'E') megaFaceIdx = 0;
@@ -13507,14 +13931,12 @@ var City3DEngine = (function() {
     else if (sDir === 'S') megaFaceIdx = 4;
     else megaFaceIdx = 5;
 
-    // If this building is designated as the district's Mega-Screen Skyscraper, map the dynamic canvas across the whole street face!
     if (isMegaScreen && cyberScreenTextures.length > 0) {
       var scrTex = cyberScreenTextures[districtIndex % cyberScreenTextures.length];
       var megaScreenMat = new THREE.MeshBasicMaterial({ map: scrTex, toneMapped: false });
       multiMats[megaFaceIdx] = megaScreenMat;
     }
 
-    // Precise Neon Edge Outline via Parent-Child Geometry Linkage (Zero Offset!)
     var neonColors = [0x00f2fe, 0xff007f, 0xa855f7, 0xffb703, 0x00ff9d, 0x38bdf8];
     var neonCol = neonColors[styleSeed % neonColors.length];
 
@@ -13541,7 +13963,6 @@ var City3DEngine = (function() {
       metalness: 0.8
     });
 
-    // Ground Contact AO Shadow Disc
     if (aoContactTex) {
       var aoGeo = new THREE.PlaneGeometry(bw * 1.45, bd * 1.45);
       var aoMat = new THREE.MeshBasicMaterial({
@@ -13673,7 +14094,6 @@ var City3DEngine = (function() {
       addEdgeOutline(tB, tBGeo);
       districtGroup.add(tB);
 
-      // Glowing Neon Skybridge
       var bridgeGeo = new THREE.BoxGeometry(twOff * 2 + twW * 0.5, 3.2, twD * 0.45);
       var bridgeMat = new THREE.MeshStandardMaterial({
         color: 0x00f2fe,
@@ -13749,29 +14169,44 @@ var City3DEngine = (function() {
       buildingTopY += 1.2;
     }
 
-    // Clean Rooftop Detailing (Helipad or HVAC - No Spheres!)
-    if (!isTallest && bHeight > 24) {
-      var topFeature = (styleSeed % 3);
-      if (topFeature === 0) {
-        // Rooftop AV Landing Pad
+    // 1. Helipads count strictly 1-3 per district (楼顶停机坪数量控制在1-3个)
+    if (!isTallest && bHeight > 22 && Math.min(bw, bd) >= 7.0) {
+      if (districtCtx && districtCtx.helipadsCount < districtCtx.maxHelipads && ((styleSeed % 4) === 0)) {
+        // Rooftop AV Landing Pad (Limited to 1-3 per district)
         var helipad = createAVHelipadMesh(Math.min(bw, bd) * 0.82);
         helipad.position.set(bx, buildingTopY, bz);
         districtGroup.add(helipad);
-      } else if (topFeature === 1) {
-        // Mechanical Penthouse Units
+        districtCtx.helipadsCount++;
+      } else if (styleSeed % 3 === 0) {
+        // Mechanical Penthouse Units (HVAC)
         var hvacGeo = new THREE.BoxGeometry(bw * 0.4, 2.2, bd * 0.4);
         var hvacMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7 });
         var hvacMesh = new THREE.Mesh(hvacGeo, hvacMat);
         hvacMesh.position.set(bx, buildingTopY + 1.1, bz);
         districtGroup.add(hvacMesh);
-      } else {
+      } else if (styleSeed % 3 === 1) {
         // Sleek Communication Mast
         var mastGeo = new THREE.CylinderGeometry(0.18, 0.35, 8.0, 6);
         var mastMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.9 });
         var mastMesh = new THREE.Mesh(mastGeo, mastMat);
         mastMesh.position.set(bx, buildingTopY + 4.0, bz);
         districtGroup.add(mastMesh);
+      } else {
+        // Solar Array Panel / Roof Cap
+        var solarGeo = new THREE.BoxGeometry(bw * 0.5, 0.6, bd * 0.5);
+        var solarMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.2, metalness: 0.8 });
+        var solarMesh = new THREE.Mesh(solarGeo, solarMat);
+        solarMesh.position.set(bx, buildingTopY + 0.3, bz);
+        districtGroup.add(solarMesh);
       }
+    }
+
+    // 2. Vertical Building Side Signboard with File Name (大楼侧面招牌，垂直书写)
+    if (hasVerticalSign && item && item.name) {
+      var signMesh = createVerticalSignboardMesh(item.name, neonCol, bw, bd, bHeight, sDir, styleSeed);
+      signMesh.position.x += bx;
+      signMesh.position.z += bz;
+      districtGroup.add(signMesh);
     }
 
     return {
@@ -13807,7 +14242,7 @@ var City3DEngine = (function() {
     var groundMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 });
 
     var nonTextCount = repo.nonTextCount || 0;
-    var parkW = Math.min(48, Math.max(16, 14 + Math.sqrt(nonTextCount) * 5.0));
+    var parkW = Math.min(42, Math.max(14, 12 + Math.sqrt(nonTextCount) * 4.5));
     var parkD = parkW;
     var parkPosX = 0;
     var parkPosZ = 0;
@@ -13823,7 +14258,7 @@ var City3DEngine = (function() {
     lawnMesh.receiveShadow = true;
     districtGroup.add(lawnMesh);
 
-    var numTrees = Math.min(24, Math.max(2, Math.floor(nonTextCount * 0.75)));
+    var numTrees = Math.min(18, Math.max(2, Math.floor(nonTextCount * 0.75)));
     if (nonTextCount === 0) numTrees = 2;
 
     var trunkGeo = new THREE.CylinderGeometry(0.35, 0.5, 3.2, 6);
@@ -13880,7 +14315,7 @@ var City3DEngine = (function() {
     var itemCount = clusteredItems.length;
 
     var slots = [];
-    var gridSize = Math.max(3, Math.ceil(Math.sqrt(itemCount + 5)));
+    var gridSize = Math.max(3, Math.ceil(Math.sqrt(itemCount + 4)));
     var cellW = BW / gridSize;
     var cellD = BD / gridSize;
 
@@ -13922,8 +14357,23 @@ var City3DEngine = (function() {
     var maxHeight = 0;
     var tallestFileName = repo.tallest ? (repo.tallest.name || repo.tallest.path) : '';
 
-    // Pick exactly ONE building in this district to become the MegaScreen Skyscraper!
+    // 1. Helipads count: 1-3 per district
+    var maxDistrictHelipads = 1 + (repoSeed % 3);
+    var districtCtx = { helipadsCount: 0, maxHelipads: maxDistrictHelipads };
+
+    // 2. Select 2-4 random buildings to have vertical side signboards with filenames
+    var numSigns = Math.min(itemCount, Math.max(2, 2 + (repoSeed % 3)));
+    var signBuildingIndices = [];
     var megaBldgIdx = (repoSeed % itemCount);
+
+    for (var cand = 0; cand < itemCount && signBuildingIndices.length < numSigns; cand++) {
+      var cIdx = (repoSeed * 7 + cand * 11) % itemCount;
+      var cItem = clusteredItems[cIdx];
+      var isLandmark = (cIdx === 0 && cItem.type === 'landmark') || (cItem.name === tallestFileName);
+      if (!isLandmark && cIdx !== megaBldgIdx && signBuildingIndices.indexOf(cIdx) === -1) {
+        signBuildingIndices.push(cIdx);
+      }
+    }
 
     for (var b = 0; b < itemCount; b++) {
       var item = clusteredItems[b];
@@ -13932,8 +14382,9 @@ var City3DEngine = (function() {
 
       var isTallest = (b === 0 && item.type === 'landmark') || (item.name === tallestFileName);
       var isMega = (b === megaBldgIdx);
+      var hasSign = (signBuildingIndices.indexOf(b) !== -1);
 
-      var bInfo = buildArchitecturalStructure(districtGroup, item, b, slot, repo, posX, posZ, targetMode === 'night', isTallest, roofMat, groundMat, (repoSeed + b * 17), isMega, index);
+      var bInfo = buildArchitecturalStructure(districtGroup, item, b, slot, repo, posX, posZ, targetMode === 'night', isTallest, roofMat, groundMat, (repoSeed + b * 17), isMega, index, districtCtx, hasSign);
 
       if (bInfo.height > maxHeight || isTallest) {
         maxHeight = Math.max(maxHeight, bInfo.height);
@@ -13990,30 +14441,54 @@ var City3DEngine = (function() {
     cityGroup.add(districtGroup);
   }
 
+  // 1 & 4. True High-Altitude Stratosphere Telephoto Birds-Eye View (平流层长焦镜头俯瞰视角)
   function buildFlightSpline(districts) {
     var waypoints = [];
     if (districts && districts.length > 0) {
       var N = districts.length;
-      for (var i = 0; i < N; i++) {
-        var d = districts[i];
-        var cx = d.center ? d.center.x : 0;
-        var cz = d.center ? d.center.z : 0;
-        var h = Math.max((d.height || 40) + 40, 85);
-        var r = 90;
+      var minX = districts[0].center.x - 70;
+      var maxX = districts[N - 1].center.x + 70;
 
-        waypoints.push(new THREE.Vector3(cx + r, h + 14, cz + r * 0.8));
-        waypoints.push(new THREE.Vector3(cx - r * 0.6, h + 4, cz + r));
-        waypoints.push(new THREE.Vector3(cx - r, h, cz - r * 0.6));
-        waypoints.push(new THREE.Vector3(cx + r * 0.5, h + 22, cz - r));
+      var maxH = 45;
+      for (var d = 0; d < N; d++) {
+        if (districts[d].height > maxH) maxH = districts[d].height;
       }
+      // High-altitude stratosphere telephoto cruising altitude (~520 units above ground)
+      var flightH = Math.max(maxH * 5.2 + 280, 520);
+
+      var steps = Math.max(4, Math.min(14, N * 2));
+
+      // 1. Forward Leg (West to East: High above the central avenue at Z = 0 looking straight down)
+      for (var i = 0; i <= steps; i++) {
+        var u = i / steps;
+        var wx = minX + u * (maxX - minX);
+        waypoints.push(new THREE.Vector3(wx, flightH, 0.0));
+      }
+
+      // 2. Smooth Right-Turn Turnaround at East end
+      waypoints.push(new THREE.Vector3(maxX + 30, flightH, 8.0));
+      waypoints.push(new THREE.Vector3(maxX + 45, flightH, 0.0));
+      waypoints.push(new THREE.Vector3(maxX + 30, flightH, -8.0));
+
+      // 3. Return Leg (East to West: High above the central avenue at Z = 0 looking straight down)
+      for (var j = steps; j >= 0; j--) {
+        var v = j / steps;
+        var rx = minX + v * (maxX - minX);
+        waypoints.push(new THREE.Vector3(rx, flightH, 0.0));
+      }
+
+      // 4. Smooth Left-Turn Turnaround at West end
+      waypoints.push(new THREE.Vector3(minX - 30, flightH, -8.0));
+      waypoints.push(new THREE.Vector3(minX - 45, flightH, 0.0));
+      waypoints.push(new THREE.Vector3(minX - 30, flightH, 8.0));
     }
 
     if (waypoints.length < 4) {
       waypoints = [
-        new THREE.Vector3(140, 95, 140),
-        new THREE.Vector3(-140, 85, 140),
-        new THREE.Vector3(-140, 90, -140),
-        new THREE.Vector3(140, 105, -140)
+        new THREE.Vector3(140, 520, 0),
+        new THREE.Vector3(-140, 520, 0),
+        new THREE.Vector3(-140, 520, 0),
+        new THREE.Vector3(140, 520, 0)
       ];
     }
 
@@ -14075,14 +14550,6 @@ var City3DEngine = (function() {
         starField.material.opacity = modeTransition * 0.95;
       }
 
-      // Building Emissive Window Radiance
-      var currentEmissive = modeTransition * 0.90;
-      if (buildingMaterials && buildingMaterials.length > 0) {
-        for (var bm = 0; bm < buildingMaterials.length; bm++) {
-          buildingMaterials[bm].emissiveIntensity = currentEmissive;
-        }
-      }
-
       // Streetlights Night Illumination
       if (streetlightLenses.length > 0) {
         for (var sl = 0; sl < streetlightLenses.length; sl++) {
@@ -14095,7 +14562,7 @@ var City3DEngine = (function() {
         }
       }
 
-      // Unreal Bloom Dynamic Adaptation (Gentle glow, zero text washout)
+      // Unreal Bloom Dynamic Adaptation
       if (bloomPass) {
         bloomPass.strength = modeTransition * 0.65;
         bloomPass.threshold = 1.15;
@@ -14104,7 +14571,18 @@ var City3DEngine = (function() {
       renderer.toneMappingExposure = (1.0 - modeTransition) * 1.35 + modeTransition * 1.0;
     }
 
-    // Dynamic Multi-Channel Cyberpunk Screens & Billboards Animation (Renders on whole building facades)
+    // Update GPU Procedural Building Shader Uniforms (Dynamic 60FPS Compute)
+    if (buildingMaterials && buildingMaterials.length > 0) {
+      for (var bm = 0; bm < buildingMaterials.length; bm++) {
+        var mat = buildingMaterials[bm];
+        if (mat.userData && mat.userData.shader) {
+          mat.userData.shader.uniforms.uTime.value = totalElapsedTime;
+          mat.userData.shader.uniforms.uNightTransition.value = modeTransition;
+        }
+      }
+    }
+
+    // Dynamic Multi-Channel Cyberpunk Screens & Billboards Animation
     updateAnimatedBillboards(totalElapsedTime);
 
     // Neon Conduits Pulsing Wave
@@ -14124,35 +14602,70 @@ var City3DEngine = (function() {
       bItem.sprite.position.y = bItem.tallestPos.y + 12.0 + bob;
     }
 
-    // Airplane Flight Cruise
-    if (isAutoCruising && flightSpline) {
-      cruiseProgress = (cruiseProgress + dt * cruiseSpeed * 0.0024) % 1.0;
-      var camPos = flightSpline.getPointAt(cruiseProgress);
-      camPos.y += Math.sin(totalElapsedTime * 0.55) * 1.6;
+    // Traffic Cars Movement
+    if (trafficCars && trafficCars.length > 0) {
+      for (var tc = 0; tc < trafficCars.length; tc++) {
+        var car = trafficCars[tc];
+        car.mesh.position.x += car.speed * dt;
+        if (car.speed > 0 && car.mesh.position.x > car.maxX) {
+          car.mesh.position.x = car.minX;
+        } else if (car.speed < 0 && car.mesh.position.x < car.minX) {
+          car.mesh.position.x = car.maxX;
+        }
+      }
+    }
 
-      targetBankAngle = -calcBankAngle(flightSpline, cruiseProgress) * 14.0;
-      bankAngle += (targetBankAngle - bankAngle) * 0.05;
+    // Flying AVs Cruising
+    if (flyingAVs && flyingAVs.length > 0) {
+      for (var av = 0; av < flyingAVs.length; av++) {
+        var fav = flyingAVs[av];
+        fav.mesh.position.x += fav.speed * dt;
+        fav.mesh.position.y = fav.baseY + Math.sin(totalElapsedTime * 1.5 + fav.phase) * 1.5;
+        fav.mesh.position.z = fav.baseZ + Math.cos(totalElapsedTime * 0.8 + fav.phase) * 2.0;
+        if (fav.speed > 0 && fav.mesh.position.x > fav.maxX) {
+          fav.mesh.position.x = fav.minX;
+        } else if (fav.speed < 0 && fav.mesh.position.x < fav.minX) {
+          fav.mesh.position.x = fav.maxX;
+        }
+      }
+    }
+
+    // 1 & 4. Airplane High-Altitude Flight Cruise (True Overhead Top-Down Birds-Eye View, Street is Horizontal on Screen)
+    if (isAutoCruising && flightSpline) {
+      cruiseProgress = (cruiseProgress + dt * cruiseSpeed * 0.0022) % 1.0;
+      var camPos = flightSpline.getPointAt(cruiseProgress);
+      var actualFlightH = camPos.y + cruiseAltitudeOffset;
+
+      // Keep Street Horizontally Aligned: Screen Left-Right is X, Screen Top-Down is Z
+      camera.up.set(0, 0, -1);
+      camera.position.set(camPos.x, actualFlightH, camPos.z);
+      camera.lookAt(camPos.x, 0, camPos.z);
+      orbit.target.x = camPos.x;
+      orbit.target.y = 0;
+      orbit.target.z = camPos.z;
 
       if (districtData.length > 0) {
-        var activeIdx = Math.floor(cruiseProgress * districtData.length) % districtData.length;
-        var actDist = districtData[activeIdx];
-        if (actDist) {
-          targetLookAt.copy(actDist.tallestPos || actDist.center || new THREE.Vector3(0, 15, 0));
+        var closestDist = districtData[0];
+        var minDist = Math.abs(camPos.x - closestDist.center.x);
+        for (var dIdx = 1; dIdx < districtData.length; dIdx++) {
+          var curDist = Math.abs(camPos.x - districtData[dIdx].center.x);
+          if (curDist < minDist) {
+            minDist = curDist;
+            closestDist = districtData[dIdx];
+          }
+        }
+        if (closestDist && closestDist.repo) {
           var hudBadge = document.getElementById('city3dCurrentRepoBadge');
-          if (hudBadge && actDist.repo) {
+          if (hudBadge) {
             var stIcon = '✈️';
-            if (actDist.repo.status && actDist.repo.status.conflicted) stIcon = '⚠️';
-            else if (actDist.repo.status && !actDist.repo.status.clean) stIcon = '⚡';
-            hudBadge.textContent = stIcon + ' ' + actDist.repo.name + ' (' + (actDist.repo.totalFiles || 0) + ' files)';
+            if (closestDist.repo.status && closestDist.repo.status.conflicted) stIcon = '⚠️';
+            else if (closestDist.repo.status && !closestDist.repo.status.clean) stIcon = '⚡';
+            hudBadge.textContent = stIcon + ' ' + closestDist.repo.name + ' (' + (closestDist.repo.totalFiles || 0) + ' files)';
           }
         }
       }
-
-      currentLookAt.lerp(targetLookAt, 0.04);
-      camera.position.copy(camPos);
-      camera.lookAt(currentLookAt);
-      camera.rotateZ(bankAngle * Math.PI / 180);
     } else {
+      camera.up.set(0, 1, 0);
       var ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
       var oy = orbit.target.y + orbit.radius * Math.cos(orbit.phi);
       var oz = orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta);
@@ -14198,8 +14711,30 @@ var City3DEngine = (function() {
   function bindEvents() {
     window.addEventListener('resize', handleResize);
 
+    // Prevent browser context menu so right-drag panning works smoothly
+    canvasEl.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+    });
+
+    // Escape Key to Exit Zen Full-Screen Mode
+    window.addEventListener('keydown', function(e) {
+      if ((e.key === 'Escape' || e.keyCode === 27) && isZenMode) {
+        toggleZenMode();
+      }
+    });
+
     canvasEl.addEventListener('pointerdown', function(e) {
-      isDragging = true;
+      if (e.button === 2) {
+        // Right Mouse Button: Pan / Move camera position
+        isRightDragging = true;
+        isDragging = true;
+      } else if (e.button === 0) {
+        // Left Mouse Button: Orbit rotation
+        isLeftDragging = true;
+        isDragging = true;
+      } else {
+        isDragging = true;
+      }
       previousPointer = { x: e.clientX, y: e.clientY };
       clearTimeout(userInteractionTimer);
     });
@@ -14214,20 +14749,59 @@ var City3DEngine = (function() {
       var dy = e.clientY - previousPointer.y;
       previousPointer = { x: e.clientX, y: e.clientY };
 
-      orbit.theta -= dx * 0.006;
-      orbit.phi = Math.max(0.1, Math.min(Math.PI / 2.2, orbit.phi + dy * 0.006));
+      if (isRightDragging) {
+        // Right-Click Drag: Pan camera position horizontally without changing altitude Y
+        if (isAutoCruising) {
+          isAutoCruising = false;
+          updateFlightButton();
+        }
 
-      if (isAutoCruising) {
-        isAutoCruising = false;
-        updateFlightButton();
+        // Calculate dynamic pan scale based on camera FOV and altitude
+        var curHeight = camera.position.y || 500;
+        var hView = 2.0 * Math.tan((camera.fov * Math.PI / 360)) * curHeight;
+        var panScale = hView / (canvasEl.clientHeight || window.innerHeight || 300);
+
+        // Vector pointing right in camera space projected onto horizontal ground
+        var vRight = new THREE.Vector3(camera.matrixWorld.elements[0], 0, camera.matrixWorld.elements[2]).normalize();
+        // Vector pointing up (forward) in camera space projected onto horizontal ground
+        var vUp = new THREE.Vector3(camera.matrixWorld.elements[4], 0, camera.matrixWorld.elements[6]).normalize();
+        if (vUp.lengthSq() < 0.001) {
+          // If looking straight down (top-down), camera forward is -Z
+          vUp = new THREE.Vector3(-camera.matrixWorld.elements[8], 0, -camera.matrixWorld.elements[10]).normalize();
+        }
+
+        var moveX = dx * panScale;
+        var moveY = -dy * panScale;
+
+        var panDelta = new THREE.Vector3()
+          .addScaledVector(vRight, moveX)
+          .addScaledVector(vUp, moveY);
+        panDelta.y = 0; // Strictly keep altitude / height unchanged!
+
+        camera.position.add(panDelta);
+        orbit.target.x -= panDelta.x;
+        orbit.target.y -= panDelta.y;
+        orbit.target.z -= panDelta.z;
+
+      } else if (isLeftDragging) {
+        // Left-Click Drag: Orbit angle rotation
+        orbit.theta -= dx * 0.006;
+        orbit.phi = Math.max(0.1, Math.min(Math.PI / 2.2, orbit.phi + dy * 0.006));
+
+        if (isAutoCruising) {
+          isAutoCruising = false;
+          updateFlightButton();
+        }
       }
     });
 
     window.addEventListener('pointerup', function(e) {
-      isDragging = false;
-      if (hoveredBadge && hoveredBadge.userData && hoveredBadge.userData.repo) {
+      if (isLeftDragging && hoveredBadge && hoveredBadge.userData && hoveredBadge.userData.repo) {
         openRepoDetail(hoveredBadge.userData.repo);
       }
+      isDragging = false;
+      isLeftDragging = false;
+      isRightDragging = false;
       clearTimeout(userInteractionTimer);
       userInteractionTimer = setTimeout(function() {
         if (!isAutoCruising) {
@@ -14239,10 +14813,11 @@ var City3DEngine = (function() {
 
     canvasEl.addEventListener('wheel', function(e) {
       e.preventDefault();
-      orbit.radius = Math.max(60, Math.min(650, orbit.radius + e.deltaY * 0.3));
       if (isAutoCruising) {
-        isAutoCruising = false;
-        updateFlightButton();
+        // Zoom in/out airplane cruising altitude freely with mouse wheel!
+        cruiseAltitudeOffset = Math.max(-120, Math.min(350, cruiseAltitudeOffset + e.deltaY * 0.35));
+      } else {
+        orbit.radius = Math.max(60, Math.min(1250, orbit.radius + e.deltaY * 0.3));
       }
       clearTimeout(userInteractionTimer);
       userInteractionTimer = setTimeout(function() {
@@ -14431,6 +15006,13 @@ var City3DEngine = (function() {
     isZenMode = !isZenMode;
     var homePageEl = document.getElementById('homePage');
     var zenTextEl = document.getElementById('city3dZenText');
+    var zenBtn = document.getElementById('city3dZenBtn');
+
+    if (isZenMode) {
+      window.scrollTo(0, 0);
+    }
+    document.body.classList.toggle('city-3d-zen-active', isZenMode);
+
     if (homePageEl) {
       homePageEl.classList.toggle('zen-mode', isZenMode);
     }
@@ -14440,6 +15022,13 @@ var City3DEngine = (function() {
     if (zenTextEl) {
       zenTextEl.textContent = isZenMode ? (t('city3dOverviewMode') || '恢复概览') : (t('city3dZenMode') || '全景沉浸');
     }
+    if (zenBtn) {
+      zenBtn.classList.toggle('city-3d-btn-active', isZenMode);
+      zenBtn.setAttribute('title', isZenMode ? '退出全景沉浸 (按 Esc 或点击恢复)' : '全景沉浸/显示概览');
+    }
+    setTimeout(handleResize, 30);
+    setTimeout(handleResize, 150);
+    setTimeout(handleResize, 360);
   }
 
   function openRepoDetail(repo) {
