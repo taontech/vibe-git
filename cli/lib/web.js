@@ -5204,13 +5204,7 @@ html[data-theme="ocean"] .calendar-cell[data-global-level="4"] { background: #47
   height: 7px;
   border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-  animation: pulseGlow 2s infinite;
-}
-@keyframes pulseGlow {
-  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  box-shadow: 0 0 6px var(--green);
 }
 .home-hero-title {
   margin: 0 0 14px;
@@ -5890,8 +5884,7 @@ details[open] > .home-all-configs-summary .chevron {
   height: 8px;
   border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 10px var(--green);
-  animation: pulseDot 2s infinite ease-in-out;
+  box-shadow: 0 0 6px var(--green);
 }
 .city-3d-btn {
   display: inline-flex;
@@ -6222,6 +6215,10 @@ body.city-3d-zen-active .home-page {
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                 </span>
                 <span id="city3dFlightText" class="city-3d-btn-text">巡航中</span>
+              </button>
+              <button id="city3dMotionBtn" class="city-3d-btn" type="button" title="开启动态效果 (车辆穿梭/灯光闪烁等，当前为低功耗省电模式)" data-i18n-title="city3dMotion">
+                <span id="city3dMotionIcon" class="city-3d-btn-icon">⚡</span>
+                <span id="city3dMotionText" class="city-3d-btn-text">动态: 关</span>
               </button>
               <button id="city3dDayNightBtn" class="city-3d-btn" type="button" title="昼夜切换" data-i18n-title="city3dDay">
                 <span id="city3dDayNightIcon" class="city-3d-btn-icon">☀️</span>
@@ -7272,6 +7269,11 @@ var I18N = {
     city3dTitle: '3D 城市视角',
     city3dCruise: '巡航飞行',
     city3dCruisePaused: '已暂停飞行',
+    city3dMotion: '动态效果 (车辆/灯光/航行)',
+    city3dMotionOn: '动态: 开',
+    city3dMotionOff: '动态: 关',
+    city3dMotionTitleOn: '关闭动态效果 (切换为低功耗静态模式)',
+    city3dMotionTitleOff: '开启动态效果 (车辆穿梭/灯光闪烁等，当前为低功耗省电模式)',
     city3dDay: '白天模式',
     city3dNight: '夜间模式',
     city3dZenMode: '全景沉浸',
@@ -7623,6 +7625,11 @@ var I18N = {
     city3dTitle: '3D City Aerial Tour',
     city3dCruise: 'Auto Cruise',
     city3dCruisePaused: 'Flight Paused',
+    city3dMotion: 'Motion & Dynamics',
+    city3dMotionOn: 'Motion: On',
+    city3dMotionOff: 'Motion: Off',
+    city3dMotionTitleOn: 'Disable dynamic animations (switch to low-power static mode)',
+    city3dMotionTitleOff: 'Enable dynamic animations (traffic, lights, etc., currently in low-power mode)',
     city3dDay: 'Day Mode',
     city3dNight: 'Night Mode',
     city3dZenMode: 'Zen 3D View',
@@ -11871,6 +11878,14 @@ var City3DEngine = (function() {
   var animationId = null;
   var isInitialized = false;
   var isRunning = false;
+  var isDynamicActive = false; // Default closed (low-power static mode)
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('gmc_city3d_motion') === 'true') {
+      isDynamicActive = true;
+    }
+  } catch(e) {}
+  var renderRequested = false;
+  var dirtyFramesCount = 0;
 
   // Postprocessing & Custom Passes
   var composer = null;
@@ -12205,7 +12220,7 @@ var City3DEngine = (function() {
   var rainCount = 2800;
 
   // Airplane Cruise Flight
-  var isAutoCruising = true;
+  var isAutoCruising = isDynamicActive;
   var cruiseSpeed = 1.0;
   var cruiseProgress = 0.0;
   var cruiseAltitudeOffset = 0;
@@ -12416,6 +12431,8 @@ var City3DEngine = (function() {
 
       bindEvents();
       bindHudControls();
+      updateMotionButtonUI();
+      updateFlightButton();
 
       var currentTheme = (function() {
         try { return localStorage.getItem('gmc_theme') || 'default'; } catch(e) { return 'default'; }
@@ -12425,7 +12442,8 @@ var City3DEngine = (function() {
       isInitialized = true;
       isRunning = true;
       lastTimestamp = performance.now();
-      requestAnimationFrame(animate);
+      resetDynamicEntitiesToStatic();
+      requestRender(10);
 
       if (cachedCityData && cachedCityData.length) {
         buildCity(cachedCityData);
@@ -13768,6 +13786,11 @@ var City3DEngine = (function() {
     buildFlightSpline(districtData);
     if (pendingFocusRepo) {
       focusRepo(pendingFocusRepo);
+    } else {
+      if (!isDynamicActive) {
+        resetDynamicEntitiesToStatic();
+      }
+      requestRender(5);
     }
   }
 
@@ -15040,18 +15063,51 @@ var City3DEngine = (function() {
     }
   }
 
-  function animate(timestamp) {
+  function requestRender(extraFrames) {
+    dirtyFramesCount = Math.max(dirtyFramesCount, typeof extraFrames === 'number' ? extraFrames : 1);
     if (!isRunning) return;
+    if (!renderRequested) {
+      renderRequested = true;
+      animationId = requestAnimationFrame(animate);
+    }
+  }
 
-    animationId = requestAnimationFrame(animate);
+  function resetDynamicEntitiesToStatic() {
+    if (buildingMaterials && buildingMaterials.length > 0) {
+      for (var bm = 0; bm < buildingMaterials.length; bm++) {
+        var mat = buildingMaterials[bm];
+        if (mat.userData && mat.userData.shader) {
+          mat.userData.shader.uniforms.uTime.value = 0.0;
+          mat.userData.shader.uniforms.uNightTransition.value = modeTransition;
+        }
+      }
+    }
+    if (neonConduitMaterials && neonConduitMaterials.length > 0) {
+      for (var nm = 0; nm < neonConduitMaterials.length; nm++) {
+        var nMat = neonConduitMaterials[nm];
+        nMat.opacity = Math.max(0.20, modeTransition * 0.95 + (1.0 - modeTransition) * 0.45);
+      }
+    }
+    for (var bg = 0; bg < repoBadges.length; bg++) {
+      var bItem = repoBadges[bg];
+      bItem.sprite.position.y = bItem.tallestPos.y + 12.0;
+    }
+  }
+
+  function animate(timestamp) {
+    renderRequested = false;
+    if (!isRunning) return;
 
     var dt = Math.min(0.1, (timestamp - lastTimestamp) / 1000);
     lastTimestamp = timestamp;
-    totalElapsedTime += dt;
 
     var targetVal = targetMode === 'night' ? 1.0 : 0.0;
-    if (Math.abs(modeTransition - targetVal) > 0.001) {
-      modeTransition += (targetVal - modeTransition) * 0.06;
+    var hasModeTransition = Math.abs(modeTransition - targetVal) > 0.0005;
+    if (hasModeTransition) {
+      modeTransition += (targetVal - modeTransition) * 0.08;
+      if (Math.abs(modeTransition - targetVal) <= 0.0005) {
+        modeTransition = targetVal;
+      }
 
       // Crystal Clear Studio Background (Zero Fog!)
       var bgDay = new THREE.Color(0x060913);
@@ -15095,76 +15151,27 @@ var City3DEngine = (function() {
       renderer.toneMappingExposure = (1.0 - modeTransition) * 1.35 + modeTransition * 1.0;
     }
 
-    // Update GPU Procedural Building Shader Uniforms (Dynamic 60FPS Compute)
-    if (buildingMaterials && buildingMaterials.length > 0) {
-      for (var bm = 0; bm < buildingMaterials.length; bm++) {
-        var mat = buildingMaterials[bm];
-        if (mat.userData && mat.userData.shader) {
-          mat.userData.shader.uniforms.uTime.value = totalElapsedTime;
-          mat.userData.shader.uniforms.uNightTransition.value = modeTransition;
-        }
-      }
-    }
-
-    // Dynamic Multi-Channel Cyberpunk Screens & Billboards Animation
-    updateAnimatedBillboards(totalElapsedTime);
-
-    // Neon Conduits Pulsing Wave
-    if (neonConduitMaterials && neonConduitMaterials.length > 0) {
-      for (var nm = 0; nm < neonConduitMaterials.length; nm++) {
-        var nMat = neonConduitMaterials[nm];
-        var pOff = nMat.userData ? (nMat.userData.pulseOffset || 0) : 0;
-        var pulse = 0.82 + 0.18 * Math.sin(totalElapsedTime * 4.5 + pOff);
-        nMat.opacity = Math.max(0.20, modeTransition * 0.95 * pulse + (1.0 - modeTransition) * 0.45);
-      }
-    }
-
-    // Badge floating sine bobbing
-    for (var bg = 0; bg < repoBadges.length; bg++) {
-      var bItem = repoBadges[bg];
-      var bob = Math.sin(totalElapsedTime * 2.0 + bg) * 0.6;
-      bItem.sprite.position.y = bItem.tallestPos.y + 12.0 + bob;
-    }
-
-    // Traffic Cars Movement
-    if (trafficCars && trafficCars.length > 0) {
-      for (var tc = 0; tc < trafficCars.length; tc++) {
-        var car = trafficCars[tc];
-        car.mesh.position.x += car.speed * dt;
-        if (car.speed > 0 && car.mesh.position.x > car.maxX) {
-          car.mesh.position.x = car.minX;
-        } else if (car.speed < 0 && car.mesh.position.x < car.minX) {
-          car.mesh.position.x = car.maxX;
-        }
-      }
-    }
-
-    // Flying AVs Cruising
-    if (flyingAVs && flyingAVs.length > 0) {
-      for (var av = 0; av < flyingAVs.length; av++) {
-        var fav = flyingAVs[av];
-        fav.mesh.position.x += fav.speed * dt;
-        fav.mesh.position.y = fav.baseY + Math.sin(totalElapsedTime * 1.5 + fav.phase) * 1.5;
-        fav.mesh.position.z = fav.baseZ + Math.cos(totalElapsedTime * 0.8 + fav.phase) * 2.0;
-        if (fav.speed > 0 && fav.mesh.position.x > fav.maxX) {
-          fav.mesh.position.x = fav.minX;
-        } else if (fav.speed < 0 && fav.mesh.position.x < fav.minX) {
-          fav.mesh.position.x = fav.maxX;
-        }
-      }
-    }
-
-    // Airplane Cruise Flight or Hover Project Target Focus
+    var hasCameraLerp = false;
     if (hoveredDistrict) {
       // Smoothly move orbit.target position to the hovered project (preserve same Y height, Z axis, view angles, and zoom)
       var hPosX = hoveredDistrict.center.x;
       var hPosY = (hoveredDistrict.center && typeof hoveredDistrict.center.y === 'number') ? hoveredDistrict.center.y : 15.0;
       var hPosZ = (hoveredDistrict.center && typeof hoveredDistrict.center.z === 'number') ? hoveredDistrict.center.z : 0;
 
-      var lerpT = Math.min(1.0, dt * 5.5);
-      orbit.target.x += (hPosX - orbit.target.x) * lerpT;
-      orbit.target.y += (hPosY - orbit.target.y) * lerpT;
-      orbit.target.z += (hPosZ - orbit.target.z) * lerpT;
+      var diffX = Math.abs(hPosX - orbit.target.x);
+      var diffY = Math.abs(hPosY - orbit.target.y);
+      var diffZ = Math.abs(hPosZ - orbit.target.z);
+      if (diffX > 0.05 || diffY > 0.05 || diffZ > 0.05) {
+        hasCameraLerp = true;
+        var lerpT = Math.min(1.0, dt * 6.0);
+        orbit.target.x += (hPosX - orbit.target.x) * lerpT;
+        orbit.target.y += (hPosY - orbit.target.y) * lerpT;
+        orbit.target.z += (hPosZ - orbit.target.z) * lerpT;
+      } else {
+        orbit.target.x = hPosX;
+        orbit.target.y = hPosY;
+        orbit.target.z = hPosZ;
+      }
 
       var hudBadgeHover = document.getElementById('city3dCurrentRepoBadge');
       if (hudBadgeHover && hoveredDistrict.repo) {
@@ -15173,7 +15180,8 @@ var City3DEngine = (function() {
         else if (hoveredDistrict.repo.status && !hoveredDistrict.repo.status.clean) stIconH = '⚡';
         hudBadgeHover.textContent = stIconH + ' ' + (hoveredDistrict.repo.name || 'Repo') + ' (' + (hoveredDistrict.repo.totalFiles || 0) + ' files)';
       }
-    } else if (isAutoCruising && flightSpline) {
+    } else if (isAutoCruising && flightSpline && isDynamicActive) {
+      hasCameraLerp = true;
       cruiseProgress = (cruiseProgress + dt * cruiseSpeed * 0.0022) % 1.0;
       var targetPos = flightSpline.getPointAt(cruiseProgress);
       orbit.target.x = targetPos.x;
@@ -15197,6 +15205,78 @@ var City3DEngine = (function() {
             if (closestDist.repo.status && closestDist.repo.status.conflicted) stIcon = '⚠️';
             else if (closestDist.repo.status && !closestDist.repo.status.clean) stIcon = '⚡';
             hudBadge.textContent = stIcon + ' ' + closestDist.repo.name + ' (' + (closestDist.repo.totalFiles || 0) + ' files)';
+          }
+        }
+      }
+    }
+
+    if (isDynamicActive) {
+      totalElapsedTime += dt;
+
+      // Update GPU Procedural Building Shader Uniforms (Dynamic 60FPS Compute)
+      if (buildingMaterials && buildingMaterials.length > 0) {
+        for (var bm = 0; bm < buildingMaterials.length; bm++) {
+          var mat = buildingMaterials[bm];
+          if (mat.userData && mat.userData.shader) {
+            mat.userData.shader.uniforms.uTime.value = totalElapsedTime;
+            mat.userData.shader.uniforms.uNightTransition.value = modeTransition;
+          }
+        }
+      }
+
+      // Dynamic Multi-Channel Cyberpunk Screens & Billboards Animation
+      updateAnimatedBillboards(totalElapsedTime);
+
+      // Neon Conduits Pulsing Wave
+      if (neonConduitMaterials && neonConduitMaterials.length > 0) {
+        for (var nm = 0; nm < neonConduitMaterials.length; nm++) {
+          var nMat = neonConduitMaterials[nm];
+          var pOff = nMat.userData ? (nMat.userData.pulseOffset || 0) : 0;
+          var pulse = 0.82 + 0.18 * Math.sin(totalElapsedTime * 4.5 + pOff);
+          nMat.opacity = Math.max(0.20, modeTransition * 0.95 * pulse + (1.0 - modeTransition) * 0.45);
+        }
+      }
+
+      // Badge floating sine bobbing
+      for (var bg = 0; bg < repoBadges.length; bg++) {
+        var bItem = repoBadges[bg];
+        var bob = Math.sin(totalElapsedTime * 2.0 + bg) * 0.6;
+        bItem.sprite.position.y = bItem.tallestPos.y + 12.0 + bob;
+      }
+
+      // Traffic Cars Movement
+      if (trafficCars && trafficCars.length > 0) {
+        for (var tc = 0; tc < trafficCars.length; tc++) {
+          var car = trafficCars[tc];
+          car.mesh.position.x += car.speed * dt;
+          if (car.speed > 0 && car.mesh.position.x > car.maxX) {
+            car.mesh.position.x = car.minX;
+          } else if (car.speed < 0 && car.mesh.position.x < car.minX) {
+            car.mesh.position.x = car.maxX;
+          }
+        }
+      }
+
+      // Flying AVs Cruising
+      if (flyingAVs && flyingAVs.length > 0) {
+        for (var av = 0; av < flyingAVs.length; av++) {
+          var fav = flyingAVs[av];
+          fav.mesh.position.x += fav.speed * dt;
+          fav.mesh.position.y = fav.baseY + Math.sin(totalElapsedTime * 1.5 + fav.phase) * 1.5;
+          fav.mesh.position.z = fav.baseZ + Math.cos(totalElapsedTime * 0.8 + fav.phase) * 2.0;
+          if (fav.speed > 0 && fav.mesh.position.x > fav.maxX) {
+            fav.mesh.position.x = fav.minX;
+          } else if (fav.speed < 0 && fav.mesh.position.x < fav.minX) {
+            fav.mesh.position.x = fav.maxX;
+          }
+        }
+      }
+    } else {
+      if (hasModeTransition && buildingMaterials && buildingMaterials.length > 0) {
+        for (var sbm = 0; sbm < buildingMaterials.length; sbm++) {
+          var sMat = buildingMaterials[sbm];
+          if (sMat.userData && sMat.userData.shader) {
+            sMat.userData.shader.uniforms.uNightTransition.value = modeTransition;
           }
         }
       }
@@ -15243,6 +15323,18 @@ var City3DEngine = (function() {
     } else {
       renderer.render(scene, camera);
     }
+
+    // Decide whether next animation frame is needed
+    if (isDynamicActive) {
+      requestRender(1);
+    } else if (hasModeTransition || hasCameraLerp || isDragging || dirtyFramesCount > 0) {
+      dirtyFramesCount = Math.max(0, dirtyFramesCount - 1);
+      if (dirtyFramesCount > 0 || hasModeTransition || hasCameraLerp || isDragging) {
+        requestRender(1);
+      }
+    } else {
+      dirtyFramesCount = 0;
+    }
   }
 
   function bindEvents() {
@@ -15284,14 +15376,23 @@ var City3DEngine = (function() {
       }
       previousPointer = { x: e.clientX, y: e.clientY };
       clearTimeout(userInteractionTimer);
+      requestRender(2);
     });
 
     window.addEventListener('pointermove', function(e) {
       var rect = canvasEl.getBoundingClientRect();
+      var inCanvas = (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom);
+
+      if (!isDragging && !inCanvas) {
+        return;
+      }
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
-      if (!isDragging) return;
+      if (!isDragging) {
+        requestRender(2);
+        return;
+      }
       var dx = e.clientX - previousPointer.x;
       var dy = e.clientY - previousPointer.y;
       previousPointer = { x: e.clientX, y: e.clientY };
@@ -15323,6 +15424,13 @@ var City3DEngine = (function() {
         orbit.theta -= dx * 0.006;
         orbit.phi = Math.max(0.01, Math.min(Math.PI / 2.05, orbit.phi + dy * 0.006));
       }
+      requestRender(2);
+    });
+
+    canvasEl.addEventListener('pointerleave', function() {
+      mouse.x = -999;
+      mouse.y = -999;
+      requestRender(2);
     });
 
     window.addEventListener('pointerup', function(e) {
@@ -15333,26 +15441,34 @@ var City3DEngine = (function() {
       isLeftDragging = false;
       isRightDragging = false;
       clearTimeout(userInteractionTimer);
-      userInteractionTimer = setTimeout(function() {
-        if (!isAutoCruising) {
-          isAutoCruising = true;
-          syncCruiseProgressFromCameraX();
-          updateFlightButton();
-        }
-      }, 15000);
+      if (isDynamicActive) {
+        userInteractionTimer = setTimeout(function() {
+          if (!isAutoCruising && isDynamicActive) {
+            isAutoCruising = true;
+            syncCruiseProgressFromCameraX();
+            updateFlightButton();
+            requestRender(1);
+          }
+        }, 15000);
+      }
+      requestRender(3);
     });
 
     canvasEl.addEventListener('wheel', function(e) {
       e.preventDefault();
       orbit.radius = Math.max(40, Math.min(850, orbit.radius + e.deltaY * 0.3));
       clearTimeout(userInteractionTimer);
-      userInteractionTimer = setTimeout(function() {
-        if (!isAutoCruising) {
-          isAutoCruising = true;
-          syncCruiseProgressFromCameraX();
-          updateFlightButton();
-        }
-      }, 15000);
+      if (isDynamicActive) {
+        userInteractionTimer = setTimeout(function() {
+          if (!isAutoCruising && isDynamicActive) {
+            isAutoCruising = true;
+            syncCruiseProgressFromCameraX();
+            updateFlightButton();
+            requestRender(1);
+          }
+        }, 15000);
+      }
+      requestRender(5);
     }, { passive: false });
   }
 
@@ -15494,6 +15610,49 @@ var City3DEngine = (function() {
     }
   }
 
+  function updateMotionButtonUI() {
+    var btn = document.getElementById('city3dMotionBtn');
+    var iconEl = document.getElementById('city3dMotionIcon');
+    var textEl = document.getElementById('city3dMotionText');
+    if (!btn) return;
+    if (isDynamicActive) {
+      btn.classList.add('city-3d-btn-active');
+      if (iconEl) iconEl.textContent = '⚡';
+      if (textEl) textEl.textContent = t('city3dMotionOn') || '动态: 开';
+      btn.setAttribute('title', t('city3dMotionTitleOn') || '关闭动态效果 (切换为低功耗静态模式)');
+    } else {
+      btn.classList.remove('city-3d-btn-active');
+      if (iconEl) iconEl.textContent = '💤';
+      if (textEl) textEl.textContent = t('city3dMotionOff') || '动态: 关';
+      btn.setAttribute('title', t('city3dMotionTitleOff') || '开启动态效果 (车辆穿梭/灯光闪烁等，当前为低功耗省电模式)');
+    }
+    updateHoveredBtnWidth(btn);
+  }
+
+  function setMotion(enabled) {
+    isDynamicActive = !!enabled;
+    if (!isDynamicActive) {
+      isAutoCruising = false;
+      clearTimeout(userInteractionTimer);
+      updateFlightButton();
+    }
+    try {
+      localStorage.setItem('gmc_city3d_motion', isDynamicActive ? 'true' : 'false');
+    } catch(e) {}
+    updateMotionButtonUI();
+    if (isDynamicActive) {
+      lastTimestamp = performance.now();
+      requestRender(1);
+    } else {
+      resetDynamicEntitiesToStatic();
+      requestRender(3);
+    }
+  }
+
+  function toggleMotion() {
+    setMotion(!isDynamicActive);
+  }
+
   function bindHudControls() {
     initCity3dButtonAnimations();
 
@@ -15503,6 +15662,15 @@ var City3DEngine = (function() {
         e.preventDefault();
         toggleFlight();
       });
+    }
+
+    var motionBtn = document.getElementById('city3dMotionBtn');
+    if (motionBtn) {
+      motionBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        toggleMotion();
+      });
+      updateMotionButtonUI();
     }
 
     var dayNightBtn = document.getElementById('city3dDayNightBtn');
@@ -15599,6 +15767,7 @@ var City3DEngine = (function() {
       }
     }
     updateAOButtonUI();
+    requestRender(3);
   }
 
   function cycleAOMode() {
@@ -15629,17 +15798,23 @@ var City3DEngine = (function() {
       }
       updateHoveredBtnWidth(btn);
     }
+    requestRender(3);
   }
 
   function toggleFlight() {
     isAutoCruising = !isAutoCruising;
     if (isAutoCruising) {
+      if (!isDynamicActive) {
+        setMotion(true);
+      }
       if (!flightSpline) {
         buildFlightSpline(districtData);
       }
       syncCruiseProgressFromCameraX();
+      requestRender(1);
     } else {
       syncOrbitFromCamera();
+      requestRender(3);
     }
     updateFlightButton();
   }
@@ -15675,6 +15850,7 @@ var City3DEngine = (function() {
       btn.setAttribute('title', targetMode === 'night' ? (t('city3dNight') || '夜间模式') : (t('city3dDay') || '白天模式'));
       updateHoveredBtnWidth(btn);
     }
+    requestRender(50);
   }
 
   function syncWithTheme(themeId) {
@@ -15714,6 +15890,7 @@ var City3DEngine = (function() {
     setTimeout(handleResize, 30);
     setTimeout(handleResize, 150);
     setTimeout(handleResize, 360);
+    requestRender(5);
   }
 
   function openRepoDetail(repo) {
@@ -15748,6 +15925,7 @@ var City3DEngine = (function() {
         easing: 'easeOutCubic'
       });
     }
+    requestRender(3);
   }
 
   function closeRepoDetail() {
@@ -15770,6 +15948,7 @@ var City3DEngine = (function() {
     } else {
       repoCardEl.hidden = true;
     }
+    requestRender(3);
   }
 
   function handleResize() {
@@ -15806,10 +15985,12 @@ var City3DEngine = (function() {
     if (fxaaPass && fxaaPass.uniforms && fxaaPass.uniforms['resolution']) {
       fxaaPass.uniforms['resolution'].value.set(1.0 / rw, 1.0 / rh);
     }
+    requestRender(3);
   }
 
   function pause() {
     isRunning = false;
+    renderRequested = false;
     if (animationId) {
       cancelAnimationFrame(animationId);
       animationId = null;
@@ -15825,7 +16006,11 @@ var City3DEngine = (function() {
       isRunning = true;
       lastTimestamp = performance.now();
       handleResize();
-      requestAnimationFrame(animate);
+      if (isDynamicActive) {
+        requestRender(1);
+      } else {
+        requestRender(5);
+      }
     }
     setTimeout(handleResize, 60);
   }
@@ -15849,6 +16034,7 @@ var City3DEngine = (function() {
     if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['aoRadius']) {
       gtaoPass.uniforms['aoRadius'].value = r;
     }
+    requestRender(3);
   }
 
   function setGTAOIntensity(intensity) {
@@ -15857,6 +16043,7 @@ var City3DEngine = (function() {
     if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['aoIntensity']) {
       gtaoPass.uniforms['aoIntensity'].value = i;
     }
+    requestRender(3);
   }
 
   function setEDLParams(opts) {
@@ -15874,6 +16061,7 @@ var City3DEngine = (function() {
       GTAO_CONFIG.sobelStrength = opts.sobelStrength;
       gtaoPass.uniforms['sobelStrength'].value = opts.sobelStrength;
     }
+    requestRender(3);
   }
 
   function focusRepo(repoPathOrName) {
@@ -15900,6 +16088,7 @@ var City3DEngine = (function() {
 
     if (target) {
       hoveredDistrict = target;
+      requestRender(50);
     }
     return target;
   }
@@ -15908,9 +16097,12 @@ var City3DEngine = (function() {
     pendingFocusRepo = '';
     if (hoveredDistrict) {
       hoveredDistrict = null;
-      isAutoCruising = true;
-      syncCruiseProgressFromCameraX();
-      updateFlightButton();
+      if (isDynamicActive) {
+        isAutoCruising = true;
+        syncCruiseProgressFromCameraX();
+        updateFlightButton();
+      }
+      requestRender(40);
     }
   }
 
@@ -15921,6 +16113,10 @@ var City3DEngine = (function() {
     unfocusRepo: unfocusRepo,
     setDayNight: setDayNight,
     toggleDayNight: toggleDayNight,
+    toggleMotion: toggleMotion,
+    setMotion: setMotion,
+    getMotion: function() { return isDynamicActive; },
+    requestRender: requestRender,
     toggleGTAO: toggleGTAO,
     setAOMode: setAOMode,
     cycleAOMode: cycleAOMode,
