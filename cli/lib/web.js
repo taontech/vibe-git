@@ -14135,25 +14135,24 @@ var City3DEngine = (function() {
   }
 
   // Create Procedural Facade Material with Dynamic GPU Window Synthesis Shader
-  function createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, isTallest, colHex, isGlass, bw, bd, bHeight) {
+  function createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, colHex, isGlass, bw, bd, bHeight) {
     var bayVariants = [4, 6, 8, 10, 12, 14];
-    var gridBays = isTallest ? 7 : bayVariants[(styleSeed % bayVariants.length)];
-    var gridFloors = isTallest ? Math.max(12, Math.min(28, Math.round(bHeight / 2.6))) : Math.max(4, Math.min(28, Math.round(bHeight / (3.2 + (styleSeed % 3) * 0.8))));
+    var gridBays = bayVariants[(styleSeed % bayVariants.length)];
+    var gridFloors = Math.max(4, Math.min(28, Math.round(bHeight / (3.2 + (styleSeed % 3) * 0.8))));
 
     var repoActivity = computeRepoActivity(repo);
-    var contribTex = createContributionDataTexture(repo, gridBays, gridFloors, styleSeed, isTallest);
+    var dummyTex = getDummyEmissiveTexture();
 
     var mat = new THREE.MeshStandardMaterial({
       color: colHex,
       roughness: isGlass ? 0.22 : 0.65,
       metalness: isGlass ? 0.80 : 0.20,
       emissive: new THREE.Color(0xffffff),
-      emissiveMap: contribTex,
+      emissiveMap: dummyTex,
       emissiveIntensity: 0.0 // Fully computed on GPU shader
     });
 
     mat.userData = {
-      isTallest: isTallest,
       styleSeed: styleSeed,
       bIndex: bIndex,
       gridBays: gridBays,
@@ -14165,24 +14164,20 @@ var City3DEngine = (function() {
     mat.onBeforeCompile = function(shader) {
       shader.uniforms.uTime = { value: totalElapsedTime };
       shader.uniforms.uSeed = { value: (styleSeed % 1000) * 1.37 + bIndex * 7.19 };
-      shader.uniforms.uIsTallest = { value: isTallest ? 1.0 : 0.0 };
       shader.uniforms.uRepoActivity = { value: repoActivity };
       shader.uniforms.uWindowGrid = { value: new THREE.Vector2(gridBays, gridFloors) };
       shader.uniforms.uNightTransition = { value: modeTransition };
       shader.uniforms.uOvertimeFreq = { value: ((styleSeed % 5 === 0) ? 0.75 : ((styleSeed % 3 === 0) ? 0.04 : 0.20)) };
-      shader.uniforms.uContribMap = { value: contribTex };
       mat.userData.shader = shader;
 
       var nl = String.fromCharCode(10);
       var headerChunk = [
         'uniform float uTime;',
         'uniform float uSeed;',
-        'uniform float uIsTallest;',
         'uniform float uRepoActivity;',
         'uniform vec2 uWindowGrid;',
         'uniform float uNightTransition;',
-        'uniform float uOvertimeFreq;',
-        'uniform sampler2D uContribMap;'
+        'uniform float uOvertimeFreq;'
       ].join(nl);
 
       shader.fragmentShader = headerChunk + nl + shader.fragmentShader;
@@ -14198,67 +14193,38 @@ var City3DEngine = (function() {
         '  float padY = 0.20;',
         '  if (gUv.x > padX && gUv.x < (1.0 - padX) && gUv.y > padY && gUv.y < (1.0 - padY)) {',
         '    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.005, 0.008, 0.012), uNightTransition);',
-        '    vec2 cNorm = (cId + vec2(0.5, 0.5)) / uWindowGrid;',
-        '    vec4 cData = texture2D(uContribMap, cNorm);',
         '    float cHash = fract(sin(dot(cId + vec2(uSeed * 13.17, uSeed * 37.89), vec2(12.9898, 78.233))) * 43758.5453);',
         '    float fHash = fract(sin((cId.y + uSeed * 41.53) * 12.9898) * 43758.5453);',
         '    bool isLit = false;',
         '    vec3 wCol = vec3(1.0, 0.94, 0.68);',
         '    float br = 0.75;',
-        '    if (uIsTallest > 0.5) {',
-        '      float commitLevel = cData.r;',
-        '      if (commitLevel > 0.01) {',
-        '        isLit = true;',
-        '        if (commitLevel >= 0.85) {',
-        '          wCol = vec3(0.95, 1.0, 1.0);',
-        '          br = 0.95;',
-        '        } else if (commitLevel >= 0.60) {',
-        '          wCol = vec3(0.20, 0.92, 0.60);',
-        '          br = 0.85;',
-        '        } else if (commitLevel >= 0.35) {',
-        '          wCol = vec3(0.35, 0.88, 0.45);',
-        '          br = 0.75;',
-        '        } else {',
-        '          wCol = vec3(1.0, 0.94, 0.62);',
-        '          br = 0.65;',
-        '        }',
+        '    float fAct = (fHash > 0.84) ? (0.65 + uRepoActivity * 0.25) : ((fHash < 0.28) ? 0.04 : (uOvertimeFreq + uRepoActivity * 0.18));',
+        '    isLit = (cHash < fAct);',
+        '    if (isLit) {',
+        '      float tVal = fract(cHash * 91.3);',
+        '      if (tVal > 0.78) {',
+        '        wCol = vec3(0.88, 0.96, 1.0);',
+        '        br = 0.70;',
+        '      } else if (tVal > 0.50) {',
+        '        wCol = vec3(1.0, 0.76, 0.42);',
+        '        br = 0.65;',
+        '      } else if (tVal > 0.38) {',
+        '        wCol = vec3(0.0, 0.95, 1.0);',
+        '        br = 0.60 + 0.30 * sin(uTime * 3.8 + cHash * 20.0);',
+        '      } else if (tVal < (0.12 + uRepoActivity * 0.15)) {',
+        '        wCol = vec3(0.30, 0.90, 0.55);',
+        '        br = 0.85;',
         '      } else {',
-        '        float fAct = 0.08 + uRepoActivity * 0.12;',
-        '        isLit = (cHash < fAct);',
-        '        if (isLit) {',
-        '          wCol = vec3(0.85, 0.92, 1.0);',
-        '          br = 0.55;',
-        '        }',
-        '      }',
-        '    } else {',
-        '      float fAct = (fHash > 0.84) ? (0.65 + uRepoActivity * 0.25) : ((fHash < 0.28) ? 0.04 : (uOvertimeFreq + uRepoActivity * 0.18));',
-        '      isLit = (cHash < fAct);',
-        '      if (isLit) {',
-        '        float tVal = fract(cHash * 91.3);',
-        '        if (tVal > 0.78) {',
-        '          wCol = vec3(0.88, 0.96, 1.0);',
-        '          br = 0.70;',
-        '        } else if (tVal > 0.50) {',
-        '          wCol = vec3(1.0, 0.76, 0.42);',
-        '          br = 0.65;',
-        '        } else if (tVal > 0.38) {',
-        '          wCol = vec3(0.0, 0.95, 1.0);',
-        '          br = 0.60 + 0.30 * sin(uTime * 3.8 + cHash * 20.0);',
-        '        } else if (tVal < (0.12 + uRepoActivity * 0.15)) {',
-        '          wCol = vec3(0.30, 0.90, 0.55);',
-        '          br = 0.85;',
-        '        } else {',
-        '          wCol = vec3(1.0, 0.94, 0.68);',
-        '          br = 0.75;',
-        '        }',
+        '        wCol = vec3(1.0, 0.94, 0.68);',
+        '        br = 0.75;',
         '      }',
         '    }',
         '    if (isLit) {',
         '      float normY = (gUv.y - padY) / (1.0 - 2.0 * padY);',
-        '      float cGlow = 0.7 + 0.35 * normY;',
+        '      float cGlow = 0.70 + 0.30 * normY;',
         '      float bld = 0.85 + 0.15 * step(0.35, fract(normY * 4.0));',
         '      float flk = 1.0 + 0.05 * sin(uTime * 4.2 + cHash * 50.0);',
-        '      totalEmissiveRadiance += wCol * (br * cGlow * bld * flk * uNightTransition * 2.5);',
+        '      totalEmissiveRadiance += wCol * (br * cGlow * bld * flk * uNightTransition * 2.8);',
         '    } else if (cHash < (0.22 + uRepoActivity * 0.08)) {',
         '      totalEmissiveRadiance += vec3(0.15, 0.45, 0.85) * (0.12 * uNightTransition);',
         '    }',
@@ -14329,7 +14295,7 @@ var City3DEngine = (function() {
       metalness: 0.75
     });
 
-    var facadeMat = createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, isTallest, colHex, isGlass, bw, bd, bHeight);
+    var facadeMat = createBuildingFacadeMaterial(repo, item, bIndex, styleSeed, colHex, isGlass, bw, bd, bHeight);
     var multiMats = [facadeMat, facadeMat, roofMat, groundMat, facadeMat, facadeMat];
 
     var megaFaceIdx = -1;
