@@ -13252,7 +13252,7 @@ var City3DEngine = (function() {
     ctx.quadraticCurveTo(x, y, x + r, y);
     ctx.closePath();
 
-    ctx.fillStyle = '#320707';
+    ctx.fillStyle = '#dddddd';
     ctx.fill();
 
     // 2. High-Tech Dual Border (Outer neon accent + inner subtle bevel)
@@ -13310,7 +13310,7 @@ var City3DEngine = (function() {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.font = '700 84px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#111111';
     var displayName = repoName || 'repo';
     if (displayName.length > 18) displayName = displayName.slice(0, 16) + '...';
     ctx.fillText(displayName, 195, 122);
@@ -13346,7 +13346,7 @@ var City3DEngine = (function() {
 
     // 6. Meta File Count & Size
     ctx.font = '500 32px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = '#eeeeee';
+    ctx.fillStyle = '#222222';
     var sizeStr = formatBytes(maxFileSize || 0);
     ctx.fillText('·  ' + (totalFiles || 0) + ' files  (' + sizeStr + ')', pillX + pillW + 20, pillY + pillH / 2 + 1);
     ctx.restore();
@@ -14255,10 +14255,10 @@ var City3DEngine = (function() {
         '    }',
         '    if (isLit) {',
         '      float normY = (gUv.y - padY) / (1.0 - 2.0 * padY);',
-        '      float cGlow = 0.45 + 0.55 * normY;',
-        '      float bld = 0.75 + 0.25 * step(0.35, fract(normY * 4.0));',
+        '      float cGlow = 0.7 + 0.35 * normY;',
+        '      float bld = 0.85 + 0.15 * step(0.35, fract(normY * 4.0));',
         '      float flk = 1.0 + 0.05 * sin(uTime * 4.2 + cHash * 50.0);',
-        '      totalEmissiveRadiance += wCol * (br * cGlow * bld * flk * uNightTransition * 1.5);',
+        '      totalEmissiveRadiance += wCol * (br * cGlow * bld * flk * uNightTransition * 2.5);',
         '    } else if (cHash < (0.22 + uRepoActivity * 0.08)) {',
         '      totalEmissiveRadiance += vec3(0.15, 0.45, 0.85) * (0.12 * uNightTransition);',
         '    }',
@@ -15122,9 +15122,9 @@ var City3DEngine = (function() {
 
       // Unreal Bloom Dynamic Adaptation
       if (bloomPass) {
-        bloomPass.strength = modeTransition * 0.65;
-        bloomPass.threshold = 0.7;
-        bloomPass.radius = 0.25;
+        bloomPass.strength = modeTransition * 0.75;
+        bloomPass.threshold = 0.9;
+        bloomPass.radius = 0.35;
       }
       renderer.toneMappingExposure = (1.0 - modeTransition) * 1.35 + modeTransition * 1.0;
     }
