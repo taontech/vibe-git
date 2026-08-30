@@ -364,6 +364,17 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname === '/api/contributions') {
+      var repoQuery = parsed.query && parsed.query.repo ? String(parsed.query.repo) : '';
+      if (!repoQuery) {
+        sendJson(res, { globalContributions: globalContributions(null, null) });
+      } else {
+        var c = contributions(repoQuery);
+        sendJson(res, { repo: repoQuery, contributions: c, globalContributions: globalContributions(repoQuery, c) });
+      }
+      return;
+    }
+
     if (parsed.pathname === '/api/repositories/resolve') {
       sendJson(res, { repository: findRecentRepositoryByName(parsed.query.name) });
       return;
@@ -2217,13 +2228,18 @@ function getRepoQuickStatus(repoPath, force) {
 
 function attachRepoStatus(repositories, force) {
   if (!Array.isArray(repositories)) return [];
+  var cache = loadContributionsCache();
   return repositories.map(function (item) {
+    var norm = '';
+    try { norm = item.path ? path.resolve(item.path) : ''; } catch (e) { norm = item.path || ''; }
+    var cached = (norm && cache[norm] && cache[norm].counts) ? cache[norm].counts : null;
     return {
       name: item.name,
       path: item.path,
       lastVisited: item.lastVisited,
       lastCommitTime: item.lastCommitTime,
-      status: getRepoQuickStatus(item.path, force)
+      status: getRepoQuickStatus(item.path, force),
+      contributions: cached || (item.path ? contributions(item.path) : {})
     };
   });
 }
@@ -4867,7 +4883,7 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .calendar-weekday { height: var(--calendar-cell); color: var(--muted); font-size: 10px; line-height: var(--calendar-cell); text-align: right; white-space: nowrap; }
 .calendar-weeks { grid-column: 2; grid-row: 2; display: flex; gap: var(--calendar-gap); align-items: flex-start; overflow: visible; min-width: 0; }
 .calendar-col { display: flex; flex-direction: column; gap: var(--calendar-gap); flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); min-width: 0; max-width: var(--calendar-cell); box-sizing: border-box; }
-.calendar-cell { flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); height: var(--calendar-cell); border-radius: 2px; background: var(--line-soft); }
+.calendar-cell { flex: 0 0 var(--calendar-cell); width: var(--calendar-cell); height: var(--calendar-cell); border-radius: 2px; background: var(--line-soft); transition: background .18s ease, transform .12s ease; }
 .calendar-cell.empty { background: transparent; }
 .calendar-cell[data-global-level="1"] { background: #dbe2ea; }
 .calendar-cell[data-global-level="2"] { background: #cbd5e1; }
@@ -10282,6 +10298,29 @@ function bindSidebarEvents() {
       openRepoFromHistory(item.getAttribute('data-repo'));
     }
   });
+
+  list.addEventListener('mouseover', function(event) {
+    var item = event.target.closest('.repo-item');
+    var related = event.relatedTarget ? event.relatedTarget.closest('.repo-item') : null;
+    if (item && item !== related) {
+      var repoPath = item.getAttribute('data-repo');
+      var nameEl = item.querySelector('.repo-item-name');
+      var name = nameEl ? nameEl.textContent : '';
+      handleRepoHoverEnter(repoPath, name);
+    }
+  });
+
+  list.addEventListener('mouseout', function(event) {
+    var item = event.target.closest('.repo-item');
+    var related = event.relatedTarget ? event.relatedTarget.closest('.repo-item') : null;
+    if (item && !related) {
+      handleRepoHoverLeave(item.getAttribute('data-repo'));
+    }
+  });
+
+  list.addEventListener('mouseleave', function() {
+    handleRepoHoverLeave();
+  });
 }
 
 function openRepoFromHistory(repoPath) {
@@ -10313,6 +10352,8 @@ function switchRepository(repoPath, options) {
   } catch (e) {}
 
   updateSidebarActive();
+  currentHoveredRepo = '';
+  if (typeof City3DEngine !== 'undefined') City3DEngine.unfocusRepo();
 
   clearTimeout(state.timer);
   clearTimeout(state.graphTimer);
@@ -10585,23 +10626,129 @@ function renderHomeRepoMatrix(repositories) {
   grid.innerHTML = html;
 }
 
-function renderHomeCalendar(globalContribs) {
-  globalContribs = globalContribs || {};
-  renderCalendar(globalContribs, globalContribs, 'homeCalendar');
+var clientRepoContributionsCache = {};
+
+function getRepoContributions(repoPath) {
+  if (!repoPath) return null;
+  if (clientRepoContributionsCache[repoPath]) return clientRepoContributionsCache[repoPath];
+
+  var checkItem = function(it) {
+    if (it && (it.path === repoPath || it.name === repoPath) && it.contributions) {
+      clientRepoContributionsCache[repoPath] = it.contributions;
+      return it.contributions;
+    }
+    return null;
+  };
+
+  if (state.repoHistory && state.repoHistory.length) {
+    for (var i = 0; i < state.repoHistory.length; i++) {
+      var c1 = checkItem(state.repoHistory[i]);
+      if (c1) return c1;
+    }
+  }
+
+  if (state.gitOverview && state.gitOverview.cityData && state.gitOverview.cityData.length) {
+    for (var j = 0; j < state.gitOverview.cityData.length; j++) {
+      var c2 = checkItem(state.gitOverview.cityData[j]);
+      if (c2) return c2;
+    }
+  }
+
+  if (state.gitOverview && state.gitOverview.repositories && state.gitOverview.repositories.length) {
+    for (var k = 0; k < state.gitOverview.repositories.length; k++) {
+      var c3 = checkItem(state.gitOverview.repositories[k]);
+      if (c3) return c3;
+    }
+  }
+
+  return null;
+}
+
+function fetchRepoContributions(repoPath, cb) {
+  if (!repoPath) return;
+  fetch('/api/contributions?repo=' + encodeURIComponent(repoPath))
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      if (data && data.contributions) {
+        clientRepoContributionsCache[repoPath] = data.contributions;
+        if (typeof cb === 'function') cb(data.contributions);
+      }
+    })
+    .catch(function(e) {
+      console.warn('Failed to fetch contributions for repo:', e);
+    });
+}
+
+var currentHoveredRepo = '';
+
+function handleRepoHoverEnter(repoPath, name) {
+  if (!repoPath) return;
+  currentHoveredRepo = repoPath;
+
+  // 1. In 3D City: move camera position above this hovered project
+  if (typeof City3DEngine !== 'undefined') {
+    City3DEngine.focusRepo(repoPath);
+  }
+
+  // 2. If on home overview page, update global contribution calendar to match this project's detail calendar
+  // (days with contributions in this project are green; days with no contributions in this project but contributions elsewhere are grayscale)
+  if (!targetRepo) {
+    var globalContribs = (state.gitOverview && state.gitOverview.globalContributions) || state.globalContributions || {};
+    var displayName = name || repoDisplayName(repoPath);
+    var repoContribs = getRepoContributions(repoPath);
+
+    renderHomeCalendar(globalContribs, repoContribs, displayName);
+
+    if (!repoContribs) {
+      fetchRepoContributions(repoPath, function(c) {
+        if (currentHoveredRepo === repoPath && !targetRepo) {
+          renderHomeCalendar(globalContribs, c, displayName);
+        }
+      });
+    }
+  }
+}
+
+function handleRepoHoverLeave(repoPath) {
+  if (repoPath && currentHoveredRepo && repoPath !== currentHoveredRepo) return;
+  currentHoveredRepo = '';
+
+  // 1. Resume 3D City auto cruising
+  if (typeof City3DEngine !== 'undefined') {
+    City3DEngine.unfocusRepo();
+  }
+
+  // 2. Restore global contribution calendar to full green state
+  if (!targetRepo) {
+    var globalContribs = (state.gitOverview && state.gitOverview.globalContributions) || state.globalContributions || {};
+    renderHomeCalendar(globalContribs);
+  }
+}
+
+function renderHomeCalendar(globalContribs, repoContribs, repoName) {
+  globalContribs = globalContribs || (state.gitOverview && state.gitOverview.globalContributions) || state.globalContributions || {};
+  var activeContribs = repoContribs || globalContribs;
+  renderCalendar(activeContribs, globalContribs, 'homeCalendar');
 
   var metaEl = $('homeCalendarMeta');
   if (!metaEl) return;
 
   var total = 0;
   var activeDays = 0;
-  Object.keys(globalContribs).forEach(function(k) {
-    var val = globalContribs[k] || 0;
+  Object.keys(activeContribs).forEach(function(k) {
+    var val = activeContribs[k] || 0;
     total += val;
     if (val > 0) activeDays++;
   });
 
-  metaEl.innerHTML = '<span>' + escapeHtml(t('totalCommits')) + ': <strong>' + total + '</strong></span>' +
-    '<span>' + escapeHtml(t('activeDays')) + ': <strong>' + activeDays + '</strong></span>';
+  if (repoName && repoContribs) {
+    metaEl.innerHTML = '<span><strong style="color:var(--accent);">' + escapeHtml(repoName) + '</strong></span>' +
+      '<span>' + escapeHtml(t('totalCommits')) + ': <strong>' + total + '</strong></span>' +
+      '<span>' + escapeHtml(t('activeDays')) + ': <strong>' + activeDays + '</strong></span>';
+  } else {
+    metaEl.innerHTML = '<span>' + escapeHtml(t('totalCommits')) + ': <strong>' + total + '</strong></span>' +
+      '<span>' + escapeHtml(t('activeDays')) + ': <strong>' + activeDays + '</strong></span>';
+  }
 }
 
 function renderGlobalConfigTable(configs) {
@@ -10638,6 +10785,29 @@ function bindHomePageEvents() {
           openRepoFromHistory(repoPath);
         }
       }
+    });
+
+    matrixGrid.addEventListener('mouseover', function(event) {
+      var card = event.target.closest('.home-matrix-card');
+      var related = event.relatedTarget ? event.relatedTarget.closest('.home-matrix-card') : null;
+      if (card && card !== related) {
+        var repoPath = card.getAttribute('data-repo');
+        var nameEl = card.querySelector('.home-matrix-card-title span');
+        var name = nameEl ? nameEl.textContent : '';
+        handleRepoHoverEnter(repoPath, name);
+      }
+    });
+
+    matrixGrid.addEventListener('mouseout', function(event) {
+      var card = event.target.closest('.home-matrix-card');
+      var related = event.relatedTarget ? event.relatedTarget.closest('.home-matrix-card') : null;
+      if (card && !related) {
+        handleRepoHoverLeave(card.getAttribute('data-repo'));
+      }
+    });
+
+    matrixGrid.addEventListener('mouseleave', function() {
+      handleRepoHoverLeave();
     });
   }
 
@@ -11860,6 +12030,8 @@ var City3DEngine = (function() {
   var raycaster = null;
   var mouse = null;
   var hoveredBadge = null;
+  var hoveredDistrict = null;
+  var pendingFocusRepo = '';
 
   // Data cache
   var cachedCityData = null;
@@ -13399,6 +13571,9 @@ var City3DEngine = (function() {
     buildFlyingAVs(totalCityW, totalCityD);
     buildGroundMist(cols, rows, stepX, stepZ, originX, originZ);
     buildFlightSpline(districtData);
+    if (pendingFocusRepo) {
+      focusRepo(pendingFocusRepo);
+    }
   }
 
   function buildRoadNetwork(cols, rows, stepX, stepZ, originX, originZ, BW, BD, RW, totalW, totalD) {
@@ -14818,8 +14993,26 @@ var City3DEngine = (function() {
       }
     }
 
-    // Airplane Cruise Flight (Sphere center moves along the flight spline, camera orientation is preserved)
-    if (isAutoCruising && flightSpline) {
+    // Airplane Cruise Flight or Hover Project Target Focus
+    if (hoveredDistrict) {
+      // Smoothly move orbit.target position to the hovered project (preserve same Y height, Z axis, view angles, and zoom)
+      var hPosX = hoveredDistrict.center.x;
+      var hPosY = (hoveredDistrict.center && typeof hoveredDistrict.center.y === 'number') ? hoveredDistrict.center.y : 15.0;
+      var hPosZ = (hoveredDistrict.center && typeof hoveredDistrict.center.z === 'number') ? hoveredDistrict.center.z : 0;
+
+      var lerpT = Math.min(1.0, dt * 5.5);
+      orbit.target.x += (hPosX - orbit.target.x) * lerpT;
+      orbit.target.y += (hPosY - orbit.target.y) * lerpT;
+      orbit.target.z += (hPosZ - orbit.target.z) * lerpT;
+
+      var hudBadgeHover = document.getElementById('city3dCurrentRepoBadge');
+      if (hudBadgeHover && hoveredDistrict.repo) {
+        var stIconH = '📍';
+        if (hoveredDistrict.repo.status && hoveredDistrict.repo.status.conflicted) stIconH = '⚠️';
+        else if (hoveredDistrict.repo.status && !hoveredDistrict.repo.status.clean) stIconH = '⚡';
+        hudBadgeHover.textContent = stIconH + ' ' + (hoveredDistrict.repo.name || 'Repo') + ' (' + (hoveredDistrict.repo.totalFiles || 0) + ' files)';
+      }
+    } else if (isAutoCruising && flightSpline) {
       cruiseProgress = (cruiseProgress + dt * cruiseSpeed * 0.0022) % 1.0;
       var targetPos = flightSpline.getPointAt(cruiseProgress);
       orbit.target.x = targetPos.x;
@@ -14907,6 +15100,11 @@ var City3DEngine = (function() {
     });
 
     canvasEl.addEventListener('pointerdown', function(e) {
+      if (hoveredDistrict) {
+        hoveredDistrict = null;
+        pendingFocusRepo = '';
+        syncOrbitFromCamera();
+      }
       if (isAutoCruising && e.button === 2) {
         isAutoCruising = false;
         updateFlightButton();
@@ -15517,9 +15715,49 @@ var City3DEngine = (function() {
     }
   }
 
+  function focusRepo(repoPathOrName) {
+    if (!repoPathOrName) return null;
+    pendingFocusRepo = repoPathOrName;
+    if (!districtData || districtData.length === 0) return null;
+
+    var target = null;
+    var raw = String(repoPathOrName).trim();
+    var normalized = raw.replace(/[\\\/]+$/, '').toLowerCase();
+    var baseName = (raw.split(/[\\\/]/).pop() || '').toLowerCase();
+
+    for (var i = 0; i < districtData.length; i++) {
+      var d = districtData[i];
+      if (!d || !d.repo) continue;
+      var dPath = (d.repo.path || '').replace(/[\\\/]+$/, '').toLowerCase();
+      var dName = (d.repo.name || '').toLowerCase();
+      var dBase = (dPath.split(/[\\\/]/).pop() || '').toLowerCase();
+      if (dPath === normalized || dName === normalized || (baseName && (dName === baseName || dBase === baseName))) {
+        target = d;
+        break;
+      }
+    }
+
+    if (target) {
+      hoveredDistrict = target;
+    }
+    return target;
+  }
+
+  function unfocusRepo() {
+    pendingFocusRepo = '';
+    if (hoveredDistrict) {
+      hoveredDistrict = null;
+      isAutoCruising = true;
+      syncCruiseProgressFromCameraX();
+      updateFlightButton();
+    }
+  }
+
   return {
     init: init,
     buildCity: buildCity,
+    focusRepo: focusRepo,
+    unfocusRepo: unfocusRepo,
     setDayNight: setDayNight,
     toggleDayNight: toggleDayNight,
     toggleGTAO: toggleGTAO,

@@ -132,6 +132,16 @@ async function run() {
       body: JSON.stringify({ key: 'gmc.testkey', value: null })
     });
 
+    // Test /api/contributions endpoint
+    var contribUrl = new URL('/api/contributions?repo=' + encodeURIComponent(repoA), info.url);
+    var contribRes = await fetch(contribUrl, {
+      headers: { 'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth') }
+    });
+    assert.strictEqual(contribRes.status, 200);
+    var contribJson = await contribRes.json();
+    assert.ok(contribJson.contributions, 'contributions endpoint should return contributions');
+    assert.ok(contribJson.globalContributions, 'contributions endpoint should return globalContributions');
+
     // Verify dashboard HTML contains SPA repo switching, close button, home page, and scroll preservation
     var pageRes = await fetch(info.url, {
       headers: { 'X-GMC-Auth': serviceUrl.searchParams.get('gmc_auth') }
@@ -153,6 +163,10 @@ async function run() {
     assert.ok(html.indexOf('data-launch-app="sublime"') >= 0, 'HTML should contain Sublime Text launcher button');
     assert.ok(html.indexOf('data-launch-app="cursor"') >= 0, 'HTML should contain Cursor launcher button');
     assert.ok(html.indexOf('data-launch-app="terminal"') >= 0, 'HTML should contain Terminal launcher button');
+    assert.ok(html.indexOf('handleRepoHoverEnter') >= 0, 'HTML should contain handleRepoHoverEnter linkage function');
+    assert.ok(html.indexOf('handleRepoHoverLeave') >= 0, 'HTML should contain handleRepoHoverLeave linkage function');
+    assert.ok(html.indexOf('focusRepo:') >= 0, 'HTML should export focusRepo from City3DEngine');
+    assert.ok(html.indexOf('unfocusRepo:') >= 0, 'HTML should export unfocusRepo from City3DEngine');
 
     console.log('Recent repository sorting, global overview homepage, contributions, config editor, and SPA switching tests passed.');
   } finally {
