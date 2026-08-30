@@ -241,6 +241,10 @@ function handleRequest(req, res) {
         handleCheckoutBranch(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/clean-branches') {
+        handleCleanBranches(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/install') {
         handleInstall(req, res, parsed.query.repo);
         return;
@@ -498,6 +502,11 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/merge/conflict-detail') {
       handleMergeConflictDetail(req, res, targetRepo);
+      return;
+    }
+
+    if (parsed.pathname === '/api/cleanable-branches') {
+      handleGetCleanableBranches(req, res, targetRepo, parsed.query);
       return;
     }
 
@@ -926,6 +935,45 @@ function handleCheckoutBranch(req, res, targetRepo) {
     var result = checkoutBranch(targetRepo, body.branch);
     invalidateStatusCache(targetRepo);
     sendJson(res, result);
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleGetCleanableBranches(req, res, targetRepo, query) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  try {
+    var repoRoot = git.repoRoot(targetRepo);
+    var baseBranch = query && query.base ? String(query.base).trim() : null;
+    var fetchPrune = query && query.fetch === '1';
+    var result = git.getCleanableBranches(repoRoot, {
+      baseBranch: baseBranch,
+      fetchPrune: fetchPrune
+    });
+    sendJson(res, result);
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleCleanBranches(req, res, targetRepo) {
+  if (!targetRepo) return sendJsonError(res, 400, 'Missing repo parameter');
+  readJsonBody(req).then(function (body) {
+    var repoRoot = git.repoRoot(targetRepo);
+    var branches = Array.isArray(body && body.branches) ? body.branches : [];
+    var force = !!(body && body.force);
+    if (!branches.length) {
+      return sendJsonError(res, 400, 'No branches specified for deletion');
+    }
+    var result = git.deleteBranches(repoRoot, branches, { force: force });
+    invalidateStatusCache(repoRoot);
+    sendJson(res, {
+      status: 'ok',
+      deleted: result.deleted,
+      failed: result.failed,
+      totalDeleted: result.totalDeleted,
+      totalFailed: result.totalFailed
+    });
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   });
@@ -4748,6 +4796,11 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .branch-option.current { color: var(--accent); font-weight: 800; }
 .branch-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branch-option-type { color: var(--muted); font-size: 11px; font-weight: 700; }
+.branch-menu-divider { height: 1px; background: var(--line-soft); margin: 4px 0; }
+.branch-menu-clean-btn { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; text-align: left; }
+.branch-menu-clean-btn:hover { background: var(--accent-soft); color: var(--accent); }
+.clean-branches-trigger-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line-soft); background: var(--panel-soft); color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; transition: all .14s; }
+.clean-branches-trigger-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .repo-breadcrumb { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 8px 0 10px; color: var(--muted); font-size: 12px; overflow: hidden; }
 .repo-breadcrumb button { min-width: 0; max-width: 180px; padding: 0; border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-breadcrumb button:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -4843,6 +4896,40 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .modal p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .task-detail-modal { width: min(680px, 100%); }
+.clean-branches-modal { width: min(780px, 96%); max-height: 88vh; display: flex; flex-direction: column; }
+.clean-branches-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.clean-branches-close-btn { border: 0; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.clean-branches-close-btn:hover { color: var(--text); background: var(--panel-soft); }
+.clean-branches-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line-soft); }
+.clean-branches-base-select { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.clean-base-dropdown { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 600; }
+.clean-branches-filter-tabs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.clean-tab { padding: 3px 9px; border-radius: 5px; border: 1px solid var(--line-soft); background: var(--panel-soft); color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 600; transition: all .12s; }
+.clean-tab:hover { border-color: var(--accent); color: var(--accent); }
+.clean-tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.clean-branches-selection-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 12px; }
+.clean-checkbox-label { display: inline-flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; user-select: none; font-weight: 600; }
+.clean-checkbox-label.clean-danger-opt { color: var(--rose); font-size: 11px; }
+.clean-branches-list { flex: 1 1 auto; max-height: min(46vh, 380px); min-height: 120px; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--panel-soft); }
+.clean-branch-row { display: grid; grid-template-columns: 24px 80px minmax(120px, 1.2fr) minmax(100px, 2fr) auto; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); font-size: 12px; transition: background .12s; }
+.clean-branch-row:last-child { border-bottom: none; }
+.clean-branch-row:hover:not(.disabled) { background: var(--accent-soft); }
+.clean-branch-row.disabled { opacity: 0.5; cursor: not-allowed; }
+.clean-branch-status-badge { display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 999px; text-align: center; white-space: nowrap; }
+.clean-branch-status-badge.merged { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+.clean-branch-status-badge.gone { background: rgba(234, 179, 8, 0.15); color: var(--amber); }
+.clean-branch-status-badge.unmerged { background: rgba(239, 68, 68, 0.15); color: var(--rose); }
+.clean-branch-status-badge.protected { background: var(--line); color: var(--muted); }
+.clean-branch-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clean-branch-subject { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.clean-branch-date { color: var(--muted); font-size: 11px; white-space: nowrap; text-align: right; }
+.clean-branches-empty, .clean-branches-loading { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+.clean-branches-alert { margin-top: 8px; padding: 7px 10px; border-radius: 6px; font-size: 12px; border: 1px solid var(--line); }
+.clean-branches-alert.info { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.clean-branches-alert.error { background: rgba(239, 68, 68, 0.15); color: var(--rose); border-color: var(--rose); }
+.clean-branches-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.clean-selected-summary { margin-right: auto; font-size: 12px; color: var(--muted); }
+.clean-confirm-btn.danger { background: var(--rose) !important; border-color: var(--rose) !important; color: #fff !important; }
 .task-detail-head { display: grid; gap: 7px; margin-bottom: 14px; }
 .task-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 12px; }
 .task-detail-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-weight: 750; }
@@ -6439,7 +6526,13 @@ body.city-3d-zen-active .home-page {
   <section class="summary-panel">
     <div class="panel branch-summary-panel">
       <div class="branch-summary-text">
-        <h2 data-i18n="currentBranch">Current Branch</h2>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+          <h2 data-i18n="currentBranch" style="margin:0;">Current Branch</h2>
+          <button id="btnCleanBranches" class="clean-branches-trigger-btn" type="button" data-i18n-title="cleanBranches" title="清理本地分支">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            <span data-i18n="cleanBranchesShort">清理分支</span>
+          </button>
+        </div>
         <div class="branch-selector-wrap branch-selector-wrap-inline">
           <button id="branch" class="branch-selector-button" type="button" aria-haspopup="true" aria-expanded="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
@@ -6768,6 +6861,58 @@ body.city-3d-zen-active .home-page {
   </div>
 </div>
 
+<div id="cleanBranchesModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="cleanBranchesTitle">
+  <div class="modal clean-branches-modal">
+    <div class="clean-branches-header">
+      <div>
+        <h2 id="cleanBranchesTitle" data-i18n="cleanBranchesTitle">清理本地分支</h2>
+        <p data-i18n="cleanBranchesIntro">快速发现并清理已合并或远程已失效的本地分支，释放空间保持仓库整洁。</p>
+      </div>
+      <button id="closeCleanBranchesX" class="clean-branches-close-btn" type="button" aria-label="Close">✕</button>
+    </div>
+
+    <div class="clean-branches-toolbar">
+      <div class="clean-branches-base-select">
+        <label for="cleanBranchesBaseInput" data-i18n="baseBranch">基准分支：</label>
+        <select id="cleanBranchesBaseInput" class="clean-base-dropdown"></select>
+        <button id="btnFetchPrune" class="copy-button" type="button" data-i18n-title="fetchAndPrune" title="拉取远程并同步">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          <span data-i18n="fetchPrune">刷新远程</span>
+        </button>
+      </div>
+      <div class="clean-branches-filter-tabs">
+        <button type="button" class="clean-tab active" data-filter="all"><span data-i18n="all">全部</span> (<span id="cleanCountAll">0</span>)</button>
+        <button type="button" class="clean-tab" data-filter="safe"><span data-i18n="safeToClean">可安全清理</span> (<span id="cleanCountSafe">0</span>)</button>
+        <button type="button" class="clean-tab" data-filter="merged"><span data-i18n="merged">已合并</span> (<span id="cleanCountMerged">0</span>)</button>
+        <button type="button" class="clean-tab" data-filter="gone"><span data-i18n="remoteGone">远程已删</span> (<span id="cleanCountGone">0</span>)</button>
+      </div>
+    </div>
+
+    <div class="clean-branches-selection-bar">
+      <label class="clean-checkbox-label">
+        <input type="checkbox" id="cleanSelectAllCheckbox">
+        <span data-i18n="selectAllSafe">全选可安全清理分支</span>
+      </label>
+      <label class="clean-checkbox-label clean-danger-opt">
+        <input type="checkbox" id="cleanAllowForceCheckbox">
+        <span data-i18n="allowForceDelete">允许强制删除未合并分支</span>
+      </label>
+    </div>
+
+    <div id="cleanBranchesList" class="clean-branches-list">
+      <div class="clean-branches-loading" data-i18n="scanningBranches">正在扫描分支状态...</div>
+    </div>
+
+    <div id="cleanBranchesAlert" class="clean-branches-alert" hidden></div>
+
+    <div class="modal-actions clean-branches-actions">
+      <div id="cleanBranchesSelectedSummary" class="clean-selected-summary">已选择 0 个分支</div>
+      <button id="cancelCleanBranches" class="copy-button" type="button" data-i18n="cancel">取消</button>
+      <button id="confirmCleanBranches" class="commit-button clean-confirm-btn" type="button" disabled data-i18n="deleteBranches">删除选中分支</button>
+    </div>
+  </div>
+</div>
+
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
@@ -6801,7 +6946,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', cleanBranchesData: null, cleanBranchesFilter: 'all', cleanSelected: {}, cleanAllowForce: false, cleanBaseBranch: '', cleanLoading: false, repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -7144,7 +7289,32 @@ var I18N = {
     city3dSss: 'SSS 屏幕空间接触阴影',
     city3dSsr: 'SSR 屏幕空间湿面反射',
     city3dEdl: 'EDL / 建筑结构轮廓 (Sobel)',
-    city3dAntialias: '抗锯齿 (FXAA)'
+    city3dAntialias: '抗锯齿 (FXAA)',
+    cleanBranches: '清理本地分支',
+    cleanBranchesShort: '清理分支',
+    cleanBranchesEllipsis: '清理本地分支...',
+    cleanBranchesTitle: '清理本地分支',
+    cleanBranchesIntro: '快速发现并清理已合并或远程已失效的本地分支，释放空间保持仓库整洁。',
+    baseBranch: '基准分支：',
+    fetchAndPrune: '拉取远程并同步',
+    fetchPrune: '刷新远程',
+    safeToClean: '可安全清理',
+    merged: '已合并',
+    remoteGone: '远程已删',
+    unmerged: '未合并',
+    protected: '受保护',
+    selectAllSafe: '全选可安全清理分支',
+    allowForceDelete: '允许强制删除未合并分支',
+    scanningBranches: '正在扫描分支状态...',
+    noCleanableBranches: '没有可清理的分支。',
+    selectedBranchesPrefix: '已选择 ',
+    selectedBranchesSuffix: ' 个分支',
+    deleteBranches: '删除选中分支',
+    deletingBranches: '正在删除分支...',
+    deletedSuccessPrefix: '成功清理 ',
+    deletedSuccessSuffix: ' 个分支。',
+    deletedFailedPrefix: ' 个分支删除失败：',
+    deleteBranchFailedPrefix: '删除分支失败：'
   },
   en: {
     language: 'Language',
@@ -7470,7 +7640,32 @@ var I18N = {
     city3dSss: 'SSS Screen-Space Contact Shadows',
     city3dSsr: 'SSR Screen-Space Reflections',
     city3dEdl: 'EDL / Edge Outlines (Sobel)',
-    city3dAntialias: 'Anti-Aliasing (FXAA)'
+    city3dAntialias: 'Anti-Aliasing (FXAA)',
+    cleanBranches: 'Clean Local Branches',
+    cleanBranchesShort: 'Clean',
+    cleanBranchesEllipsis: 'Clean local branches...',
+    cleanBranchesTitle: 'Clean Local Branches',
+    cleanBranchesIntro: 'Quickly find and delete merged or remote-deleted local branches to keep your repository tidy.',
+    baseBranch: 'Base branch:',
+    fetchAndPrune: 'Fetch remote and prune',
+    fetchPrune: 'Sync Remote',
+    safeToClean: 'Safe to Clean',
+    merged: 'Merged',
+    remoteGone: 'Remote Gone',
+    unmerged: 'Unmerged',
+    protected: 'Protected',
+    selectAllSafe: 'Select all safe to clean',
+    allowForceDelete: 'Allow force deletion of unmerged branches',
+    scanningBranches: 'Scanning branch status...',
+    noCleanableBranches: 'No branches to clean.',
+    selectedBranchesPrefix: 'Selected ',
+    selectedBranchesSuffix: ' branch(es)',
+    deleteBranches: 'Delete Selected',
+    deletingBranches: 'Deleting branches...',
+    deletedSuccessPrefix: 'Successfully deleted ',
+    deletedSuccessSuffix: ' branch(es).',
+    deletedFailedPrefix: ' branch(es) failed to delete:',
+    deleteBranchFailedPrefix: 'Failed to delete branch: '
   }
 };
 I18N.ja = Object.assign({}, I18N.en, {
@@ -16589,12 +16784,27 @@ function bindRepositoryBrowserControls() {
     var menu = $(id);
     if (!menu) return;
     menu.addEventListener('click', function(event) {
+      var cleanBtn = event.target.closest && event.target.closest('[data-action="clean-branches"]');
+      if (cleanBtn) {
+        event.preventDefault();
+        closeBranchMenus();
+        openCleanBranchesModal();
+        return;
+      }
       var option = event.target.closest && event.target.closest('[data-checkout-branch]');
       if (!option) return;
       event.preventDefault();
       checkoutSelectedBranch(option.getAttribute('data-checkout-branch'));
     });
   });
+
+  var btnClean = $('btnCleanBranches');
+  if (btnClean) {
+    btnClean.addEventListener('click', function(event) {
+      event.preventDefault();
+      openCleanBranchesModal();
+    });
+  }
 
   var browser = $('repoBrowser');
   if (browser) {
@@ -16650,8 +16860,12 @@ function bindRepositoryBrowserControls() {
     closeBranchMenus();
   });
   document.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape') closeBranchMenus();
+    if (event.key === 'Escape') {
+      closeBranchMenus();
+      closeCleanBranchesModal();
+    }
   });
+  bindCleanBranchesEvents();
 }
 
 function toggleBranchMenu(menuId) {
@@ -16699,6 +16913,14 @@ function renderBranchMenus() {
       '<span class="branch-option-type">' + escapeHtml(branch.remote ? t('remoteBranch') : t('localBranch')) + '</span>' +
     '</button>';
   }).join('') : '<div class="repo-browser-empty">' + escapeHtml(t('noBranches')) + '</div>';
+
+  if (state.sortedBranches.length) {
+    html += '<div class="branch-menu-divider"></div>' +
+      '<button class="branch-menu-clean-btn" type="button" role="menuitem" data-action="clean-branches">' +
+        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
+        '<span>' + escapeHtml(t('cleanBranchesEllipsis')) + '</span>' +
+      '</button>';
+  }
 
   ['branchMenu', 'detailBranchMenu'].forEach(function(id) {
     var menu = $(id);
@@ -17287,6 +17509,362 @@ function renderBranches() {
   }
   renderTree(roots, '');
   box.innerHTML = html.join('');
+}
+
+function openCleanBranchesModal() {
+  var modal = $('cleanBranchesModal');
+  if (!modal) return;
+  modal.classList.add('visible');
+  state.cleanBranchesFilter = 'all';
+  state.cleanSelected = {};
+  state.cleanAllowForce = false;
+  var forceCb = $('cleanAllowForceCheckbox');
+  if (forceCb) forceCb.checked = false;
+  var alertBox = $('cleanBranchesAlert');
+  if (alertBox) {
+    alertBox.hidden = true;
+    alertBox.textContent = '';
+    alertBox.className = 'clean-branches-alert';
+  }
+  updateCleanFilterTabStyles();
+  loadCleanableBranches({ base: state.cleanBaseBranch, fetch: false });
+}
+
+function closeCleanBranchesModal() {
+  var modal = $('cleanBranchesModal');
+  if (modal) modal.classList.remove('visible');
+}
+
+function updateCleanFilterTabStyles() {
+  var tabs = document.querySelectorAll('.clean-tab');
+  tabs.forEach(function(tab) {
+    var filter = tab.getAttribute('data-filter');
+    if (filter === state.cleanBranchesFilter) {
+      tab.classList.add('active');
+    } else {
+      tab.classList.remove('active');
+    }
+  });
+}
+
+function loadCleanableBranches(options) {
+  options = options || {};
+  if (!targetRepo) return;
+  state.cleanLoading = true;
+  var listEl = $('cleanBranchesList');
+  if (listEl) {
+    listEl.innerHTML = '<div class="clean-branches-loading">' + escapeHtml(t('scanningBranches')) + '</div>';
+  }
+  var btnConfirm = $('confirmCleanBranches');
+  if (btnConfirm) btnConfirm.disabled = true;
+
+  var baseParam = options.base ? '&base=' + encodeURIComponent(options.base) : '';
+  var fetchParam = options.fetch ? '&fetch=1' : '';
+  var url = '/api/cleanable-branches?repo=' + encodeURIComponent(targetRepo) + baseParam + fetchParam;
+
+  fetch(url, { cache: 'no-store' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.cleanBranchesData = data;
+      state.cleanBaseBranch = data.baseBranch || 'main';
+
+      // Auto-select cleanable (safe) branches
+      state.cleanSelected = {};
+      (data.branches || []).forEach(function(b) {
+        if (b.canClean) {
+          state.cleanSelected[b.name] = true;
+        }
+      });
+
+      // Populate base branch dropdown
+      var baseDropdown = $('cleanBranchesBaseInput');
+      if (baseDropdown) {
+        var baseOptions = [];
+        var foundBase = false;
+        (data.branches || []).forEach(function(b) {
+          var selected = (b.name === state.cleanBaseBranch) ? ' selected' : '';
+          if (b.name === state.cleanBaseBranch) foundBase = true;
+          baseOptions.push('<option value="' + escapeHtml(b.name) + '"' + selected + '>' + escapeHtml(b.name) + '</option>');
+        });
+        if (!foundBase && state.cleanBaseBranch) {
+          baseOptions.unshift('<option value="' + escapeHtml(state.cleanBaseBranch) + '" selected>' + escapeHtml(state.cleanBaseBranch) + '</option>');
+        }
+        baseDropdown.innerHTML = baseOptions.join('');
+      }
+
+      // Update count badges on tabs
+      var summary = data.summary || {};
+      var countAll = $('cleanCountAll');
+      if (countAll) countAll.textContent = String(summary.total || 0);
+      var countSafe = $('cleanCountSafe');
+      if (countSafe) countSafe.textContent = String(summary.cleanableCount || 0);
+      var countMerged = $('cleanCountMerged');
+      if (countMerged) countMerged.textContent = String(summary.mergedCount || 0);
+      var countGone = $('cleanCountGone');
+      if (countGone) countGone.textContent = String(summary.goneCount || 0);
+
+      renderCleanBranchesList();
+    })
+    .catch(function(err) {
+      if (listEl) {
+        listEl.innerHTML = '<div class="clean-branches-empty error">' + escapeHtml(t('errorPrefix') + ' ' + err.message) + '</div>';
+      }
+    })
+    .finally(function() {
+      state.cleanLoading = false;
+    });
+}
+
+function renderCleanBranchesList() {
+  var listEl = $('cleanBranchesList');
+  if (!listEl) return;
+  var data = state.cleanBranchesData;
+  if (!data || !data.branches || !data.branches.length) {
+    listEl.innerHTML = '<div class="clean-branches-empty">' + escapeHtml(t('noBranches')) + '</div>';
+    updateCleanSelectionSummary();
+    return;
+  }
+
+  var filtered = data.branches.filter(function(b) {
+    if (state.cleanBranchesFilter === 'safe') return b.canClean;
+    if (state.cleanBranchesFilter === 'merged') return b.isMerged;
+    if (state.cleanBranchesFilter === 'gone') return b.isGone;
+    return true;
+  });
+
+  if (!filtered.length) {
+    listEl.innerHTML = '<div class="clean-branches-empty">' + escapeHtml(t('noCleanableBranches')) + '</div>';
+    updateCleanSelectionSummary();
+    return;
+  }
+
+  var rowsHtml = filtered.map(function(b) {
+    var disabled = b.isProtected || b.isCurrent;
+    var checked = !!state.cleanSelected[b.name];
+    var isCheckedAttr = checked ? ' checked' : '';
+    var isDisabledAttr = disabled ? ' disabled' : '';
+    var disabledClass = disabled ? ' disabled' : '';
+
+    var badgeText = t('unmerged');
+    var badgeClass = 'unmerged';
+    if (b.isProtected || b.isCurrent) {
+      badgeText = b.isCurrent ? 'HEAD' : t('protected');
+      badgeClass = 'protected';
+    } else if (b.isMerged) {
+      badgeText = t('merged');
+      badgeClass = 'merged';
+    } else if (b.isGone) {
+      badgeText = t('remoteGone');
+      badgeClass = 'gone';
+    }
+
+    var title = b.name + ' - ' + (b.subject || '');
+    return '<div class="clean-branch-row' + disabledClass + '" title="' + escapeHtml(title) + '">' +
+      '<input type="checkbox" data-clean-branch="' + escapeHtml(b.name) + '"' + isCheckedAttr + isDisabledAttr + '>' +
+      '<span class="clean-branch-status-badge ' + badgeClass + '">' + escapeHtml(badgeText) + '</span>' +
+      '<span class="clean-branch-name">' + escapeHtml(b.name) + '</span>' +
+      '<span class="clean-branch-subject">' + escapeHtml(b.subject || '') + '</span>' +
+      '<span class="clean-branch-date">' + escapeHtml(b.updated || '') + '</span>' +
+    '</div>';
+  }).join('');
+
+  listEl.innerHTML = rowsHtml;
+  updateCleanSelectionSummary();
+}
+
+function updateCleanSelectionSummary() {
+  var data = state.cleanBranchesData;
+  var allBranches = (data && data.branches) || [];
+  var selectedNames = Object.keys(state.cleanSelected).filter(function(name) {
+    return state.cleanSelected[name];
+  });
+
+  var count = selectedNames.length;
+  var summaryEl = $('cleanBranchesSelectedSummary');
+  if (summaryEl) {
+    summaryEl.textContent = t('selectedBranchesPrefix') + count + t('selectedBranchesSuffix');
+  }
+
+  var hasUnmerged = selectedNames.some(function(name) {
+    var branch = allBranches.find(function(b) { return b.name === name; });
+    return branch && !branch.isMerged && !branch.isGone;
+  });
+
+  var btnConfirm = $('confirmCleanBranches');
+  if (btnConfirm) {
+    btnConfirm.disabled = (count === 0);
+    if (hasUnmerged) {
+      btnConfirm.classList.add('danger');
+      if (!state.cleanAllowForce) {
+        btnConfirm.disabled = true;
+      }
+    } else {
+      btnConfirm.classList.remove('danger');
+    }
+  }
+
+  var selectAllCb = $('cleanSelectAllCheckbox');
+  if (selectAllCb) {
+    var cleanableBranches = allBranches.filter(function(b) { return b.canClean; });
+    var allSafeSelected = cleanableBranches.length > 0 && cleanableBranches.every(function(b) {
+      return state.cleanSelected[b.name];
+    });
+    selectAllCb.checked = allSafeSelected;
+  }
+}
+
+function executeCleanBranches() {
+  var selectedNames = Object.keys(state.cleanSelected).filter(function(name) {
+    return state.cleanSelected[name];
+  });
+  if (!selectedNames.length || state.cleanLoading) return;
+
+  state.cleanLoading = true;
+  var btnConfirm = $('confirmCleanBranches');
+  var alertBox = $('cleanBranchesAlert');
+  if (btnConfirm) {
+    btnConfirm.disabled = true;
+    btnConfirm.textContent = t('deletingBranches');
+  }
+  if (alertBox) alertBox.hidden = true;
+
+  fetch('/api/clean-branches?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      branches: selectedNames,
+      force: state.cleanAllowForce
+    })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      var deleted = data.deleted || [];
+      var failed = data.failed || [];
+      var msg = '';
+      if (deleted.length > 0) {
+        msg += '✓ ' + t('deletedSuccessPrefix') + deleted.length + t('deletedSuccessSuffix') + ' (' + deleted.map(function(d) { return d.name; }).join(', ') + ')';
+      }
+      if (failed.length > 0) {
+        msg += (msg ? '\\n' : '') + '⚠️ ' + failed.length + t('deletedFailedPrefix') + ' ' + failed.map(function(f) { return f.name + ': ' + f.error; }).join('; ');
+      }
+
+      if (alertBox) {
+        alertBox.hidden = false;
+        alertBox.className = 'clean-branches-alert ' + (failed.length ? 'error' : 'info');
+        alertBox.textContent = msg;
+      }
+
+      // Reload git status to update UI branches and overview
+      load({ force: true });
+
+      // Refresh clean branches modal list after a short pause
+      setTimeout(function() {
+        loadCleanableBranches({ base: state.cleanBaseBranch, fetch: false });
+      }, 800);
+    })
+    .catch(function(err) {
+      if (alertBox) {
+        alertBox.hidden = false;
+        alertBox.className = 'clean-branches-alert error';
+        alertBox.textContent = t('deleteBranchFailedPrefix') + err.message;
+      }
+    })
+    .finally(function() {
+      state.cleanLoading = false;
+      if (btnConfirm) {
+        btnConfirm.textContent = t('deleteBranches');
+      }
+      updateCleanSelectionSummary();
+    });
+}
+
+function bindCleanBranchesEvents() {
+  var btnX = $('closeCleanBranchesX');
+  if (btnX) btnX.addEventListener('click', closeCleanBranchesModal);
+  var btnCancel = $('cancelCleanBranches');
+  if (btnCancel) btnCancel.addEventListener('click', closeCleanBranchesModal);
+
+  var modal = $('cleanBranchesModal');
+  if (modal) {
+    modal.addEventListener('click', function(event) {
+      if (event.target === modal) closeCleanBranchesModal();
+    });
+  }
+
+  var baseDropdown = $('cleanBranchesBaseInput');
+  if (baseDropdown) {
+    baseDropdown.addEventListener('change', function(event) {
+      state.cleanBaseBranch = event.target.value;
+      loadCleanableBranches({ base: state.cleanBaseBranch, fetch: false });
+    });
+  }
+
+  var btnFetchPrune = $('btnFetchPrune');
+  if (btnFetchPrune) {
+    btnFetchPrune.addEventListener('click', function() {
+      loadCleanableBranches({ base: state.cleanBaseBranch, fetch: true });
+    });
+  }
+
+  var tabsContainer = document.querySelector('.clean-branches-filter-tabs');
+  if (tabsContainer) {
+    tabsContainer.addEventListener('click', function(event) {
+      var tab = event.target.closest && event.target.closest('.clean-tab');
+      if (!tab) return;
+      event.preventDefault();
+      state.cleanBranchesFilter = tab.getAttribute('data-filter') || 'all';
+      updateCleanFilterTabStyles();
+      renderCleanBranchesList();
+    });
+  }
+
+  var selectAllCb = $('cleanSelectAllCheckbox');
+  if (selectAllCb) {
+    selectAllCb.addEventListener('change', function(event) {
+      var checked = event.target.checked;
+      var data = state.cleanBranchesData;
+      (data && data.branches || []).forEach(function(b) {
+        if (b.canClean) {
+          state.cleanSelected[b.name] = checked;
+        }
+      });
+      renderCleanBranchesList();
+    });
+  }
+
+  var allowForceCb = $('cleanAllowForceCheckbox');
+  if (allowForceCb) {
+    allowForceCb.addEventListener('change', function(event) {
+      state.cleanAllowForce = event.target.checked;
+      updateCleanSelectionSummary();
+    });
+  }
+
+  var listEl = $('cleanBranchesList');
+  if (listEl) {
+    listEl.addEventListener('change', function(event) {
+      var input = event.target.closest && event.target.closest('input[type="checkbox"][data-clean-branch]');
+      if (!input) return;
+      var name = input.getAttribute('data-clean-branch');
+      state.cleanSelected[name] = input.checked;
+      updateCleanSelectionSummary();
+    });
+  }
+
+  var btnConfirm = $('confirmCleanBranches');
+  if (btnConfirm) {
+    btnConfirm.addEventListener('click', executeCleanBranches);
+  }
 }
 
 function renderCommits(commits) {
