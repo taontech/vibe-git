@@ -117,6 +117,7 @@ function parseArgs(argv) {
     printPrompt: false,
     port: null,
     start: false,
+    tmp: false,
     restart: false,
     quit: false,
     watch: false,
@@ -150,6 +151,8 @@ function parseArgs(argv) {
       flags.printPrompt = true;
     } else if (arg === '--start') {
       flags.start = true;
+    } else if (arg === '--tmp') {
+      flags.tmp = true;
     } else if (arg === '--restart') {
       flags.restart = true;
     } else if (arg === '--quit') {
@@ -350,15 +353,14 @@ async function gitWebCommand(flags) {
       await new Promise(function(resolve) { setTimeout(resolve, 500); });
       isRunning = false;
     }
-    flags.start = true;
   }
 
-  if (flags.start) {
+  if (!flags.tmp) {
     if (isRunning) {
       console.log('GMC Web is already running on port ' + port + '.');
       return;
     }
-    var childArgs = ['web', '--port', port, '--no-open'];
+    var childArgs = ['web', '--tmp', '--port', port, '--no-open'];
     var child = childProcess.spawn(process.execPath, [__filename].concat(childArgs), {
       detached: true,
       stdio: 'ignore'
@@ -459,7 +461,7 @@ async function runWatchedGitWeb(root, flags, port, isRunning) {
       GMC_GITWEB_LIVE_RELOAD: '1',
       GMC_GITWEB_RELOAD_TOKEN: String(Date.now())
     });
-    var spawned = childProcess.spawn(process.execPath, [__filename, 'web', '--port', String(port), '--no-open'], {
+    var spawned = childProcess.spawn(process.execPath, [__filename, 'web', '--tmp', '--port', String(port), '--no-open'], {
       env: env,
       stdio: 'inherit'
     });
@@ -764,7 +766,7 @@ function printHelp() {
   '  gmc resolve-merge [file] [--list]',
   '  gmc install --all [--port 4277]',
   '  gmc install-hooks',
-  '  gmc web [--port 4277] [--no-open] [--start] [--restart] [--quit] [--watch]',
+  '  gmc web [--port 4277] [--no-open] [--tmp] [--restart] [--quit] [--watch]',
   '  git commit -m gmc',
     '',
     'Environment:',
@@ -774,8 +776,8 @@ function printHelp() {
     '  GMC_GITWEB_PORT overrides the default local GitWeb port.',
     '  gmc install --all installs hooks.',
     '  gmc install-hooks sets up Git hooks for AI commit messages and task status updates.',
-    '  gmc web serves the Git Web UI. If a server is already running, it will just open the current repository in the browser.',
-    '  gmc web --start starts the Git Web UI in the background as a daemon.',
+    '  gmc web starts the Git Web UI in the background as a daemon.',
+    '  gmc web --tmp starts the Git Web UI in the foreground.',
     '  gmc web --restart restarts the background Git Web UI daemon.',
     '  gmc web --quit stops the background Git Web UI daemon.',
   '  gmc web --watch restarts GitWeb when cli/lib/web.js changes and refreshes the browser.',
