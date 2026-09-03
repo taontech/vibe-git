@@ -4,10 +4,14 @@ var fs = require('fs');
 var os = require('os');
 var path = require('path');
 var git = require('./git');
+var agentAvailability = require('./agent-availability');
 
 var CURRENT_FILE = 'gmc/current.json';
-var CONFIG_FILE = path.join(os.homedir(), '.config', 'gmc', 'config.json');
 var DEFAULT_AGENT = 'codex';
+
+function configPath() {
+  return agentAvailability.configFilePath();
+}
 
 function normalizeAgent(agent) {
   var value = String(agent || '').toLowerCase();
@@ -18,15 +22,21 @@ function normalizeAgent(agent) {
 }
 
 function readConfig() {
-  if (!fs.existsSync(CONFIG_FILE)) {
+  var file = configPath();
+  if (!fs.existsSync(file)) {
     return {};
   }
-  return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return {};
+  }
 }
 
 function writeConfig(metadata) {
-  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(metadata, null, 2) + '\n');
+  var file = configPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(metadata, null, 2) + '\n');
   return metadata;
 }
 
@@ -162,7 +172,20 @@ module.exports = {
   currentRepositoryTaskAgent: currentRepositoryTaskAgent,
   setRepositoryTaskAgent: setRepositoryTaskAgent,
   normalizeAgent: normalizeAgent,
-  configPath: function() {
-    return CONFIG_FILE;
-  }
+  normalizeAgentId: agentAvailability.normalizeAgentId,
+  configPath: configPath,
+  DEFAULT_AGENTS: agentAvailability.DEFAULT_AGENTS,
+  DEFAULT_AGENT_CONFIGS: agentAvailability.DEFAULT_AGENTS,
+  SUPPORTED_AGENT_IDS: agentAvailability.SUPPORTED_AGENT_IDS,
+  SUPPORTED_AGENT_MAP: agentAvailability.SUPPORTED_AGENT_MAP,
+  createAgentConfig: agentAvailability.createAgentConfig,
+  validateEnabled: agentAvailability.validateEnabled,
+  isSupportedAgent: agentAvailability.isSupportedAgent,
+  getDefaultAgentAvailability: agentAvailability.getDefaultAgentAvailability,
+  listAgentAvailability: agentAvailability.listAgentAvailability,
+  getAgentAvailability: agentAvailability.getAgentAvailability,
+  isAgentEnabled: agentAvailability.isAgentEnabled,
+  setAgentAvailability: agentAvailability.setAgentAvailability,
+  setAllAgentAvailability: agentAvailability.setAllAgentAvailability,
+  resetAgentAvailability: agentAvailability.resetAgentAvailability
 };

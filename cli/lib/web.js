@@ -302,6 +302,10 @@ function handleRequest(req, res) {
         handleSetAgent(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/agent-availability') {
+        handleUpdateAgentAvailability(req, res);
+        return;
+      }
       if (parsed.pathname === '/api/tasks/create') {
         handleCreateTask(req, res, parsed.query.repo);
         return;
@@ -393,7 +397,12 @@ function handleRequest(req, res) {
     }
 
     if (parsed.pathname === '/api/agent-monitor') {
-      handleAgentMonitor(req, res);
+      handleAgentMonitor(req, res, parsed);
+      return;
+    }
+
+    if (parsed.pathname === '/api/agent-availability') {
+      handleGetAgentAvailability(req, res, parsed);
       return;
     }
 
@@ -402,6 +411,7 @@ function handleRequest(req, res) {
       var currentCommitAgent = 'codex';
       var currentTaskAgent = 'codex';
       var currentRepositoryTaskAgent = null;
+      var availableAgents = [];
       try {
         currentAgent = config.currentAgent();
       } catch (ignore) {
@@ -424,11 +434,17 @@ function handleRequest(req, res) {
           currentRepositoryTaskAgent = currentTaskAgent;
         }
       }
+      try {
+        availableAgents = config.listAgentAvailability();
+      } catch (ignoreAvailableAgents) {
+        // ignore
+      }
       sendJson(res, {
         agent: currentAgent,
         commitAgent: currentCommitAgent,
         taskAgent: currentTaskAgent,
-        repositoryTaskAgent: currentRepositoryTaskAgent
+        repositoryTaskAgent: currentRepositoryTaskAgent,
+        availableAgents: availableAgents
       });
       return;
     }
@@ -542,7 +558,17 @@ function handleQuit(res) {
   });
 }
 
-function handleAgentMonitor(req, res) {
+function mapMonitorIdToGmcAgent(agentId) {
+  if (!agentId || typeof agentId !== 'string') return '';
+  var id = agentId.trim().toLowerCase();
+  if (id === 'codex-cli' || id === 'codex-app' || id === 'codex') return 'codex';
+  if (id === 'claude-code' || id === 'claude') return 'claude';
+  if (id === 'antigravity') return 'antigravity';
+  if (id === 'opencode') return 'opencode';
+  return id;
+}
+
+function handleAgentMonitor(req, res, parsed) {
   var monitor = resolveAgentMonitorConfig();
   if (!monitor.enabled) {
     sendJson(res, agentMonitorUnavailable('disabled'));
@@ -553,12 +579,73 @@ function handleAgentMonitor(req, res) {
     return;
   }
 
-  requestAgentMonitorAgents(monitor).then(function (result) {
+  var disabledMap = {};
+  var availabilityList = [];
+  try {
+    availabilityList = config.listAgentAvailability();
+    availabilityList.forEach(function (item) {
+      if (item && item.agentId && !item.enabled) {
+        disabledMap[item.agentId.toLowerCase()] = true;
+      }
+    });
+  } catch (ignore) {}
+
+  parsed = parsed || url.parse(req.url, true);
+  var queryAgent = parsed.query && parsed.query.agent ? String(parsed.query.agent).trim().toLowerCase() : null;
+  var queryAgents = parsed.query && parsed.query.agents ? String(parsed.query.agents).split(',').map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean) : null;
+
+  if (queryAgent && disabledMap[queryAgent]) {
+    sendJson(res, {
+      status: 'disabled',
+      available: false,
+      reason: 'agent_disabled',
+      agent: queryAgent,
+      agents: [],
+      usage: null,
+      fetchedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  var allAgentsDisabled = availabilityList.length > 0 && availabilityList.every(function (item) { return !item.enabled; });
+  if (allAgentsDisabled) {
     sendJson(res, {
       status: 'ok',
       available: true,
-      agents: result.agents,
-      usage: result.usage || null,
+      agents: [],
+      usage: null,
+      fetchedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  requestAgentMonitorAgents(monitor).then(function (result) {
+    var rawAgents = Array.isArray(result.agents) ? result.agents : [];
+    var filteredAgents = rawAgents.filter(function (entry) {
+      var gmcId = mapMonitorIdToGmcAgent(entry.agentId);
+      if (disabledMap[gmcId]) return false;
+      if (queryAgent && gmcId !== queryAgent) return false;
+      if (queryAgents && queryAgents.indexOf(gmcId) === -1) return false;
+      return true;
+    });
+
+    var filteredUsage = null;
+    if (result.usage && typeof result.usage === 'object') {
+      filteredUsage = {};
+      Object.keys(result.usage).forEach(function (key) {
+        var gmcId = mapMonitorIdToGmcAgent(key);
+        if (disabledMap[gmcId]) return;
+        if (queryAgent && gmcId !== queryAgent) return;
+        if (queryAgents && queryAgents.indexOf(gmcId) === -1) return;
+        filteredUsage[key] = result.usage[key];
+      });
+    }
+
+    sendJson(res, {
+      status: 'ok',
+      available: true,
+      agents: filteredAgents,
+      usage: filteredUsage,
       fetchedAt: new Date().toISOString()
     });
   }).catch(function (error) {
@@ -1657,6 +1744,19 @@ function handleSetAgent(req, res, targetRepo) {
           return sendJsonError(res, 400, 'Missing repo parameter.');
         }
         selectedAgent = config.setRepositoryTaskAgent(newAgent, targetRepo);
+      } else if (scope === 'availability') {
+        if (body.enabled === undefined) {
+          return sendJsonError(res, 400, 'Missing enabled parameter.');
+        }
+        var enabledVal = body.enabled;
+        if (typeof enabledVal !== 'boolean') {
+          if (enabledVal === 'true' || enabledVal === '1' || enabledVal === 1) enabledVal = true;
+          else if (enabledVal === 'false' || enabledVal === '0' || enabledVal === 0) enabledVal = false;
+          else return sendJsonError(res, 400, 'Parameter "enabled" must be a boolean.');
+        }
+        var updatedItem = config.setAgentAvailability(newAgent, enabledVal);
+        sendJson(res, { status: 'ok', agent: updatedItem, scope: 'availability' });
+        return;
       } else if (!scope) {
         selectedAgent = config.setAgent(newAgent);
       } else {
@@ -1668,6 +1768,55 @@ function handleSetAgent(req, res, targetRepo) {
     }
   }).catch(function (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleGetAgentAvailability(req, res, parsed) {
+  try {
+    var agentId = parsed && parsed.query && parsed.query.agentId;
+    if (agentId) {
+      var agent = config.getAgentAvailability(agentId);
+      sendJson(res, { agent: agent });
+    } else {
+      var agents = config.listAgentAvailability();
+      sendJson(res, { agents: agents });
+    }
+  } catch (error) {
+    sendJsonError(res, 400, error.message);
+  }
+}
+
+function handleUpdateAgentAvailability(req, res) {
+  readJsonBody(req).then(function (body) {
+    if (!body || typeof body !== 'object') {
+      return sendJsonError(res, 400, 'Invalid request body: expected JSON object.');
+    }
+    if (Array.isArray(body.agents) || (body.agents && typeof body.agents === 'object')) {
+      var updatedList = config.setAllAgentAvailability(body.agents);
+      sendJson(res, { status: 'ok', agents: updatedList });
+      return;
+    }
+    if (body.agentId !== undefined) {
+      var agentId = body.agentId;
+      var enabled = body.enabled;
+      if (typeof enabled !== 'boolean') {
+        if (enabled === 'true' || enabled === '1' || enabled === 1) enabled = true;
+        else if (enabled === 'false' || enabled === '0' || enabled === 0) enabled = false;
+        else {
+          return sendJsonError(res, 400, 'Parameter "enabled" must be a boolean.');
+        }
+      }
+      var updated = config.setAgentAvailability(agentId, enabled);
+      sendJson(res, {
+        status: 'ok',
+        agent: updated,
+        agents: config.listAgentAvailability()
+      });
+      return;
+    }
+    sendJsonError(res, 400, 'Missing "agentId" or "agents" in request body.');
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 400, error.message);
   });
 }
 
@@ -4577,6 +4726,15 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .radio-label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .radio-indicator { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); background: var(--panel); flex-shrink: 0; }
 .radio-label input:checked + .radio-indicator { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--panel); }
+.available-agents-list { display: flex; flex-direction: column; margin-bottom: 8px; }
+.available-agent-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.available-agent-row:last-child { border-bottom: none; padding-bottom: 0; }
+.available-agent-info { min-width: 0; }
+.available-agent-info strong { display: block; font-size: 13.5px; font-weight: 600; color: var(--text); }
+.available-agent-info span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.available-agents-loading { padding: 8px 0; color: var(--muted); font-size: 13px; font-style: italic; }
+.toggle-control.disabled, .toggle-control:has(input:disabled) { opacity: 0.6; cursor: not-allowed; pointer-events: none; }
+#availableAgentsStatus { min-height: 17px; margin-top: 4px; }
 .settings-card-full { grid-column: 1 / -1; }
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-top: 14px; }
 .theme-card-option { position: relative; border: 2px solid var(--line); border-radius: 8px; padding: 14px; background: var(--panel); cursor: pointer; transition: border-color .16s, box-shadow .16s, transform .16s; display: flex; flex-direction: column; gap: 10px; user-select: none; }
@@ -6787,6 +6945,14 @@ body.city-3d-zen-active .home-page {
               <div id="taskAgentOptions" class="radio-group"></div>
               <div id="taskAgentStatus" class="meta"></div>
             </div>
+            <div class="agent-selector" id="availableAgentsSelector">
+              <h4 data-i18n="availableAgentsSetting">可用 Agent 管理</h4>
+              <p data-i18n="availableAgentsSettingHelp">配置常用 AI Agent 的启用与禁用状态。</p>
+              <div id="availableAgentsList" class="available-agents-list">
+                <div class="available-agents-loading" data-i18n="agentLoading">正在加载 Agent 列表...</div>
+              </div>
+              <div id="availableAgentsStatus" class="meta"></div>
+            </div>
           </div>
           <div class="settings-card settings-card-full">
             <h3 data-i18n="themeSettings">主题设置</h3>
@@ -6907,6 +7073,7 @@ body.city-3d-zen-active .home-page {
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
+var INITIAL_AVAILABLE_AGENTS = ${JSON.stringify(config.listAgentAvailability())};
 var AUTH_QUERY_PARAM = ${JSON.stringify(AUTH_QUERY_PARAM)};
 (function() {
   var nativeFetch = window.fetch.bind(window);
@@ -6937,7 +7104,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', cleanBranchesData: null, cleanBranchesFilter: 'all', cleanSelected: {}, cleanAllowForce: false, cleanBaseBranch: '', cleanLoading: false, repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', cleanBranchesData: null, cleanBranchesFilter: 'all', cleanSelected: {}, cleanAllowForce: false, cleanBaseBranch: '', cleanLoading: false, repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', availableAgents: INITIAL_AVAILABLE_AGENTS || [], security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -7216,6 +7383,13 @@ var I18N = {
     repositoryTaskAgentSetting: '任务分解 Agent',
     agentSettingSaved: 'Agent 设置已保存',
     agentSettingSaveFailed: 'Agent 设置保存失败：',
+    availableAgentsSetting: '可用 Agent 管理',
+    availableAgentsSettingHelp: '配置常用 AI Agent 的启用与禁用状态。',
+    agentEnabled: '已启用',
+    agentDisabled: '已停用',
+    agentLoading: '正在加载 Agent 列表...',
+    agentAvailabilitySaved: 'Agent 可用状态已更新',
+    agentAvailabilitySaveFailed: 'Agent 状态保存失败：',
     homeTitle: '全局 Git 概览',
     homeBadge: 'Git 全局工作台',
     homeHeroTitle: '全局 Git 概览与工作台',
@@ -7565,6 +7739,13 @@ var I18N = {
     repositoryTaskAgentSetting: 'Task decomposition agent',
     agentSettingSaved: 'Agent setting saved',
     agentSettingSaveFailed: 'Failed to save agent setting: ',
+    availableAgentsSetting: 'Available Agents',
+    availableAgentsSettingHelp: 'Enable or disable available AI agents.',
+    agentEnabled: 'Enabled',
+    agentDisabled: 'Disabled',
+    agentLoading: 'Loading agent list...',
+    agentAvailabilitySaved: 'Agent availability updated',
+    agentAvailabilitySaveFailed: 'Failed to update agent availability: ',
     themeSettings: 'Theme Settings',
     themeSettingsHelp: 'Choose your preferred dashboard theme style, applied instantly to the entire page.',
     activeTheme: 'Active',
@@ -7896,6 +8077,13 @@ I18N.ja = Object.assign({}, I18N.en, {
   repositoryTaskAgentSetting: 'タスク分解 Agent',
   agentSettingSaved: 'Agent 設定を保存しました',
   agentSettingSaveFailed: 'Agent 設定の保存に失敗しました: ',
+  availableAgentsSetting: '利用可能な Agent 管理',
+  availableAgentsSettingHelp: '利用可能な AI Agent の有効/無効を設定します。',
+  agentEnabled: '有効',
+  agentDisabled: '無効',
+  agentLoading: 'Agent リストを読み込み中...',
+  agentAvailabilitySaved: 'Agent の利用可能状態を更新しました',
+  agentAvailabilitySaveFailed: 'Agent 状態の更新に失敗しました: ',
   needsAttentionTitle: '対応が必要なリポジトリ',
   needsAttentionDesc: '未ステージの変更、未コミット、または未同期のローカルリポジトリ',
   reposNeedingAttentionCount: '件の要確認',
@@ -8140,6 +8328,13 @@ I18N.ko = Object.assign({}, I18N.en, {
   repositoryTaskAgentSetting: '작업 분해 Agent',
   agentSettingSaved: 'Agent 설정이 저장되었습니다',
   agentSettingSaveFailed: 'Agent 설정 저장 실패: ',
+  availableAgentsSetting: '사용 가능한 Agent 관리',
+  availableAgentsSettingHelp: '사용 가능한 AI Agent의 활성화/비활성화 상태를 설정합니다.',
+  agentEnabled: '활성화됨',
+  agentDisabled: '비활성화됨',
+  agentLoading: 'Agent 목록 불러오는 중...',
+  agentAvailabilitySaved: 'Agent 사용 가능 상태가 저장되었습니다',
+  agentAvailabilitySaveFailed: 'Agent 상태 저장 실패: ',
   needsAttentionTitle: '확인이 필요한 저장소',
   needsAttentionDesc: '미스테이징 변경, 미커밋 또는 동기화되지 않은 로컬 저장소',
   reposNeedingAttentionCount: '개 확인 필요',
@@ -8383,7 +8578,14 @@ I18N.es = Object.assign({}, I18N.en, {
   taskAgentSettingHelp: 'Se usa como agente predeterminado para desglosar tareas del repositorio.',
   repositoryTaskAgentSetting: 'Agente de desglose de tareas',
   agentSettingSaved: 'Ajuste del agente guardado',
-  agentSettingSaveFailed: 'Error al guardar el ajuste del agente: '
+  agentSettingSaveFailed: 'Error al guardar el ajuste del agente: ',
+  availableAgentsSetting: 'Gestión de agentes disponibles',
+  availableAgentsSettingHelp: 'Habilite o deshabilite los agentes de IA disponibles.',
+  agentEnabled: 'Habilitado',
+  agentDisabled: 'Deshabilitado',
+  agentLoading: 'Cargando lista de agentes...',
+  agentAvailabilitySaved: 'Disponibilidad del agente actualizada',
+  agentAvailabilitySaveFailed: 'Error al guardar el estado del agente: '
 });
 I18N.fr = Object.assign({}, I18N.en, {
   language: 'Langue',
@@ -8609,7 +8811,14 @@ I18N.fr = Object.assign({}, I18N.en, {
   taskAgentSettingHelp: 'Utilisé comme agent par défaut pour décomposer les tâches du dépôt.',
   repositoryTaskAgentSetting: 'Agent de décomposition',
   agentSettingSaved: 'Paramètre de l’agent enregistré',
-  agentSettingSaveFailed: 'Échec d’enregistrement du paramètre de l’agent : '
+  agentSettingSaveFailed: 'Échec d’enregistrement du paramètre de l’agent : ',
+  availableAgentsSetting: 'Gestion des agents disponibles',
+  availableAgentsSettingHelp: 'Activez ou désactivez les agents IA disponibles.',
+  agentEnabled: 'Activé',
+  agentDisabled: 'Désactivé',
+  agentLoading: 'Chargement de la liste des agents...',
+  agentAvailabilitySaved: 'Disponibilité de l’agent mise à jour',
+  agentAvailabilitySaveFailed: 'Échec d’enregistrement de l’état de l’agent : '
 });
 var LANGUAGE_ALIASES = {
   zh: 'zh-CN',
@@ -8645,6 +8854,67 @@ var TASK_BOARD_STATUSES = [
   { id: 'antigravity', label: 'taskStatusAntigravity', color: '#7c3aed', agent: true, monitorIds: ['antigravity'] },
   { id: 'done', label: 'taskStatusDone', color: '#64748b' }
 ];
+
+function isAgentAvailable(agentId) {
+  if (!state.availableAgents || !state.availableAgents.length) return true;
+  var normId = String(agentId || '').trim().toLowerCase();
+  var match = state.availableAgents.find(function(item) {
+    return item && String(item.agentId || '').trim().toLowerCase() === normId;
+  });
+  return match ? Boolean(match.enabled) : true;
+}
+
+function getVisibleTaskBoardStatuses() {
+  return TASK_BOARD_STATUSES.filter(function(column) {
+    if (!column.agent) return true;
+    return isAgentAvailable(column.agentId || column.id);
+  });
+}
+
+function getEnabledAgentIds() {
+  var list = [];
+  TASK_BOARD_STATUSES.forEach(function(column) {
+    if (column.agent) {
+      var agentId = column.agentId || column.id;
+      if (isAgentAvailable(agentId)) {
+        list.push(agentId);
+      }
+    }
+  });
+  return list;
+}
+
+function mapMonitorIdToGmcAgentId(monitorId) {
+  if (!monitorId || typeof monitorId !== 'string') return '';
+  var id = monitorId.trim().toLowerCase();
+  if (id === 'codex-cli' || id === 'codex-app' || id === 'codex') return 'codex';
+  if (id === 'claude-code' || id === 'claude') return 'claude';
+  if (id === 'antigravity') return 'antigravity';
+  if (id === 'opencode') return 'opencode';
+  return id;
+}
+
+function filterAgentMonitorAgents(agents) {
+  if (!Array.isArray(agents)) return [];
+  return agents.filter(function(item) {
+    if (!item) return false;
+    var id = item.agentId || item.agent_id || item.id;
+    var gmcId = mapMonitorIdToGmcAgentId(id);
+    return isAgentAvailable(gmcId);
+  });
+}
+
+function filterAgentMonitorUsage(usage) {
+  if (!usage || typeof usage !== 'object') return usage;
+  var filtered = {};
+  Object.keys(usage).forEach(function(key) {
+    var gmcId = mapMonitorIdToGmcAgentId(key);
+    if (isAgentAvailable(gmcId)) {
+      filtered[key] = usage[key];
+    }
+  });
+  return filtered;
+}
 
 function normalizeLanguage(value) {
   var normalized = String(value || '').toLowerCase().replace(/_/g, '-');
@@ -8685,6 +8955,7 @@ function applyLanguage() {
   }
   renderSecurityControls();
   renderThemeControls();
+  renderAvailableAgents();
   renderTaskBoard();
   renderTaskSpeechState();
   if (targetRepo) {
@@ -8781,7 +9052,7 @@ function setActiveView(view) {
   if (view === 'tasks') {
     startAgentMonitorPolling();
     performance.mark('gmc-task-view-start');
-    Promise.all([loadRepositoryTasks(), loadRepositoryTaskAgent()]).then(function() {
+    Promise.all([loadRepositoryTasks(), loadRepositoryTaskAgent(), loadAvailableAgents()]).then(function() {
       performance.mark('gmc-task-view-end');
       performance.measure('gmc-task-view-switch', 'gmc-task-view-start', 'gmc-task-view-end');
       console.debug('[gmc:timing] task view switch: ' + getPerfMeasure('gmc-task-view-switch') + 'ms');
@@ -8826,6 +9097,7 @@ function bindTaskControls() {
   var decompose = $('decomposeTaskButton');
   var form = $('taskComposer');
   if (refresh) refresh.addEventListener('click', function() {
+    loadAvailableAgents();
     loadRepositoryTasks({ force: true });
     loadAgentMonitor({ force: true });
   });
@@ -9205,6 +9477,8 @@ function loadRepositoryTasks(options) {
 function startAgentMonitorPolling() {
   stopAgentMonitorPolling();
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  var enabledAgents = getEnabledAgentIds();
+  if (!enabledAgents.length) return;
   if (!state.agentMonitor.agents.length) {
     state.agentMonitor = { status: 'loading', available: false, reason: '', agents: [], usage: null };
     renderTaskBoard();
@@ -9240,6 +9514,8 @@ function scheduleAgentMonitorPoll() {
   if (state.agentMonitorTimer) clearTimeout(state.agentMonitorTimer);
   state.agentMonitorTimer = null;
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  var enabledAgents = getEnabledAgentIds();
+  if (!enabledAgents.length) return;
   if (state.agentMonitorSocket &&
       (state.agentMonitorSocket.readyState === WebSocket.CONNECTING ||
        state.agentMonitorSocket.readyState === WebSocket.OPEN)) return;
@@ -9253,6 +9529,7 @@ function scheduleAgentMonitorReconnect() {
   if (state.agentMonitorReconnectTimer) clearTimeout(state.agentMonitorReconnectTimer);
   state.agentMonitorReconnectTimer = null;
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  if (!getEnabledAgentIds().length) return;
   if (typeof window.WebSocket !== 'function') return;
   state.agentMonitorReconnectTimer = setTimeout(function() {
     state.agentMonitorReconnectTimer = null;
@@ -9262,6 +9539,7 @@ function scheduleAgentMonitorReconnect() {
 
 function connectAgentMonitorSocket() {
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) return;
+  if (!getEnabledAgentIds().length) return;
   if (typeof window.WebSocket !== 'function') {
     scheduleAgentMonitorPoll();
     return;
@@ -9291,12 +9569,14 @@ function connectAgentMonitorSocket() {
     }
     if (!payload) return;
     var socketAgents = Array.isArray(payload.agents) ? payload.agents : [];
+    socketAgents = filterAgentMonitorAgents(socketAgents);
+    var filteredUsage = filterAgentMonitorUsage(payload.usage);
     state.agentMonitor = {
       status: 'ok',
       available: true,
       reason: '',
       agents: normalizeAgentMonitorSocketAgents(socketAgents),
-      usage: payload.usage || null
+      usage: filteredUsage
     };
     if (!state.draggedTaskId) renderTaskBoard();
   });
@@ -9511,6 +9791,29 @@ function loadAgentMonitor(options) {
   if (state.activeView !== 'tasks' || state.settingsOpen || document.hidden) {
     return Promise.resolve(state.agentMonitor);
   }
+  if (options.agent && !isAgentAvailable(options.agent)) {
+    return Promise.resolve({
+      status: 'disabled',
+      available: false,
+      reason: 'agent_disabled',
+      agent: options.agent,
+      agents: [],
+      usage: null
+    });
+  }
+  var enabledAgents = getEnabledAgentIds();
+  if (!enabledAgents.length) {
+    stopAgentMonitorPolling();
+    state.agentMonitor = {
+      status: 'ok',
+      available: true,
+      reason: '',
+      agents: [],
+      usage: null
+    };
+    if (!state.draggedTaskId) renderTaskBoard();
+    return Promise.resolve(state.agentMonitor);
+  }
   if (state.agentMonitorLoading && !options.force) {
     return Promise.resolve(state.agentMonitor);
   }
@@ -9520,7 +9823,16 @@ function loadAgentMonitor(options) {
   var controller = new AbortController();
   state.agentMonitorRequest = controller;
   state.agentMonitorLoading = true;
-  return fetch('/api/agent-monitor', {
+
+  var queryParts = [];
+  if (options.agent) {
+    queryParts.push('agent=' + encodeURIComponent(options.agent));
+  } else {
+    queryParts.push('agents=' + encodeURIComponent(enabledAgents.join(',')));
+  }
+  var endpoint = '/api/agent-monitor?' + queryParts.join('&');
+
+  return fetch(endpoint, {
     cache: 'no-store',
     signal: controller.signal,
     gmcTimeoutMs: 5000
@@ -9533,12 +9845,13 @@ function loadAgentMonitor(options) {
     })
     .then(function(data) {
       if (state.agentMonitorRequest !== controller) return state.agentMonitor;
+      var rawAgents = Array.isArray(data.agents) ? data.agents : [];
       state.agentMonitor = {
         status: data.status || 'unavailable',
         available: data.available === true,
         reason: data.reason || '',
-        agents: Array.isArray(data.agents) ? data.agents : [],
-        usage: data.usage || null
+        agents: filterAgentMonitorAgents(rawAgents),
+        usage: data.usage || null ? filterAgentMonitorUsage(data.usage) : null
       };
       if (!state.draggedTaskId) renderTaskBoard();
       return state.agentMonitor;
@@ -9747,8 +10060,12 @@ function deleteTaskRequest(taskId) {
 function moveTask(taskId, direction) {
   var task = findRepoTask(taskId);
   if (!task) return;
-  var index = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(taskBoardStatus(task.status));
-  var next = TASK_BOARD_STATUSES[index + direction];
+  var visibleStatuses = getVisibleTaskBoardStatuses();
+  var index = visibleStatuses.map(function(item) { return item.id; }).indexOf(taskBoardStatus(task.status));
+  if (index === -1) {
+    index = direction > 0 ? 0 : visibleStatuses.length - 1;
+  }
+  var next = visibleStatuses[index + direction];
   if (next) updateTaskStatus(taskId, next.id);
 }
 
@@ -9783,7 +10100,9 @@ function renderTaskBoard() {
     return;
   }
 
-  board.innerHTML = TASK_BOARD_STATUSES.map(function(column) {
+  var visibleStatuses = getVisibleTaskBoardStatuses();
+  board.style.gridTemplateColumns = 'repeat(' + visibleStatuses.length + ', minmax(210px, 1fr))';
+  board.innerHTML = visibleStatuses.map(function(column) {
     var tasks = (state.repoTasks || []).filter(function(task) { return taskBoardStatus(task.status) === column.id; });
     var monitorState = column.agent ? agentMonitorColumnState(column).status : '';
     var dotClass = column.agent && monitorState === 'working' ? 'task-dot breathing' : 'task-dot';
@@ -9926,9 +10245,10 @@ function formatAgentMonitorUptime(value) {
 }
 
 function taskCardHtml(task, column) {
-  var statusIndex = TASK_BOARD_STATUSES.map(function(item) { return item.id; }).indexOf(taskBoardStatus(task.status));
+  var visibleStatuses = getVisibleTaskBoardStatuses();
+  var statusIndex = visibleStatuses.map(function(item) { return item.id; }).indexOf(taskBoardStatus(task.status));
   var canMoveLeft = statusIndex > 0;
-  var canMoveRight = statusIndex < TASK_BOARD_STATUSES.length - 1;
+  var canMoveRight = statusIndex >= 0 && statusIndex < visibleStatuses.length - 1;
   var summary = taskSummary(task.content);
   var titleHtml = task.title ? '<strong class="task-card-title">' + escapeHtml(task.title) + '</strong>' : '';
   var copyClass = task.title ? 'task-card-copy has-title' : 'task-card-copy';
@@ -11680,6 +12000,7 @@ function rotateToken() {
 var AGENTS = ['codex', 'claude', 'antigravity', 'opencode'];
 
 function loadAgentSettings() {
+  loadAvailableAgents();
   fetch('/api/agent', { cache: 'no-store' })
     .then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -11688,6 +12009,10 @@ function loadAgentSettings() {
     .then(function(data) {
       state.commitAgent = data.commitAgent || data.agent || 'codex';
       state.taskAgent = data.taskAgent || data.agent || 'codex';
+      if (Array.isArray(data.availableAgents) && data.availableAgents.length > 0) {
+        state.availableAgents = data.availableAgents;
+        renderAvailableAgents();
+      }
       renderAgentOptions('commit');
       renderAgentOptions('task');
     })
@@ -11714,6 +12039,10 @@ function loadRepositoryTaskAgent() {
     .then(function(data) {
       if (targetRepo !== repoAtStart) return null;
       state.repositoryTaskAgent = data.repositoryTaskAgent || data.taskAgent || data.agent || 'codex';
+      if (Array.isArray(data.availableAgents) && data.availableAgents.length > 0) {
+        state.availableAgents = data.availableAgents;
+        renderTaskBoard();
+      }
       renderAgentOptions('repositoryTask');
       return state.repositoryTaskAgent;
     })
@@ -11734,6 +12063,9 @@ function renderAgentOptions(scope) {
   var inputName = 'gmc-' + scope + '-agent';
   var html = '';
   AGENTS.forEach(function(name) {
+    if (scope === 'repositoryTask' && !isAgentAvailable(name)) {
+      return;
+    }
     var checked = name === currentAgent ? ' checked' : '';
     html += '<label class="radio-label"><input type="radio" name="' + inputName + '" value="' + name + '"' + checked + '>' +
       '<span class="radio-indicator"></span><span class="radio-text">' + name + '</span></label>';
@@ -11786,6 +12118,160 @@ function updateAgentSetting(scope, agent) {
       if (inputs) {
         inputs.forEach(function(input) { input.disabled = false; });
       }
+    });
+}
+
+function loadAvailableAgents() {
+  var container = $('availableAgentsList');
+  var status = $('availableAgentsStatus');
+  if (container && (!state.availableAgents || state.availableAgents.length === 0)) {
+    container.innerHTML = '<div class="available-agents-loading">' + escapeHtml(t('agentLoading')) + '</div>';
+  }
+  return fetch('/api/agent-availability', { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      state.availableAgents = Array.isArray(data.agents) ? data.agents : [];
+      renderAvailableAgents();
+      renderTaskBoard();
+      renderAgentOptions('repositoryTask');
+      if (state.activeView === 'tasks') {
+        if (getEnabledAgentIds().length > 0) {
+          if (!state.agentMonitorTimer && !state.agentMonitorSocket) {
+            startAgentMonitorPolling();
+          }
+        } else {
+          stopAgentMonitorPolling();
+        }
+      }
+      return state.availableAgents;
+    })
+    .catch(function(error) {
+      if (status) {
+        status.textContent = t('agentAvailabilitySaveFailed') + error.message;
+        status.style.color = 'var(--rose)';
+      }
+      if (container && (!state.availableAgents || state.availableAgents.length === 0)) {
+        container.innerHTML = '<div class="available-agents-loading" style="color:var(--rose)">' + escapeHtml(error.message) + '</div>';
+      }
+      return [];
+    });
+}
+
+function renderAvailableAgents() {
+  var container = $('availableAgentsList');
+  if (!container) return;
+  var agents = state.availableAgents || [];
+  if (!agents.length) {
+    container.innerHTML = '<div class="available-agents-loading">' + escapeHtml(t('agentLoading')) + '</div>';
+    return;
+  }
+  var html = '';
+  agents.forEach(function(item) {
+    var isEnabled = Boolean(item.enabled);
+    var checked = isEnabled ? ' checked' : '';
+    var labelText = isEnabled ? t('agentEnabled') : t('agentDisabled');
+    var agentDesc = item.agentId ? item.agentId : '';
+    html += '<div class="available-agent-row" data-agent-id="' + escapeHtml(item.agentId) + '">' +
+      '<div class="available-agent-info">' +
+        '<strong>' + escapeHtml(item.name || item.agentId) + '</strong>' +
+        '<span>' + escapeHtml(agentDesc) + '</span>' +
+      '</div>' +
+      '<label class="toggle-control" title="' + escapeHtml(item.name || item.agentId) + '">' +
+        '<input type="checkbox" class="agent-availability-toggle" data-agent-id="' + escapeHtml(item.agentId) + '"' + checked + '>' +
+        '<span class="toggle-track" aria-hidden="true"></span>' +
+        '<span class="toggle-label">' + escapeHtml(labelText) + '</span>' +
+      '</label>' +
+    '</div>';
+  });
+  container.innerHTML = html;
+
+  var toggles = container.querySelectorAll('.agent-availability-toggle');
+  toggles.forEach(function(toggle) {
+    toggle.addEventListener('change', function() {
+      var agentId = this.getAttribute('data-agent-id');
+      var checked = this.checked;
+      updateAgentAvailability(agentId, checked, this);
+    });
+  });
+}
+
+function updateAgentAvailability(agentId, enabled, inputEl) {
+  var status = $('availableAgentsStatus');
+  if (status) {
+    status.textContent = t('working');
+    status.style.color = '';
+  }
+  var container = $('availableAgentsList');
+  var allToggles = container ? container.querySelectorAll('.agent-availability-toggle') : [];
+  allToggles.forEach(function(el) {
+    el.disabled = true;
+    if (el.parentElement) el.parentElement.classList.add('disabled');
+  });
+
+  fetch('/api/agent-availability', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId: agentId, enabled: enabled })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) {
+          throw new Error(data.error || 'HTTP ' + res.status);
+        }
+        return data;
+      });
+    })
+    .then(function(data) {
+      if (Array.isArray(data.agents)) {
+        state.availableAgents = data.agents;
+      } else {
+        (state.availableAgents || []).forEach(function(a) {
+          if (a.agentId === agentId) {
+            a.enabled = enabled;
+          }
+        });
+      }
+      var parentLabel = inputEl ? inputEl.closest('.toggle-control') : null;
+      var textLabel = parentLabel ? parentLabel.querySelector('.toggle-label') : null;
+      if (textLabel) {
+        textLabel.textContent = enabled ? t('agentEnabled') : t('agentDisabled');
+      }
+      if (status) {
+        status.textContent = t('agentAvailabilitySaved');
+        status.style.color = '';
+      }
+      renderTaskBoard();
+      renderAgentOptions('repositoryTask');
+      if (state.activeView === 'tasks') {
+        if (getEnabledAgentIds().length > 0) {
+          startAgentMonitorPolling();
+        } else {
+          stopAgentMonitorPolling();
+        }
+      }
+    })
+    .catch(function(error) {
+      if (inputEl) {
+        inputEl.checked = !enabled;
+        var parentLabel = inputEl.closest('.toggle-control');
+        var textLabel = parentLabel ? parentLabel.querySelector('.toggle-label') : null;
+        if (textLabel) {
+          textLabel.textContent = !enabled ? t('agentEnabled') : t('agentDisabled');
+        }
+      }
+      if (status) {
+        status.textContent = t('agentAvailabilitySaveFailed') + (error && error.message ? error.message : String(error));
+        status.style.color = 'var(--rose)';
+      }
+    })
+    .finally(function() {
+      allToggles.forEach(function(el) {
+        el.disabled = false;
+        if (el.parentElement) el.parentElement.classList.remove('disabled');
+      });
     });
 }
 
