@@ -213,6 +213,7 @@ async function testBackgroundWebLifecycle(tempDir, fakeServerPath) {
   try {
     var startOutput = await runGmc(['web', '--port', String(webPort)], env);
     assert(startOutput.indexOf('started in background') >= 0, startOutput);
+    assert(startOutput.indexOf('Opening http://127.0.0.1:' + webPort) >= 0, startOutput);
     await waitForWeb(webPort, testDir);
     await waitForHealthy(monitorPort);
     await assertPausedAgentMonitor(webPort, testDir);
@@ -221,6 +222,7 @@ async function testBackgroundWebLifecycle(tempDir, fakeServerPath) {
 
     var runningOutput = await runGmc(['web', '--port', String(webPort)], env);
     assert(runningOutput.indexOf('already running') >= 0, runningOutput);
+    assert(runningOutput.indexOf('Opening http://127.0.0.1:' + webPort) >= 0, runningOutput);
 
     var startFlagOutput = await runGmc(['web', '--start', '--port', String(webPort)], env);
     assert(startFlagOutput.indexOf('already running') >= 0, startFlagOutput);
@@ -391,6 +393,7 @@ function webEnvironment(testDir, fakeServerPath, monitorPort) {
   return Object.assign({}, process.env, {
     HOME: homeDir,
     USERPROFILE: homeDir,
+    GMC_NO_OPEN: '1',
     GMC_AGENT_MONITOR_PORT: String(monitorPort),
     GMC_AGENT_MONITOR_PYTHON: process.execPath,
     GMC_AGENT_MONITOR_SERVER: fakeServerPath,

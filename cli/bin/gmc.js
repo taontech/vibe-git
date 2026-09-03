@@ -355,34 +355,43 @@ async function gitWebCommand(flags) {
     }
   }
 
-  if (!flags.tmp) {
-    if (isRunning) {
-      console.log('GMC Web is already running on port ' + port + '.');
-      return;
+  if (isRunning) {
+    var address = web.authenticatedUrl(null, {
+      port: port
+    });
+    console.log('GMC Web is already running on port ' + port + '.');
+    if (!flags.noOpen) {
+      console.log('Opening ' + address);
+      web.openBrowser(address);
+    } else {
+      console.log('Address: ' + address);
     }
-    var childArgs = ['web', '--tmp', '--port', port, '--no-open'];
+    return;
+  }
+
+  if (!flags.tmp) {
+    var childArgs = ['web', '--tmp', '--port', String(port), '--no-open'];
     var child = childProcess.spawn(process.execPath, [__filename].concat(childArgs), {
       detached: true,
       stdio: 'ignore'
     });
     child.unref();
-    console.log('GMC Web server started in background on port ' + port + '.');
-    return;
-  }
 
-  if (isRunning) {
-    if (root) {
-      var address = web.authenticatedUrl(root, {
-        port: port
-      });
-      console.log('GMC Web is already running on port ' + port + '.');
+    var started = await waitForServer(port, 5000);
+    if (!started) {
+      console.error('Failed to start GMC Web server on port ' + port + '.');
+      process.exitCode = 1;
+      return;
+    }
+    var address = web.authenticatedUrl(root, {
+      port: port
+    });
+    console.log('GMC Web server started in background on port ' + port + '.');
+    if (!flags.noOpen) {
       console.log('Opening ' + address);
-      if (!flags.noOpen) {
-        web.openBrowser(address);
-      }
+      web.openBrowser(address);
     } else {
-      console.log('GMC Web is already running on port ' + port + '.');
-      console.log('Address: http://127.0.0.1:' + port + '/');
+      console.log('Address: ' + address);
     }
     return;
   }
@@ -493,7 +502,10 @@ async function runWatchedGitWeb(root, flags, port, isRunning) {
   }
 
   startChild();
-  if (!flags.noOpen) {
+  var watchStarted = await waitForServer(port, 5000);
+  if (!watchStarted) {
+    console.error('Failed to start GMC Web server on port ' + port + '.');
+  } else if (!flags.noOpen) {
     web.openBrowser(address);
   }
   console.log('GMC Web watch: ' + address);
@@ -523,6 +535,18 @@ async function runWatchedGitWeb(root, flags, port, isRunning) {
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
   });
+}
+
+async function waitForServer(port, timeoutMs) {
+  var deadline = Date.now() + (timeoutMs || 5000);
+  while (Date.now() < deadline) {
+    var running = await web.checkRunning(port);
+    if (running) {
+      return true;
+    }
+    await delay(100);
+  }
+  return false;
 }
 
 function delay(ms) {

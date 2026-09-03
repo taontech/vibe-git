@@ -112,7 +112,10 @@ function authenticatedUrl(root, options) {
   var port = normalizePort(options.port || DEFAULT_PORT);
   var host = options.host || '127.0.0.1';
   var displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
-  var query = { repo: root };
+  var query = {};
+  if (root) {
+    query.repo = root;
+  }
   query[AUTH_QUERY_PARAM] = getAuthToken();
   return 'http://' + formatUrlHost(displayHost) + ':' + port + '/?' + new URLSearchParams(query).toString();
 }
@@ -4157,6 +4160,9 @@ function throwHttpError(message) {
 }
 
 function openBrowser(address) {
+  if (process.env.GMC_NO_OPEN === '1' || process.env.GMC_NO_OPEN === 'true') {
+    return;
+  }
   var command;
   var args;
   if (process.platform === 'darwin') {
