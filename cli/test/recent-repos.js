@@ -167,6 +167,11 @@ async function run() {
     assert.ok(html.indexOf('handleRepoHoverLeave') >= 0, 'HTML should contain handleRepoHoverLeave linkage function');
     assert.ok(html.indexOf('focusRepo:') >= 0, 'HTML should export focusRepo from City3DEngine');
     assert.ok(html.indexOf('unfocusRepo:') >= 0, 'HTML should export unfocusRepo from City3DEngine');
+    assert.ok(html.indexOf('.calendar-cell[data-level="1"] { background: #9be9a8; }') >= 0, 'HTML should define consistent level 1 green');
+    assert.ok(html.indexOf('.calendar-cell[data-global-level="1"] { background: #dbe2ea; }') >= 0, 'HTML should define consistent global level 1');
+    assert.strictEqual(html.indexOf('html[data-theme="dark"] .calendar-cell[data-global-level'), -1, 'HTML should not override calendar cell colors in dark theme');
+    assert.strictEqual(html.indexOf('html[data-theme="purple"] .calendar-cell[data-global-level'), -1, 'HTML should not override calendar cell colors in purple theme');
+    assert.strictEqual(html.indexOf('html[data-theme="ocean"] .calendar-cell[data-global-level'), -1, 'HTML should not override calendar cell colors in ocean theme');
 
     console.log('Recent repository sorting, global overview homepage, contributions, config editor, and SPA switching tests passed.');
   } finally {

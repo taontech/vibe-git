@@ -4982,18 +4982,6 @@ h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
 .calendar-cell[data-global-level="2"] { background: #cbd5e1; }
 .calendar-cell[data-global-level="3"] { background: #94a3b8; }
 .calendar-cell[data-global-level="4"] { background: #64748b; }
-html[data-theme="dark"] .calendar-cell[data-global-level="1"],
-html[data-theme="purple"] .calendar-cell[data-global-level="1"] { background: #334155; }
-html[data-theme="dark"] .calendar-cell[data-global-level="2"],
-html[data-theme="purple"] .calendar-cell[data-global-level="2"] { background: #475569; }
-html[data-theme="dark"] .calendar-cell[data-global-level="3"],
-html[data-theme="purple"] .calendar-cell[data-global-level="3"] { background: #64748b; }
-html[data-theme="dark"] .calendar-cell[data-global-level="4"],
-html[data-theme="purple"] .calendar-cell[data-global-level="4"] { background: #94a3b8; }
-html[data-theme="ocean"] .calendar-cell[data-global-level="1"] { background: #cbd5e1; }
-html[data-theme="ocean"] .calendar-cell[data-global-level="2"] { background: #94a3b8; }
-html[data-theme="ocean"] .calendar-cell[data-global-level="3"] { background: #64748b; }
-html[data-theme="ocean"] .calendar-cell[data-global-level="4"] { background: #475569; }
 .calendar-cell[data-level="1"] { background: #9be9a8; }
 .calendar-cell[data-level="2"] { background: #40c463; }
 .calendar-cell[data-level="3"] { background: #30a14e; }
@@ -16539,8 +16527,7 @@ function renderCalendar(contributions, globalContributions, elementId) {
       var cellAttrs = 'class="calendar-cell"';
       if (level > 0) {
         cellAttrs += ' data-level="' + level + '"';
-      }
-      if (globalLevel > 0) {
+      } else if (globalLevel > 0) {
         cellAttrs += ' data-global-level="' + globalLevel + '"';
       }
       weeksHtml += '<div ' + cellAttrs + ' title="' + escapeHtml(titleText) + '"></div>';
