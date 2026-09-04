@@ -22,6 +22,7 @@ var DIFF_LIMIT = 120000;
 var RELOAD_TOKEN = process.env.GMC_GITWEB_RELOAD_TOKEN || String(Date.now());
 var RECENT_REPOS_FILE = path.join(os.homedir(), '.config', 'gmc', 'recent-repos.json');
 var CONTRIBUTIONS_CACHE_FILE = path.join(os.homedir(), '.config', 'gmc', 'contributions-cache.json');
+var CITY_CACHE_FILE = path.join(os.homedir(), '.config', 'gmc', 'city-cache.json');
 var AUTH_TOKEN_FILE = path.join(os.homedir(), '.config', 'gmc', 'gitweb-token');
 var SECURITY_SETTINGS_FILE = path.join(os.homedir(), '.config', 'gmc', 'gitweb-security.json');
 var AUTH_QUERY_PARAM = 'gmc_auth';
@@ -39,7 +40,7 @@ var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'doing', 'review'
 var recentRepoVisitTimes = {};
 var statusCache = {};
 var repoQuickStatusCache = {};
-var REPO_STATUS_CACHE_TTL_MS = 20000;
+var REPO_STATUS_CACHE_TTL_MS = 60000;
 var taskEventChannels = Object.create(null);
 var agentMonitorRuntime = null;
 var shutdownHandler = null;
@@ -362,6 +363,11 @@ function handleRequest(req, res) {
       var forceRepos = Boolean(parsed.query && parsed.query.force === '1');
       var repoList = readRecentRepositories(forceRepos);
       sendJson(res, { repositories: attachRepoStatus(repoList, forceRepos) });
+      return;
+    }
+
+    if (parsed.pathname === '/api/repositories/status') {
+      handleGetRepositoriesStatus(req, res, parsed);
       return;
     }
 
@@ -1492,7 +1498,7 @@ function getGlobalGitConfig() {
   return { list: list, map: map };
 }
 
-function collectGitOverview(force) {
+function collectGitOverview(force, lazy) {
   var version = runGitOptional(process.cwd(), ['--version']) || 'git version unknown';
   var execPath = runGitOptional(process.cwd(), ['--exec-path']) || '';
   var gitBin = '';
@@ -1507,7 +1513,7 @@ function collectGitOverview(force) {
 
   var globalCfg = getGlobalGitConfig();
   var rawRepos = readRecentRepositories(force);
-  var repos = attachRepoStatus(rawRepos, force);
+  var repos = attachRepoStatus(rawRepos, force, lazy);
   var globalContribs = globalContributions(null, null);
 
   return {
@@ -1531,7 +1537,27 @@ function collectGitOverview(force) {
 function handleGetGitOverview(req, res, parsed) {
   try {
     var force = Boolean(parsed && parsed.query && parsed.query.force === '1');
-    sendJson(res, collectGitOverview(force));
+    var lazy = parsed && parsed.query && (parsed.query.lazy === '1' || parsed.query.lazy === 'true');
+    if (parsed && parsed.query && typeof parsed.query.lazy === 'undefined' && !force) {
+      lazy = true;
+    }
+    sendJson(res, collectGitOverview(force, lazy));
+  } catch (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  }
+}
+
+function handleGetRepositoriesStatus(req, res, parsed) {
+  try {
+    var force = Boolean(parsed && parsed.query && parsed.query.force === '1');
+    var rawRepos = readRecentRepositories(force);
+    attachRepoStatusAsync(rawRepos, force, function (err, repos) {
+      if (err) {
+        sendJsonError(res, 500, err.message);
+        return;
+      }
+      sendJson(res, { repositories: repos });
+    });
   } catch (error) {
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
@@ -2268,8 +2294,47 @@ function escapeHtmlText(value) {
 }
 
 var repoContributionsCache = null;
+var repoCityDiskCache = null;
 var lastCommitTimeCache = {};
 var recentReposCache = { at: 0, list: [] };
+
+function fastRepoRoot(resolved) {
+  try {
+    if (resolved && fs.existsSync(path.join(resolved, '.git'))) {
+      return resolved;
+    }
+  } catch (e) {}
+  try {
+    return git.repoRoot(resolved);
+  } catch (e) {
+    return resolved || null;
+  }
+}
+
+function loadCityCache() {
+  if (repoCityDiskCache !== null && typeof repoCityDiskCache === 'object') {
+    return repoCityDiskCache;
+  }
+  try {
+    if (fs.existsSync(CITY_CACHE_FILE)) {
+      var raw = JSON.parse(fs.readFileSync(CITY_CACHE_FILE, 'utf8'));
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        repoCityDiskCache = raw;
+        return repoCityDiskCache;
+      }
+    }
+  } catch (e) {}
+  repoCityDiskCache = {};
+  return repoCityDiskCache;
+}
+
+function saveCityCache() {
+  try {
+    if (!repoCityDiskCache) return;
+    fs.mkdirSync(path.dirname(CITY_CACHE_FILE), { recursive: true });
+    fs.writeFileSync(CITY_CACHE_FILE, JSON.stringify(repoCityDiskCache, null, 2) + '\n');
+  } catch (e) {}
+}
 
 function loadContributionsCache() {
   if (repoContributionsCache !== null && typeof repoContributionsCache === 'object') {
@@ -2307,8 +2372,21 @@ function getRepoLastCommitTime(repoPath) {
       headMtime = fs.statSync(headFile).mtimeMs;
     } catch (e) {}
 
-    if (cached && (headMtime === 0 || cached.headMtime === headMtime) && Date.now() - cached.checkedAt < 30000) {
+    if (cached && (headMtime === 0 || cached.headMtime === headMtime) && Date.now() - cached.checkedAt < 60000) {
       return cached.time;
+    }
+
+    if (!cached) {
+      var contribCache = loadContributionsCache();
+      var norm = path.resolve(repoPath);
+      if (contribCache && contribCache[norm] && contribCache[norm].lastCommitTime) {
+        lastCommitTimeCache[repoPath] = {
+          headMtime: headMtime,
+          time: contribCache[norm].lastCommitTime,
+          checkedAt: Date.now()
+        };
+        return contribCache[norm].lastCommitTime;
+      }
     }
 
     var raw = runGitOptional(repoPath, ['log', '-1', '--format=%at']);
@@ -2328,7 +2406,7 @@ function getRepoLastCommitTime(repoPath) {
 }
 
 function readRecentRepositories(force) {
-  if (!force && recentReposCache.list.length > 0 && Date.now() - recentReposCache.at < 5000) {
+  if (!force && recentReposCache.list.length > 0 && Date.now() - recentReposCache.at < 30000) {
     return recentReposCache.list;
   }
 
@@ -2384,18 +2462,21 @@ function writeRecentRepositories(repositories) {
   return readRecentRepositories(true);
 }
 
-function getRepoQuickStatus(repoPath, force) {
+function getRepoQuickStatus(repoPath, force, lazy) {
   if (!repoPath) return null;
   var resolved = path.resolve(repoPath);
   if (!force && repoQuickStatusCache[resolved] && (Date.now() - repoQuickStatusCache[resolved].at < REPO_STATUS_CACHE_TTL_MS)) {
     return repoQuickStatusCache[resolved].status;
+  }
+  if (lazy) {
+    return null;
   }
 
   try {
     if (!fs.existsSync(resolved)) {
       return null;
     }
-    var root = git.repoRoot(resolved);
+    var root = fastRepoRoot(resolved);
     if (!root) {
       return null;
     }
@@ -2426,7 +2507,55 @@ function getRepoQuickStatus(repoPath, force) {
   }
 }
 
-function attachRepoStatus(repositories, force) {
+function getRepoQuickStatusAsync(repoPath, force, callback) {
+  if (!repoPath) return callback(null);
+  var resolved = path.resolve(repoPath);
+  if (!force && repoQuickStatusCache[resolved] && (Date.now() - repoQuickStatusCache[resolved].at < REPO_STATUS_CACHE_TTL_MS)) {
+    return callback(repoQuickStatusCache[resolved].status);
+  }
+
+  try {
+    if (!fs.existsSync(resolved)) return callback(null);
+    var root = fastRepoRoot(resolved);
+    if (!root) return callback(null);
+
+    childProcess.execFile('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 5000 }, function (bErr, bOut) {
+      var branch = (bOut || '').trim() || 'HEAD';
+      childProcess.execFile('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { cwd: root, encoding: 'utf8', timeout: 5000 }, function (uErr, uOut) {
+        var upstream = (uOut || '').trim() || null;
+        var checkAheadBehind = function (cb) {
+          if (!upstream) return cb({ ahead: 0, behind: 0 });
+          childProcess.execFile('git', ['rev-list', '--left-right', '--count', 'HEAD...@{u}'], { cwd: root, encoding: 'utf8', timeout: 5000 }, function (abErr, abOut) {
+            cb(parseAheadBehind(abOut));
+          });
+        };
+
+        checkAheadBehind(function (aheadBehind) {
+          childProcess.execFile('git', ['status', '--porcelain=v1', '-b', '-z'], { cwd: root, encoding: 'utf8', timeout: 5000 }, function (sErr, sOut) {
+            var parsedStatus = parseStatusOutput(sOut || '');
+            var isClean = parsedStatus.clean && (aheadBehind.ahead === 0) && (aheadBehind.behind === 0);
+            var result = {
+              branch: branch,
+              upstream: upstream,
+              ahead: aheadBehind.ahead || 0,
+              behind: aheadBehind.behind || 0,
+              clean: isClean,
+              staged: parsedStatus.staged || 0,
+              unstaged: parsedStatus.unstaged || 0,
+              untracked: parsedStatus.untracked || 0
+            };
+            repoQuickStatusCache[resolved] = { at: Date.now(), status: result };
+            callback(result);
+          });
+        });
+      });
+    });
+  } catch (e) {
+    callback(null);
+  }
+}
+
+function attachRepoStatus(repositories, force, lazy) {
   if (!Array.isArray(repositories)) return [];
   var cache = loadContributionsCache();
   return repositories.map(function (item) {
@@ -2438,14 +2567,55 @@ function attachRepoStatus(repositories, force) {
       path: item.path,
       lastVisited: item.lastVisited,
       lastCommitTime: item.lastCommitTime,
-      status: getRepoQuickStatus(item.path, force),
-      contributions: cached || (item.path ? contributions(item.path) : {})
+      status: getRepoQuickStatus(item.path, force, lazy),
+      contributions: cached || (item.path ? (lazy ? {} : contributions(item.path)) : {})
     };
   });
 }
 
+function attachRepoStatusAsync(repositories, force, callback) {
+  if (!Array.isArray(repositories) || repositories.length === 0) {
+    return callback(null, []);
+  }
+
+  var cache = loadContributionsCache();
+  var results = new Array(repositories.length);
+  var pending = repositories.length;
+  var called = false;
+
+  function done() {
+    if (called) return;
+    called = true;
+    callback(null, results);
+  }
+
+  repositories.forEach(function (item, index) {
+    if (!item || !item.path) {
+      results[index] = item;
+      if (--pending === 0) done();
+      return;
+    }
+
+    var norm = '';
+    try { norm = path.resolve(item.path); } catch (e) { norm = item.path; }
+    var cachedContrib = (norm && cache[norm] && cache[norm].counts) ? cache[norm].counts : null;
+
+    getRepoQuickStatusAsync(item.path, force, function (status) {
+      results[index] = {
+        name: item.name,
+        path: item.path,
+        lastVisited: item.lastVisited,
+        lastCommitTime: item.lastCommitTime,
+        status: status,
+        contributions: cachedContrib || {}
+      };
+      if (--pending === 0) done();
+    });
+  });
+}
+
 var repoCityDataCache = {};
-var REPO_CITY_DATA_CACHE_TTL_MS = 25000;
+var REPO_CITY_DATA_CACHE_TTL_MS = 60000;
 
 var BINARY_EXTENSIONS = {
   png: 1, jpg: 1, jpeg: 1, gif: 1, webp: 1, ico: 1, bmp: 1, tiff: 1, tif: 1, avif: 1, heic: 1, psd: 1, ai: 1,
@@ -2529,8 +2699,33 @@ function getRepoCityData(repoPath, repoName, force) {
 
   try {
     if (!fs.existsSync(resolved)) return null;
-    var root = git.repoRoot(resolved);
+    var root = fastRepoRoot(resolved);
     if (!root) return null;
+
+    var gitDir = path.join(root, '.git');
+    var headFile = path.join(gitDir, 'HEAD');
+    var headMtime = 0;
+    try {
+      headMtime = fs.statSync(headFile).mtimeMs;
+    } catch (e) {}
+
+    var diskCache = loadCityCache();
+    var cachedEntry = diskCache[resolved] || diskCache[root];
+
+    var contribCache = loadContributionsCache();
+    var cachedContribs = (contribCache && (contribCache[resolved] || contribCache[root]))
+      ? (contribCache[resolved] || contribCache[root]).counts
+      : null;
+
+    if (!force && cachedEntry && headMtime > 0 && cachedEntry.headMtime === headMtime && cachedEntry.data) {
+      var restored = Object.assign({}, cachedEntry.data);
+      restored.name = repoName || restored.name || path.basename(root);
+      restored.path = root;
+      restored.contributions = cachedContribs || restored.contributions || {};
+      restored.status = (repoQuickStatusCache[resolved] && repoQuickStatusCache[resolved].status) || null;
+      repoCityDataCache[resolved] = { at: Date.now(), data: restored };
+      return restored;
+    }
 
     var raw = runGitOptional(root, ['ls-tree', '-r', '-l', 'HEAD']);
     var textFiles = [];
@@ -2572,6 +2767,19 @@ function getRepoCityData(repoPath, repoName, force) {
     textFiles.sort(function (a, b) { return b.size - a.size; });
     var sampled = textFiles.slice(0, 32);
 
+    // Fix calendar cache penetration: check contribCache first, compute & store only if missing
+    var repoContribs = cachedContribs;
+    if (!repoContribs) {
+      repoContribs = contributions(root);
+      if (contribCache) {
+        contribCache[resolved] = {
+          lastCommitTime: getRepoLastCommitTime(resolved),
+          counts: repoContribs
+        };
+        saveContributionsCache();
+      }
+    }
+
     var data = {
       name: repoName || path.basename(root),
       path: root,
@@ -2580,9 +2788,26 @@ function getRepoCityData(repoPath, repoName, force) {
       nonTextCount: nonTextCount,
       tallest: maxFile || (textFiles[0] || { name: 'index', path: 'index', size: 1000 }),
       buildings: sampled,
-      status: getRepoQuickStatus(root, force),
-      contributions: contributions(root)
+      status: (repoQuickStatusCache[resolved] && repoQuickStatusCache[resolved].status) || null,
+      contributions: repoContribs || {}
     };
+
+    if (headMtime > 0) {
+      diskCache[resolved] = {
+        headMtime: headMtime,
+        data: {
+          name: data.name,
+          path: data.path,
+          totalFiles: data.totalFiles,
+          textCount: data.textCount,
+          nonTextCount: data.nonTextCount,
+          tallest: data.tallest,
+          buildings: data.buildings,
+          contributions: data.contributions
+        }
+      };
+      saveCityCache();
+    }
 
     repoCityDataCache[resolved] = { at: Date.now(), data: data };
     return data;
@@ -2631,6 +2856,7 @@ function setCachedStatus(repoRoot, data) {
 
 function invalidateStatusCache(repoRoot) {
   var cache = loadContributionsCache();
+  var cityDisk = loadCityCache();
   if (repoRoot) {
     delete statusCache[repoRoot];
     delete lastCommitTimeCache[repoRoot];
@@ -2638,6 +2864,8 @@ function invalidateStatusCache(repoRoot) {
     delete repoQuickStatusCache[path.resolve(repoRoot)];
     delete repoCityDataCache[repoRoot];
     delete repoCityDataCache[path.resolve(repoRoot)];
+    delete cityDisk[repoRoot];
+    delete cityDisk[path.resolve(repoRoot)];
     try {
       var rootKey = git.repoRoot(repoRoot);
       delete statusCache[rootKey];
@@ -2646,6 +2874,8 @@ function invalidateStatusCache(repoRoot) {
       delete repoQuickStatusCache[path.resolve(rootKey)];
       delete repoCityDataCache[rootKey];
       delete repoCityDataCache[path.resolve(rootKey)];
+      delete cityDisk[rootKey];
+      delete cityDisk[path.resolve(rootKey)];
       delete cache[path.resolve(rootKey)];
     } catch (e) {
       delete cache[path.resolve(repoRoot)];
@@ -2656,9 +2886,11 @@ function invalidateStatusCache(repoRoot) {
     repoContributionsCache = {};
     repoQuickStatusCache = {};
     repoCityDataCache = {};
+    repoCityDiskCache = {};
   }
   recentReposCache.at = 0;
   saveContributionsCache();
+  saveCityCache();
 }
 
 function recordRepositoryVisit(root) {
@@ -10987,7 +11219,7 @@ function loadGitOverview(options) {
   if (state.gitOverviewLoading && !options.force) return Promise.resolve();
   state.gitOverviewLoading = true;
 
-  var url = '/api/git-overview' + (options.force ? '?force=1' : '');
+  var url = '/api/git-overview' + (options.force ? '?force=1' : '?lazy=1');
   return fetch(url, { cache: 'no-store' })
     .then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -10996,13 +11228,60 @@ function loadGitOverview(options) {
     .then(function(data) {
       state.gitOverviewLoading = false;
       state.gitOverview = data;
+      try {
+        localStorage.setItem('gmc_git_overview_cache', JSON.stringify(data));
+      } catch (e) {}
       renderGitOverview(data);
+      loadRepoStatusesAsync();
       return data;
     })
     .catch(function(err) {
       state.gitOverviewLoading = false;
       console.error('loadGitOverview error:', err);
     });
+}
+
+function loadRepoStatusesAsync() {
+  fetch('/api/repositories/status', { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      if (!data || !Array.isArray(data.repositories)) return;
+      var statusMap = {};
+      data.repositories.forEach(function(r) {
+        if (r && r.path) statusMap[r.path] = r.status;
+      });
+
+      if (state.repoHistory) {
+        state.repoHistory.forEach(function(item) {
+          if (item && item.path && statusMap[item.path]) {
+            item.status = statusMap[item.path];
+          }
+        });
+        renderSidebar();
+        if (!targetRepo) {
+          renderHomeRepoMatrix(state.repoHistory);
+        }
+      }
+
+      if (state.gitOverview && state.gitOverview.repositories) {
+        state.gitOverview.repositories.forEach(function(item) {
+          if (item && item.path && statusMap[item.path]) {
+            item.status = statusMap[item.path];
+          }
+        });
+        try {
+          localStorage.setItem('gmc_git_overview_cache', JSON.stringify(state.gitOverview));
+        } catch (e) {}
+      }
+
+      if (typeof City3DEngine !== 'undefined' && typeof City3DEngine.updateRepoStatuses === 'function') {
+        City3DEngine.updateRepoStatuses(data.repositories);
+      }
+    })
+    .catch(function() {});
 }
 
 function renderGitOverview(data) {
@@ -12724,7 +13003,14 @@ var City3DEngine = (function() {
   var pendingFocusRepo = '';
 
   // Data cache
-  var cachedCityData = null;
+  var cachedCityData = (function() {
+    try {
+      var raw = localStorage.getItem('gmc_city3d_cache');
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return null;
+  })();
+  var currentCitySignature = '';
 
   // Zen Mode
   var isZenMode = false;
@@ -14159,8 +14445,34 @@ var City3DEngine = (function() {
   function buildCity(cityDataList) {
     if (cityDataList && cityDataList.length) {
       cachedCityData = cityDataList;
+      try {
+        localStorage.setItem('gmc_city3d_cache', JSON.stringify(cityDataList));
+      } catch (e) {}
     }
     if (!cityGroup || !scene || !isInitialized) return;
+
+    var targetList = (cityDataList && cityDataList.length) ? cityDataList : cachedCityData;
+    var newSig = (targetList || []).map(function(r) {
+      return (r.path || r.name) + ':' + (r.totalFiles || 0) + ':' + (r.textCount || 0) + ':' + (r.tallest ? r.tallest.size : 0);
+    }).join('|');
+
+    if (currentCitySignature && newSig && currentCitySignature === newSig) {
+      if (Array.isArray(districtData) && Array.isArray(targetList)) {
+        targetList.forEach(function(r) {
+          for (var d = 0; d < districtData.length; d++) {
+            if (districtData[d].repo && (districtData[d].repo.path === r.path || districtData[d].repo.name === r.name)) {
+              districtData[d].repo.status = r.status;
+              districtData[d].repo.contributions = r.contributions;
+              break;
+            }
+          }
+        });
+      }
+      return;
+    }
+    if (newSig) {
+      currentCitySignature = newSig;
+    }
 
     var cleanGroup = function(grp) {
       if (!grp) return;
@@ -16586,9 +16898,25 @@ var City3DEngine = (function() {
     }
   }
 
+  function updateRepoStatuses(repoList) {
+    if (!Array.isArray(repoList) || !Array.isArray(districtData)) return;
+    var map = {};
+    repoList.forEach(function(r) {
+      if (r && r.path) map[r.path] = r.status;
+      if (r && r.name) map[r.name] = r.status;
+    });
+    districtData.forEach(function(dist) {
+      if (dist && dist.repo) {
+        var s = map[dist.repo.path] || map[dist.repo.name];
+        if (s) dist.repo.status = s;
+      }
+    });
+  }
+
   return {
     init: init,
     buildCity: buildCity,
+    updateRepoStatuses: updateRepoStatuses,
     focusRepo: focusRepo,
     unfocusRepo: unfocusRepo,
     setDayNight: setDayNight,
@@ -16642,6 +16970,32 @@ if (!targetRepo) {
   var viewTabsEl = document.querySelector('.view-tabs');
   if (viewTabsEl) viewTabsEl.hidden = true;
   initSidebar();
+
+  // Instant 0ms snapshot restore from localStorage
+  try {
+    var rawSavedOverview = localStorage.getItem('gmc_git_overview_cache');
+    if (rawSavedOverview) {
+      var savedOverview = JSON.parse(rawSavedOverview);
+      if (savedOverview && typeof savedOverview === 'object') {
+        state.gitOverview = savedOverview;
+        if (savedOverview.globalContributions) {
+          renderHomeCalendar(savedOverview.globalContributions);
+        }
+        if (savedOverview.repositories && savedOverview.repositories.length) {
+          state.repoHistory = savedOverview.repositories;
+          renderSidebar();
+          renderHomeRepoMatrix(savedOverview.repositories);
+        }
+        if (savedOverview.version && $('homeGitVersion')) $('homeGitVersion').textContent = savedOverview.version;
+        if ((savedOverview.gitBin || savedOverview.execPath) && $('homeGitPath')) {
+          var p = savedOverview.gitBin || savedOverview.execPath;
+          $('homeGitPath').textContent = p;
+          $('homeGitPath').title = p;
+        }
+      }
+    }
+  } catch (e) {}
+
   if (typeof City3DEngine !== 'undefined') {
     City3DEngine.init();
   }
