@@ -14252,7 +14252,7 @@ var City3DEngine = (function() {
 
     // Emitter Lens
     var lensGeo = new THREE.CylinderGeometry(signW * 0.28, signW * 0.28, 0.4, 8);
-    var lensMat = new THREE.MeshBasicMaterial({ color: colorHex });
+    var lensMat = new THREE.MeshBasicMaterial({ color: colorHex,toneMapped: false });
     var lensMesh = new THREE.Mesh(lensGeo, lensMat);
     lensMesh.position.y = 1.5;
     group.add(lensMesh);
