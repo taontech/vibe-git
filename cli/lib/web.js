@@ -3385,6 +3385,15 @@ function collectStatus(root) {
 
   t = Date.now();
   var remote = runGitOptional(root, ['remote', 'get-url', 'origin']);
+  if (!remote) {
+    var remotes = runGitOptional(root, ['remote']);
+    if (remotes) {
+      var firstRemote = remotes.split(/\r?\n/)[0].trim();
+      if (firstRemote) {
+        remote = runGitOptional(root, ['remote', 'get-url', firstRemote]);
+      }
+    }
+  }
   timings.remote = Date.now() - t;
 
   t = Date.now();
@@ -4873,10 +4882,15 @@ body { background: linear-gradient(180deg, var(--bg-top) 0, var(--bg) 280px); }
 .topbar-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .topbar-tools { display: contents; }
 h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-height: 1.1; }
-h2 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
-.repo-line { display: block; margin-top: 2px; }
-.repo { display: block; min-width: 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
-.repo[href]:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.repo-line { display: flex; align-items: center; gap: 10px; margin-top: 3px; min-width: 0; font-size: 12px; }
+.repo-status { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-links { display: inline-flex; align-items: center; gap: 12px; }
+.repo-links[hidden] { display: none !important; }
+.repo-link { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1; text-decoration: none; cursor: pointer; transition: color .15s ease; white-space: nowrap; }
+.repo-link:hover, .repo-link:focus-visible { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.repo-link svg, .repo-link-icon { width: 13px; height: 13px; flex-shrink: 0; pointer-events: none; display: block; }
+.repo-link span { line-height: 1; display: inline-block; }
+.repo-link[hidden] { display: none !important; }
 .agent-bar { display: flex; align-items: center; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
 .agent-bar[hidden] { display: none; }
 .agent-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; font-weight: 500; white-space: nowrap; transition: color .16s, background .16s, border-color .16s; }
@@ -6534,8 +6548,18 @@ body.city-3d-zen-active .home-page {
           </button>
           <div>
             <h1 id="appTitle">GMC GitWeb</h1>
-            <div class="repo-line">
-              <a id="repo" class="repo" data-i18n="loading">Loading...</a>
+            <div class="repo-line" id="repoLine">
+              <span id="repoStatus" class="repo-status" data-i18n="loading">Loading...</span>
+              <div id="repoLinks" class="repo-links" hidden>
+                <a id="repo" class="repo-link repo-local" role="button" tabindex="0">
+                  <svg class="repo-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                  <span id="repoText" data-i18n="repoLocal">本地</span>
+                </a>
+                <a id="repoRemote" class="repo-link repo-remote" target="_blank" rel="noopener noreferrer" hidden>
+                  <svg class="repo-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 0 20"></path><path d="M12 2a15.3 15.3 0 0 0 0 20"></path></svg>
+                  <span id="repoRemoteText" data-i18n="repoRemote">远端</span>
+                </a>
+              </div>
             </div>
 
           </div>
@@ -7492,6 +7516,9 @@ var I18N = {
     selectTextAndCopy: '请选中文本后复制',
     repoRunning: 'GMC GitWeb 正在运行。',
     openInFinderPrefix: '在 Finder 中打开：',
+    openRemoteUrlPrefix: '打开项目页面：',
+    repoLocal: '本地',
+    repoRemote: '远端',
     removeFromRecent: '从最近仓库中移除',
     removeFromRecentAriaSuffix: '从最近仓库中移除',
     loadingStatusErrorPrefix: '加载状态失败：',
@@ -7849,6 +7876,9 @@ var I18N = {
     selectTextAndCopy: 'Select text and copy',
     repoRunning: 'GMC GitWeb is running. ',
     openInFinderPrefix: 'Open in Finder: ',
+    openRemoteUrlPrefix: 'Open project page: ',
+    repoLocal: 'Local',
+    repoRemote: 'Remote',
     removeFromRecent: 'Remove from recent',
     removeFromRecentAriaSuffix: 'from recent repositories',
     loadingStatusErrorPrefix: 'Error loading status: ',
@@ -8210,6 +8240,9 @@ I18N.ja = Object.assign({}, I18N.en, {
   selectTextAndCopy: 'テキストを選択してコピーしてください',
   repoRunning: 'GMC GitWeb は実行中です。',
   openInFinderPrefix: 'Finder で開く: ',
+  openRemoteUrlPrefix: 'プロジェクトページを開く: ',
+  repoLocal: 'ローカル',
+  repoRemote: 'リモート',
   removeFromRecent: '最近の一覧から削除',
   removeFromRecentAriaSuffix: '最近のリポジトリから削除',
   loadingStatusErrorPrefix: '状態の読み込みエラー: ',
@@ -8461,6 +8494,9 @@ I18N.ko = Object.assign({}, I18N.en, {
   selectTextAndCopy: '텍스트를 선택한 뒤 복사하세요',
   repoRunning: 'GMC GitWeb이 실행 중입니다. ',
   openInFinderPrefix: 'Finder에서 열기: ',
+  openRemoteUrlPrefix: '프로젝트 페이지 열기: ',
+  repoLocal: '로컬',
+  repoRemote: '원격',
   removeFromRecent: '최근 목록에서 제거',
   removeFromRecentAriaSuffix: '최근 저장소에서 제거',
   loadingStatusErrorPrefix: '상태 불러오기 오류: ',
@@ -8712,6 +8748,9 @@ I18N.es = Object.assign({}, I18N.en, {
   selectTextAndCopy: 'Selecciona el texto y copia',
   repoRunning: 'GMC GitWeb está en ejecución. ',
   openInFinderPrefix: 'Abrir en Finder: ',
+  openRemoteUrlPrefix: 'Abrir página del proyecto: ',
+  repoLocal: 'Local',
+  repoRemote: 'Remoto',
   removeFromRecent: 'Eliminar de recientes',
   removeFromRecentAriaSuffix: 'de repositorios recientes',
   loadingStatusErrorPrefix: 'Error al cargar estado: ',
@@ -8947,6 +8986,9 @@ I18N.fr = Object.assign({}, I18N.en, {
   selectTextAndCopy: 'Sélectionnez le texte puis copiez',
   repoRunning: 'GMC GitWeb est en cours d’exécution. ',
   openInFinderPrefix: 'Ouvrir dans Finder : ',
+  openRemoteUrlPrefix: 'Ouvrir la page du projet : ',
+  repoLocal: 'Local',
+  repoRemote: 'Distant',
   removeFromRecent: 'Supprimer des récents',
   removeFromRecentAriaSuffix: 'des dépôts récents',
   loadingStatusErrorPrefix: 'Erreur de chargement de l’état : ',
@@ -9183,6 +9225,7 @@ function applyLanguage() {
   });
   updateReadmeLink();
   updateRepoLink(state.repoPathText || targetRepo || t('repoRunning'), targetRepo);
+  updateRepoRemoteLink(state.repoRemoteUrl);
   renderSidebar();
   if (!targetRepo) {
     renderHomeRepoMatrix(state.repoHistory || []);
@@ -10754,22 +10797,140 @@ function updateReadmeLink() {
 }
 
 function updateRepoLink(text, repoPath) {
+  var statusEl = $('repoStatus');
+  var linksEl = $('repoLinks');
   var link = $('repo');
   if (!link) return;
   state.repoPathText = text;
-  link.textContent = text;
-  if (repoPath && canOpenRepositoryLocally()) {
-    link.href = '#';
-    link.title = t('openInFinderPrefix') + repoPath;
-  } else {
-    link.removeAttribute('href');
-    if (repoPath) {
-      link.title = t('finderLocalOnly');
+  state.currentRepoPath = repoPath || null;
+
+  if (repoPath) {
+    if (statusEl) statusEl.hidden = true;
+    if (linksEl) linksEl.hidden = false;
+    link.hidden = false;
+    if (canOpenRepositoryLocally()) {
+      link.href = '#';
+      link.title = (t('openInFinderPrefix') || '在 Finder 中打开：') + repoPath;
     } else {
-      link.removeAttribute('title');
+      link.removeAttribute('href');
+      link.title = t('finderLocalOnly') || repoPath;
     }
+    var textEl = $('repoText');
+    if (textEl) textEl.textContent = t('repoLocal') || '本地';
+  } else {
+    if (linksEl) linksEl.hidden = true;
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = text || '';
+      statusEl.title = text || '';
+    }
+    link.removeAttribute('href');
+    link.removeAttribute('title');
   }
   updateTerminalButton(repoPath);
+}
+
+function remoteToWebUrl(remoteUrl) {
+  if (!remoteUrl || typeof remoteUrl !== 'string') return null;
+  var raw = remoteUrl.trim();
+  if (!raw) return null;
+  if (raw.indexOf('file://') === 0 || raw.charAt(0) === '/' || raw.charAt(0) === '.') return null;
+
+  var webScheme = 'https://';
+  var host = '';
+  var pathname = '';
+
+  var protoIdx = raw.indexOf('://');
+  if (protoIdx !== -1) {
+    var proto = raw.slice(0, protoIdx).toLowerCase();
+    var afterProto = raw.slice(protoIdx + 3);
+    if (proto === 'http') {
+      webScheme = 'http://';
+    } else {
+      webScheme = 'https://';
+    }
+    var atIdx = afterProto.indexOf('@');
+    var slashIdx = afterProto.indexOf('/');
+    if (atIdx !== -1 && (slashIdx === -1 || atIdx < slashIdx)) {
+      afterProto = afterProto.slice(atIdx + 1);
+    }
+    slashIdx = afterProto.indexOf('/');
+    if (slashIdx === -1) {
+      var colonIdx = afterProto.indexOf(':');
+      if (colonIdx !== -1) {
+        host = afterProto.slice(0, colonIdx);
+        pathname = afterProto.slice(colonIdx + 1);
+      } else {
+        return null;
+      }
+    } else {
+      host = afterProto.slice(0, slashIdx);
+      pathname = afterProto.slice(slashIdx + 1);
+    }
+    if (proto === 'ssh' || proto === 'git') {
+      var hColon = host.lastIndexOf(':');
+      if (hColon !== -1) {
+        var portStr = host.slice(hColon + 1);
+        if (portStr && !isNaN(Number(portStr))) {
+          host = host.slice(0, hColon);
+        }
+      }
+    }
+  } else {
+    var colonPos = raw.indexOf(':');
+    if (colonPos <= 1) return null;
+    var beforeColon = raw.slice(0, colonPos);
+    pathname = raw.slice(colonPos + 1);
+    var atPos = beforeColon.indexOf('@');
+    if (atPos !== -1) {
+      host = beforeColon.slice(atPos + 1);
+    } else {
+      host = beforeColon;
+    }
+  }
+
+  while (pathname.charAt(0) === '/') {
+    pathname = pathname.slice(1);
+  }
+  while (pathname.charAt(pathname.length - 1) === '/') {
+    pathname = pathname.slice(0, -1);
+  }
+  if (pathname.length > 4 && pathname.slice(-4).toLowerCase() === '.git') {
+    pathname = pathname.slice(0, -4);
+  }
+  while (pathname.charAt(pathname.length - 1) === '/') {
+    pathname = pathname.slice(0, -1);
+  }
+
+  if (!host || !pathname) return null;
+  return webScheme + host + '/' + pathname;
+}
+
+function updateRepoRemoteLink(remoteUrl) {
+  var link = $('repoRemote');
+  if (!link) return;
+  state.repoRemoteUrl = remoteUrl || null;
+  if (!remoteUrl || !targetRepo) {
+    link.hidden = true;
+    link.removeAttribute('href');
+    link.removeAttribute('title');
+    return;
+  }
+  var webUrl = remoteToWebUrl(remoteUrl);
+  link.hidden = false;
+  var textEl = $('repoRemoteText');
+  if (textEl) textEl.textContent = t('repoRemote') || '远端';
+  if (webUrl) {
+    link.href = webUrl;
+    var title = (t('openRemoteUrlPrefix') || '打开项目页面：') + webUrl;
+    if (remoteUrl && remoteUrl !== webUrl) {
+      title += String.fromCharCode(10) + remoteUrl;
+    }
+    link.title = title;
+  } else {
+    link.removeAttribute('href');
+    link.title = remoteUrl;
+  }
 }
 
 function updateTerminalButton(repoPath) {
@@ -11121,6 +11282,7 @@ function switchRepository(repoPath, options) {
   if (!targetRepo) {
     setPageTitle('');
     updateRepoLink(t('repoRunning'), null);
+    updateRepoRemoteLink(null);
     if ($('homePage')) $('homePage').hidden = false;
     if ($('city3dContainer')) $('city3dContainer').hidden = false;
     if (typeof City3DEngine !== 'undefined') City3DEngine.resume();
@@ -11139,6 +11301,7 @@ function switchRepository(repoPath, options) {
 
   setPageTitle(targetRepo);
   updateRepoLink(targetRepo, targetRepo);
+  updateRepoRemoteLink(null);
   updateReadmeLink();
   if ($('homePage')) $('homePage').hidden = true;
   if ($('city3dContainer')) $('city3dContainer').hidden = true;
@@ -17058,7 +17221,7 @@ var City3DEngine = (function() {
 })();
 
 function setPageTitle(repoPath) {
-  var title = repoPath ? ('GMC ' + repoDisplayName(repoPath)) : 'GMC GitWeb';
+  var title = repoPath ? repoDisplayName(repoPath) : 'GMC GitWeb';
   document.title = title;
   $('appTitle').textContent = title;
 }
@@ -17077,6 +17240,7 @@ bindHomePageEvents();
 if (!targetRepo) {
   setPageTitle('');
   updateRepoLink(t('repoRunning'), null);
+  updateRepoRemoteLink(null);
   if ($('homePage')) $('homePage').hidden = false;
   if ($('city3dContainer')) $('city3dContainer').hidden = false;
   if ($('gitPage')) $('gitPage').hidden = true;
@@ -17117,6 +17281,7 @@ if (!targetRepo) {
   loadGitOverview();
 } else {
   updateRepoLink(targetRepo, targetRepo);
+  updateRepoRemoteLink(null);
   if ($('homePage')) $('homePage').hidden = true;
   if ($('gitPage')) $('gitPage').hidden = false;
   if ($('closeRepoBtn')) $('closeRepoBtn').hidden = false;
@@ -17134,6 +17299,11 @@ window.addEventListener('load', function() {
 });
 
 $('repo').addEventListener('click', openCurrentRepository);
+$('repo').addEventListener('keydown', function(event) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    openCurrentRepository(event);
+  }
+});
 $('quickActions').addEventListener('click', function(e) {
   var btn = e.target.closest('.qa-btn');
   if (!btn) return;
@@ -17250,6 +17420,7 @@ function load(options) {
     .catch(function(error) {
       if (targetRepo !== repoAtStart) return;
       updateRepoLink(t('loadingStatusErrorPrefix') + error.message, null);
+      updateRepoRemoteLink(null);
     })
     .finally(function() {
       if (targetRepo !== repoAtStart) return;
@@ -17332,9 +17503,12 @@ function render(data) {
   var t0 = performance.now();
   if (data.error) {
     updateRepoLink(t('errorPrefix') + data.error, null);
+    updateRepoRemoteLink(null);
     return;
   }
+  setPageTitle(data.repository && data.repository.root ? data.repository.root : targetRepo);
   updateRepoLink(data.repository && data.repository.root ? data.repository.root : targetRepo, targetRepo);
+  updateRepoRemoteLink(data.repository && data.repository.remote);
   state.currentBranch = data.branch.current;
   $('branchText').textContent = data.branch.current;
   $('upstream').dataset.empty = data.branch.upstream ? 'false' : 'true';
