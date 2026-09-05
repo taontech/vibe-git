@@ -6616,10 +6616,6 @@ body.city-3d-zen-active .home-page {
                 <span id="city3dEdlIcon" class="city-3d-btn-icon">📐</span>
                 <span id="city3dEdlText" class="city-3d-btn-text">EDL 轮廓</span>
               </button>
-              <button id="city3dWireframeBtn" class="city-3d-btn" type="button" title="线框模式 / 纯结构边框 (后处理)" data-i18n-title="city3dWireframe">
-                <span id="city3dWireframeIcon" class="city-3d-btn-icon">🔲</span>
-                <span id="city3dWireframeText" class="city-3d-btn-text">线框</span>
-              </button>
               <button id="city3dZenBtn" class="city-3d-btn city-3d-btn-highlight" type="button" title="全屏沉浸/显示概览" data-i18n-title="city3dZenMode">
                 <span class="city-3d-btn-icon">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
@@ -7680,6 +7676,7 @@ var I18N = {
     city3dMotionTitleOff: '开启动态效果 (车辆穿梭/灯光闪烁等，当前为低功耗省电模式)',
     city3dDay: '白天模式',
     city3dNight: '夜间模式',
+    city3dClay: '白模模式',
     city3dZenMode: '全景沉浸',
     city3dOverviewMode: '恢复概览',
     city3dEnterRepo: '进入此仓库',
@@ -7695,7 +7692,6 @@ var I18N = {
     city3dSss: 'SSS 屏幕空间接触阴影',
     city3dSsr: 'SSR 屏幕空间湿面反射',
     city3dEdl: 'EDL / 建筑结构轮廓 (Sobel)',
-    city3dWireframe: '线框模式 / 纯结构边框',
     city3dAntialias: '抗锯齿 (FXAA)',
     cleanBranches: '清理本地分支',
     cleanBranchesShort: '清理分支',
@@ -8044,6 +8040,7 @@ var I18N = {
     city3dMotionTitleOff: 'Enable dynamic animations (traffic, lights, etc., currently in low-power mode)',
     city3dDay: 'Day Mode',
     city3dNight: 'Night Mode',
+    city3dClay: 'Clay Model',
     city3dZenMode: 'Zen 3D View',
     city3dOverviewMode: 'Show Overview',
     city3dEnterRepo: 'Enter Repository',
@@ -8059,7 +8056,6 @@ var I18N = {
     city3dSss: 'SSS Screen-Space Contact Shadows',
     city3dSsr: 'SSR Screen-Space Reflections',
     city3dEdl: 'EDL / Edge Outlines (Sobel)',
-    city3dWireframe: 'Wireframe / Edge Mode',
     city3dAntialias: 'Anti-Aliasing (FXAA)',
     cleanBranches: 'Clean Local Branches',
     cleanBranchesShort: 'Clean',
@@ -12663,7 +12659,7 @@ var City3DEngine = (function() {
   var isGTAOEnabled = true;
   var currentAOMode = 'gtao'; // 'gtao' | 'ssao' | 'off'
   var isEDLEnabled = true;
-  var isWireframeMode = false;
+  var clayMaterial = null;
 
   var GTAO_CONFIG = {
     mode: 'gtao',
@@ -12695,8 +12691,7 @@ var City3DEngine = (function() {
         edlEnabled: { value: 1.0 },
         edlStrength: { value: 0.85 },
         edlRadius: { value: 1.2 },
-        sobelStrength: { value: 0.55 },
-        wireframeMode: { value: 0.0 }
+        sobelStrength: { value: 0.55 }
       },
       vertexShader: [
         'varying vec2 vUv;',
@@ -12721,7 +12716,6 @@ var City3DEngine = (function() {
         'uniform float edlStrength;',
         'uniform float edlRadius;',
         'uniform float sobelStrength;',
-        'uniform float wireframeMode;',
         'varying vec2 vUv;',
         '',
         '// Interleaved Gradient Noise by Jorge Jimenez (breaks stepping & concentric bands)',
@@ -12746,10 +12740,6 @@ var City3DEngine = (function() {
         '  float rawDepth = texture2D(tDepth, vUv).r;',
         '',
         '  if (rawDepth >= 0.9999 || rawDepth <= 0.0) {',
-        '    if (wireframeMode > 0.5) {',
-        '      gl_FragColor = vec4(0.024, 0.035, 0.05, 1.0);',
-        '      return;',
-        '    }',
         '    gl_FragColor = sceneColor;',
         '    return;',
         '  }',
@@ -12758,10 +12748,10 @@ var City3DEngine = (function() {
         '  vec2 texel = 1.0 / resolution;',
         '  float z = getLinearDepth(vUv);',
         '',
-        '  // 1. Ambient Occlusion: GTAO (Ground Truth) vs SSAO (Classic Hemisphere)',
+        '  // 1. Ambient Occlusion: GTAO vs SSAO (controlled by independent aoEnabled switch)',
         '  float aoMultiBounce = 1.0;',
         '  vec3 giBounce = vec3(0.0);',
-        '  float effectiveAOMode = (aoEnabled > 0.5 || wireframeMode > 0.5) ? (aoMode > 0.5 ? aoMode : 1.0) : 0.0;',
+        '  float effectiveAOMode = (aoEnabled > 0.5) ? (aoMode > 0.5 ? aoMode : 1.0) : 0.0;',
         '  if (effectiveAOMode > 0.5) {',
         '    float noise = interleavedGradientNoise(gl_FragCoord.xy);',
         '    float projScale = resolution.y / max(-viewPos.z * 1.0, 0.1);',
@@ -12799,7 +12789,7 @@ var City3DEngine = (function() {
         '      float aoFactor = 1.0 - rawAO;',
         '      float rho = 0.35;',
         '      aoMultiBounce = aoFactor / max(1.0 - rho * (1.0 - aoFactor), 0.001);',
-        '      giBounce = (wireframeMode > 0.5) ? vec3(0.0) : (vec3(0.05, 0.08, 0.12) * (1.0 - aoMultiBounce) * giIntensity);',
+        '      giBounce = vec3(0.05, 0.08, 0.12) * (1.0 - aoMultiBounce) * giIntensity;',
         '    } else {',
         '      // Mode 2: SSAO - Soft & Diffuse Hemisphere Depth Sampling',
         '      float totalSSAO = 0.0;',
@@ -12832,14 +12822,14 @@ var City3DEngine = (function() {
         '      float aoFactor = 1.0 - rawSSAO;',
         '      float rho = 0.35;',
         '      aoMultiBounce = aoFactor / max(1.0 - rho * (1.0 - aoFactor), 0.001);',
-        '      giBounce = (wireframeMode > 0.5) ? vec3(0.0) : (vec3(0.04, 0.06, 0.09) * (1.0 - aoMultiBounce) * (giIntensity * 0.6));',
+        '      giBounce = vec3(0.04, 0.06, 0.09) * (1.0 - aoMultiBounce) * (giIntensity * 0.6);',
         '    }',
         '  }',
         '',
-        '  // 2. Eye-Dome Lighting (EDL) + Architectural Edge Detection (Depth Sobel & Geometric Normal Creases)',
+        '  // 2. Eye-Dome Lighting (EDL) + Architectural Edge Detection (controlled by independent edlEnabled switch)',
         '  float edlFactor = 1.0;',
         '  float totalEdge = 0.0;',
-        '  if (wireframeMode > 0.5 || edlEnabled > 0.5) {',
+        '  if (edlEnabled > 0.5) {',
         '    // 3x3 Depth-Only Sobel Filter: Strictly detects 3D depth discontinuities',
         '    float d00 = getLinearDepth(vUv + vec2(-texel.x, -texel.y));',
         '    float d10 = getLinearDepth(vUv + vec2( 0.0,     -texel.y));',
@@ -12882,39 +12872,31 @@ var City3DEngine = (function() {
         '    float normalGrad = max(1.0 - dotX, 1.0 - dotY);',
         '    float normalEdge = smoothstep(0.06, 0.28, normalGrad);',
         '',
-        '    totalEdge = clamp(max(depthEdge, normalEdge), 0.0, 1.0);',
+        '    totalEdge = clamp(max(depthEdge, normalEdge), 0.0, 1.0) * sobelStrength;',
         '',
-        '    if (edlEnabled > 0.5 || wireframeMode > 0.5) {',
-        '      vec2 offsets[8];',
-        '      offsets[0] = vec2( 1.0,  0.0);',
-        '      offsets[1] = vec2( 0.7071,  0.7071);',
-        '      offsets[2] = vec2( 0.0,  1.0);',
-        '      offsets[3] = vec2(-0.7071,  0.7071);',
-        '      offsets[4] = vec2(-1.0,  0.0);',
-        '      offsets[5] = vec2(-0.7071, -0.7071);',
-        '      offsets[6] = vec2( 0.0, -1.0);',
-        '      offsets[7] = vec2( 0.7071, -0.7071);',
-        '      float edlResponse = 0.0;',
-        '      for (int i = 0; i < 8; i++) {',
-        '        vec2 uvN = vUv + offsets[i] * (edlRadius * texel);',
-        '        float zN = getLinearDepth(uvN);',
-        '        float diff = max(0.0, (z - zN) / max(z, 1.0) * 100.0);',
-        '        if (diff > 0.05) {',
-        '          edlResponse += diff;',
-        '        }',
+        '    vec2 offsets[8];',
+        '    offsets[0] = vec2( 1.0,  0.0);',
+        '    offsets[1] = vec2( 0.7071,  0.7071);',
+        '    offsets[2] = vec2( 0.0,  1.0);',
+        '    offsets[3] = vec2(-0.7071,  0.7071);',
+        '    offsets[4] = vec2(-1.0,  0.0);',
+        '    offsets[5] = vec2(-0.7071, -0.7071);',
+        '    offsets[6] = vec2( 0.0, -1.0);',
+        '    offsets[7] = vec2( 0.7071, -0.7071);',
+        '    float edlResponse = 0.0;',
+        '    for (int i = 0; i < 8; i++) {',
+        '      vec2 uvN = vUv + offsets[i] * (edlRadius * texel);',
+        '      float zN = getLinearDepth(uvN);',
+        '      float diff = max(0.0, (z - zN) / max(z, 1.0) * 100.0);',
+        '      if (diff > 0.05) {',
+        '        edlResponse += diff;',
         '      }',
-        '      edlFactor = exp(-edlStrength * (edlResponse / 8.0));',
         '    }',
-        '    if (wireframeMode <= 0.5) {',
-        '      totalEdge *= sobelStrength;',
-        '    }',
+        '    edlFactor = exp(-edlStrength * (edlResponse / 8.0));',
         '  }',
         '',
-        '  // 3. Composite Result',
-        '  // In wireframe mode: Display the pure GI/AO + EDL + Outline post-processing map on neutral clay base before multiplying scene color',
-        '  vec3 baseColor = (wireframeMode > 0.5) ? vec3(0.96, 0.97, 0.98) : sceneColor.rgb;',
-        '  float edgeDarkness = (wireframeMode > 0.5) ? 0.88 : 0.85;',
-        '  vec3 shadedColor = (baseColor * aoMultiBounce + giBounce) * edlFactor * (1.0 - totalEdge * edgeDarkness);',
+        '  // 3. Composite Output',
+        '  vec3 shadedColor = (sceneColor.rgb * aoMultiBounce + giBounce) * edlFactor * (1.0 - totalEdge * 0.85);',
         '  gl_FragColor = vec4(shadedColor, sceneColor.a);',
         '}'
       ].join('\\n')
@@ -12974,8 +12956,6 @@ var City3DEngine = (function() {
 
   // Scene Objects
   var cityGroup = null;
-  var badgeScene = null;
-  var badgeGroup = null;
   var skyGroup = null;
   var cloudsGroup = null;
   var rainGroup = null;
@@ -13181,8 +13161,7 @@ var City3DEngine = (function() {
                 edlEnabled: { value: isEDLEnabled ? 1.0 : 0.0 },
                 edlStrength: { value: GTAO_CONFIG.edlStrength },
                 edlRadius: { value: GTAO_CONFIG.edlRadius },
-                sobelStrength: { value: GTAO_CONFIG.sobelStrength },
-                wireframeMode: { value: isWireframeMode ? 1.0 : 0.0 }
+                sobelStrength: { value: GTAO_CONFIG.sobelStrength }
               },
               vertexShader: City3DShaders.GTAOShader.vertexShader,
               fragmentShader: City3DShaders.GTAOShader.fragmentShader
@@ -13243,10 +13222,6 @@ var City3DEngine = (function() {
 
       cityGroup = new THREE.Group();
       scene.add(cityGroup);
-
-      badgeScene = new THREE.Scene();
-      badgeGroup = new THREE.Group();
-      badgeScene.add(badgeGroup);
 
       streetlightsGroup = new THREE.Group();
       scene.add(streetlightsGroup);
@@ -14537,14 +14512,23 @@ var City3DEngine = (function() {
         grp.remove(obj);
         if (obj.geometry) obj.geometry.dispose();
         if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach(function(m) { m.dispose(); });
-          else obj.material.dispose();
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach(function(m) { if (m && m !== clayMaterial) m.dispose(); });
+          } else if (obj.material !== clayMaterial) {
+            obj.material.dispose();
+          }
+        }
+        if (obj.userData && obj.userData.origMaterial) {
+          if (Array.isArray(obj.userData.origMaterial)) {
+            obj.userData.origMaterial.forEach(function(m) { if (m) m.dispose(); });
+          } else if (obj.userData.origMaterial) {
+            obj.userData.origMaterial.dispose();
+          }
         }
       }
     };
 
     cleanGroup(cityGroup);
-    cleanGroup(badgeGroup);
     cleanGroup(trafficGroup);
     cleanGroup(streetlightsGroup);
     cleanGroup(avTrafficGroup);
@@ -14634,6 +14618,9 @@ var City3DEngine = (function() {
     buildFlyingAVs(totalCityW, totalCityD);
     buildGroundMist(cols, rows, stepX, stepZ, originX, originZ);
     buildFlightSpline(districtData);
+    if (targetMode === 'clay') {
+      applyClayMaterial(true);
+    }
     if (pendingFocusRepo) {
       focusRepo(pendingFocusRepo);
     } else {
@@ -15181,7 +15168,6 @@ var City3DEngine = (function() {
     if (isMegaScreen && cyberScreenTextures.length > 0) {
       var scrTex = cyberScreenTextures[districtIndex % cyberScreenTextures.length];
       var megaScreenMat = new THREE.MeshBasicMaterial({ map: scrTex, toneMapped: false });
-      if (isWireframeMode) megaScreenMat.visible = false;
       megaScreenMaterials.push(megaScreenMat);
       multiMats[megaFaceIdx] = megaScreenMat;
     }
@@ -15788,11 +15774,7 @@ var City3DEngine = (function() {
     bannerSprite.position.set(tallestBuildingPos.x, tallestBuildingPos.y + 12.0, tallestBuildingPos.z);
     bannerSprite.userData = { repoIndex: index, repo: repo, districtCenter: new THREE.Vector3(posX, 15, posZ) };
     bannerSprite.visible = true;
-    if (badgeGroup) {
-      badgeGroup.add(bannerSprite);
-    } else {
-      cityGroup.add(bannerSprite);
-    }
+    cityGroup.add(bannerSprite);
 
     var tetherGeo = new THREE.BufferGeometry();
     var tetherPoints = [
@@ -15803,11 +15785,7 @@ var City3DEngine = (function() {
     var tetherMat = new THREE.LineBasicMaterial({ color: beaconColor, linewidth: 2, toneMapped: false });
     var tetherLine = new THREE.Line(tetherGeo, tetherMat);
     tetherLine.visible = true;
-    if (badgeGroup) {
-      badgeGroup.add(tetherLine);
-    } else {
-      cityGroup.add(tetherLine);
-    }
+    cityGroup.add(tetherLine);
 
     repoBadges.push({
       sprite: bannerSprite,
@@ -16006,11 +15984,15 @@ var City3DEngine = (function() {
 
       // Unreal Bloom Dynamic Adaptation
       if (bloomPass) {
-        bloomPass.strength = modeTransition * 0.75;
+        bloomPass.strength = (targetMode === 'clay') ? 0.0 : (modeTransition * 0.75);
         bloomPass.threshold = 0.9;
         bloomPass.radius = 0.35;
       }
       renderer.toneMappingExposure = (1.0 - modeTransition) * 1.35 + modeTransition * 1.0;
+    }
+
+    if (targetMode === 'clay' && bloomPass && bloomPass.strength !== 0.0) {
+      bloomPass.strength = 0.0;
     }
 
     var hasCameraLerp = false;
@@ -16081,29 +16063,21 @@ var City3DEngine = (function() {
           var mat = buildingMaterials[bm];
           if (mat.userData && mat.userData.shader) {
             mat.userData.shader.uniforms.uTime.value = totalElapsedTime;
-            mat.userData.shader.uniforms.uNightTransition.value = isWireframeMode ? 0.0 : modeTransition;
+            mat.userData.shader.uniforms.uNightTransition.value = modeTransition;
           }
         }
       }
 
       // Dynamic Multi-Channel Cyberpunk Screens & Billboards Animation
-      if (!isWireframeMode) {
-        updateAnimatedBillboards(totalElapsedTime);
-      }
+      updateAnimatedBillboards(totalElapsedTime);
 
       // Neon Conduits Pulsing Wave
       if (neonConduitMaterials && neonConduitMaterials.length > 0) {
         for (var nm = 0; nm < neonConduitMaterials.length; nm++) {
           var nMat = neonConduitMaterials[nm];
-          if (isWireframeMode) {
-            nMat.visible = false;
-            nMat.opacity = 0.0;
-          } else {
-            nMat.visible = true;
-            var pOff = nMat.userData ? (nMat.userData.pulseOffset || 0) : 0;
-            var pulse = 0.82 + 0.18 * Math.sin(totalElapsedTime * 4.5 + pOff);
-            nMat.opacity = Math.max(0.20, modeTransition * 0.95 * pulse + (1.0 - modeTransition) * 0.45);
-          }
+          var pOff = nMat.userData ? (nMat.userData.pulseOffset || 0) : 0;
+          var pulse = 0.82 + 0.18 * Math.sin(totalElapsedTime * 4.5 + pOff);
+          nMat.opacity = Math.max(0.20, modeTransition * 0.95 * pulse + (1.0 - modeTransition) * 0.45);
         }
       }
 
@@ -16142,11 +16116,11 @@ var City3DEngine = (function() {
         }
       }
     } else {
-      if (buildingMaterials && buildingMaterials.length > 0) {
+      if (hasModeTransition && buildingMaterials && buildingMaterials.length > 0) {
         for (var sbm = 0; sbm < buildingMaterials.length; sbm++) {
           var sMat = buildingMaterials[sbm];
           if (sMat.userData && sMat.userData.shader) {
-            sMat.userData.shader.uniforms.uNightTransition.value = isWireframeMode ? 0.0 : modeTransition;
+            sMat.userData.shader.uniforms.uNightTransition.value = modeTransition;
           }
         }
       }
@@ -16175,11 +16149,6 @@ var City3DEngine = (function() {
     }
 
     // Post-Processing / Fallback Render
-    if (isWireframeMode) {
-      if (ambientLight) ambientLight.intensity = 0.0;
-      if (sunLight) sunLight.intensity = 0.0;
-      if (bloomPass) bloomPass.strength = 0.0;
-    }
     if (composer) {
       if (composer.renderTarget2 && depthTexture && !composer.renderTarget2.depthTexture) {
         composer.renderTarget2.depthTexture = depthTexture;
@@ -16188,34 +16157,18 @@ var City3DEngine = (function() {
         gtaoPass.uniforms['cameraNear'].value = camera.near;
         gtaoPass.uniforms['cameraFar'].value = camera.far;
         gtaoPass.uniforms['cameraProjectionMatrixInverse'].value.copy(camera.projectionMatrixInverse);
-        gtaoPass.uniforms['aoEnabled'].value = (currentAOMode !== 'off' || isWireframeMode) ? 1.0 : 0.0;
+        gtaoPass.uniforms['aoEnabled'].value = currentAOMode !== 'off' ? 1.0 : 0.0;
         if (gtaoPass.uniforms['aoMode']) {
           gtaoPass.uniforms['aoMode'].value = currentAOMode === 'ssao' ? 2.0 : (currentAOMode === 'gtao' ? 1.0 : 0.0);
         }
-        gtaoPass.uniforms['edlEnabled'].value = (isEDLEnabled || isWireframeMode) ? 1.0 : 0.0;
-        if (gtaoPass.uniforms['wireframeMode']) {
-          gtaoPass.uniforms['wireframeMode'].value = isWireframeMode ? 1.0 : 0.0;
-        }
+        gtaoPass.uniforms['edlEnabled'].value = isEDLEnabled ? 1.0 : 0.0;
         if (depthTexture) {
           gtaoPass.uniforms['tDepth'].value = depthTexture;
         }
       }
       composer.render();
     } else {
-      if (isWireframeMode) {
-        if (ambientLight) ambientLight.intensity = 0.0;
-        if (sunLight) sunLight.intensity = 0.0;
-      }
       renderer.render(scene, camera);
-    }
-
-    // Render 3D UI Overlay (Repo Banner Sprites & Laser Tether Lines) cleanly on top
-    if (badgeScene && repoBadges && repoBadges.length > 0) {
-      var prevAutoClear = renderer.autoClear;
-      renderer.autoClear = false;
-      renderer.clearDepth();
-      renderer.render(badgeScene, camera);
-      renderer.autoClear = prevAutoClear;
     }
 
     // Decide whether next animation frame is needed
@@ -16574,6 +16527,7 @@ var City3DEngine = (function() {
         manualModeOverride = true;
         toggleDayNight();
       });
+      setDayNight(targetMode);
     }
 
     var gtaoBtn = document.getElementById('city3dGtaoBtn');
@@ -16589,14 +16543,6 @@ var City3DEngine = (function() {
       edlBtn.addEventListener('click', function(e) {
         e.preventDefault();
         toggleEDL();
-      });
-    }
-
-    var wireframeBtn = document.getElementById('city3dWireframeBtn');
-    if (wireframeBtn) {
-      wireframeBtn.addEventListener('click', function(e) {
-        e.preventDefault();
-        toggleWireframe();
       });
     }
 
@@ -16703,93 +16649,25 @@ var City3DEngine = (function() {
     requestRender(3);
   }
 
-  function toggleWireframe() {
-    setWireframe(!isWireframeMode);
-  }
-
-  function setWireframe(enabled) {
-    isWireframeMode = !!enabled;
-    if (gtaoPass && gtaoPass.uniforms && gtaoPass.uniforms['wireframeMode']) {
-      gtaoPass.uniforms['wireframeMode'].value = isWireframeMode ? 1.0 : 0.0;
-    } else if (!composer && cityGroup) {
-      cityGroup.traverse(function(child) {
-        if (child.isMesh && child.material) {
-          if (Array.isArray(child.material)) {
-            for (var mi = 0; mi < child.material.length; mi++) {
-              child.material[mi].wireframe = isWireframeMode;
-            }
-          } else {
-            child.material.wireframe = isWireframeMode;
+  function applyClayMaterial(isClay) {
+    if (!clayMaterial && typeof THREE !== 'undefined' && THREE.MeshBasicMaterial) {
+      clayMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
+    }
+    if (!scene || !clayMaterial) return;
+    scene.traverse(function(child) {
+      if (child.isMesh && child.material) {
+        if (isClay) {
+          if (!child.userData.origMaterial) {
+            child.userData.origMaterial = child.material;
+          }
+          child.material = clayMaterial;
+        } else {
+          if (child.userData.origMaterial) {
+            child.material = child.userData.origMaterial;
           }
         }
-      });
-    }
-
-    // Toggle lighting & reflections
-    if (sunLight) {
-      sunLight.intensity = isWireframeMode ? 0.0 : ((1.0 - modeTransition) * 1.35 + modeTransition * 0.65);
-    }
-    if (ambientLight) {
-      ambientLight.intensity = isWireframeMode ? 0.0 : ((1.0 - modeTransition) * 0.75 + modeTransition * 0.55);
-    }
-    if (bloomPass) {
-      bloomPass.strength = isWireframeMode ? 0.0 : (modeTransition * 0.75);
-    }
-
-    // Toggle decorative colored light sources, cars, AVs, mega screens, holograms & neon conduits
-    if (streetlightsGroup) streetlightsGroup.visible = !isWireframeMode;
-    if (trafficGroup) trafficGroup.visible = !isWireframeMode;
-    if (avTrafficGroup) avTrafficGroup.visible = !isWireframeMode;
-    if (groundMistGroup) groundMistGroup.visible = !isWireframeMode;
-
-    if (holographicObjects && holographicObjects.length > 0) {
-      for (var h = 0; h < holographicObjects.length; h++) {
-        if (holographicObjects[h].mesh) holographicObjects[h].mesh.visible = !isWireframeMode;
       }
-    }
-    if (megaScreenMaterials && megaScreenMaterials.length > 0) {
-      for (var ms = 0; ms < megaScreenMaterials.length; ms++) {
-        megaScreenMaterials[ms].visible = !isWireframeMode;
-      }
-    }
-    if (beaconMeshes && beaconMeshes.length > 0) {
-      for (var bmIdx = 0; bmIdx < beaconMeshes.length; bmIdx++) {
-        beaconMeshes[bmIdx].visible = !isWireframeMode;
-      }
-    }
-    if (neonConduitMaterials && neonConduitMaterials.length > 0) {
-      for (var nm = 0; nm < neonConduitMaterials.length; nm++) {
-        neonConduitMaterials[nm].visible = !isWireframeMode;
-        neonConduitMaterials[nm].opacity = isWireframeMode ? 0.0 : 0.95;
-      }
-    }
-    if (buildingMaterials && buildingMaterials.length > 0) {
-      for (var b = 0; b < buildingMaterials.length; b++) {
-        var bMat = buildingMaterials[b];
-        if (bMat.userData && bMat.userData.shader && bMat.userData.shader.uniforms.uNightTransition) {
-          bMat.userData.shader.uniforms.uNightTransition.value = isWireframeMode ? 0.0 : modeTransition;
-        }
-      }
-    }
-
-    // Keep repo badges (Sprites and laser tether lines) visible and clear
-    for (var bg = 0; bg < repoBadges.length; bg++) {
-      if (repoBadges[bg].sprite) repoBadges[bg].sprite.visible = true;
-      if (repoBadges[bg].line) repoBadges[bg].line.visible = true;
-    }
-
-    var btn = document.getElementById('city3dWireframeBtn');
-    if (btn) {
-      if (isWireframeMode) {
-        btn.classList.add('city-3d-btn-active');
-        btn.setAttribute('title', (t('city3dWireframe') || '线框模式已开启') + ' (点击切换回实体)');
-      } else {
-        btn.classList.remove('city-3d-btn-active');
-        btn.setAttribute('title', (t('city3dWireframe') || '线框模式 / 纯结构边框') + ' (点击开启)');
-      }
-      updateHoveredBtnWidth(btn);
-    }
-    requestRender(5);
+    });
   }
 
   function toggleFlight() {
@@ -16827,18 +16705,56 @@ var City3DEngine = (function() {
   }
 
   function toggleDayNight() {
-    setDayNight(targetMode === 'night' ? 'day' : 'night');
+    if (targetMode === 'night') {
+      setDayNight('day');
+    } else if (targetMode === 'day') {
+      setDayNight('clay');
+    } else {
+      setDayNight('night');
+    }
   }
 
   function setDayNight(mode) {
-    targetMode = mode === 'day' ? 'day' : 'night';
+    targetMode = (mode === 'day' || mode === 'clay') ? mode : 'night';
+    applyClayMaterial(targetMode === 'clay');
+    if (starField) {
+      starField.visible = (targetMode !== 'clay');
+      if (targetMode === 'clay') starField.material.opacity = 0.0;
+    }
+    if (bloomPass) {
+      bloomPass.strength = (targetMode === 'clay') ? 0.0 : (modeTransition * 0.75);
+    }
     var iconEl = document.getElementById('city3dDayNightIcon');
     var textEl = document.getElementById('city3dDayNightText');
-    if (iconEl) iconEl.textContent = targetMode === 'night' ? '🌙' : '☀️';
-    if (textEl) textEl.textContent = targetMode === 'night' ? (t('city3dNight') || '夜间') : (t('city3dDay') || '白天');
+    if (iconEl) {
+      if (targetMode === 'clay') {
+        iconEl.textContent = '⚪';
+      } else if (targetMode === 'day') {
+        iconEl.textContent = '☀️';
+      } else {
+        iconEl.textContent = '🌙';
+      }
+    }
+    if (textEl) {
+      if (targetMode === 'clay') {
+        textEl.textContent = t('city3dClay') || '白模';
+      } else if (targetMode === 'day') {
+        textEl.textContent = t('city3dDay') || '白天';
+      } else {
+        textEl.textContent = t('city3dNight') || '夜间';
+      }
+    }
     var btn = document.getElementById('city3dDayNightBtn');
     if (btn) {
-      btn.setAttribute('title', targetMode === 'night' ? (t('city3dNight') || '夜间模式') : (t('city3dDay') || '白天模式'));
+      var titleText = '';
+      if (targetMode === 'clay') {
+        titleText = (t('city3dClay') || '白模模式') + ' (点击切换为夜间)';
+      } else if (targetMode === 'day') {
+        titleText = (t('city3dDay') || '白天模式') + ' (点击切换为白模)';
+      } else {
+        titleText = (t('city3dNight') || '夜间模式') + ' (点击切换为白天)';
+      }
+      btn.setAttribute('title', titleText);
       updateHoveredBtnWidth(btn);
     }
     requestRender(50);
