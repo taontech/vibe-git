@@ -15,6 +15,7 @@ var commitMessage = require('./commit-message');
 var git = require('./git');
 var prompts = require('./prompts');
 var taskStatus = require('./task-status');
+var quickActions = require('./quick-actions');
 
 var DEFAULT_PORT = 4277;
 var GITWEB_VERSION = 2;
@@ -277,6 +278,22 @@ function handleRequest(req, res) {
         handleOpenIde(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/quick-actions') {
+        handleSaveQuickActions(req, res);
+        return;
+      }
+      if (parsed.pathname === '/api/quick-actions/reset') {
+        handleResetQuickActions(req, res);
+        return;
+      }
+      if (parsed.pathname === '/api/pick-app') {
+        handlePickApp(req, res);
+        return;
+      }
+      if (parsed.pathname === '/api/launch-action') {
+        handleLaunchAction(req, res, parsed.query.repo);
+        return;
+      }
       if (parsed.pathname === '/api/repositories/remove') {
         handleRemoveRepository(req, res);
         return;
@@ -356,6 +373,11 @@ function handleRequest(req, res) {
 
     if (parsed.pathname === '/api/ping') {
       sendJson(res, { status: 'ok', service: 'gmc-gitweb', gitwebVersion: GITWEB_VERSION, reloadToken: RELOAD_TOKEN });
+      return;
+    }
+
+    if (parsed.pathname === '/api/quick-actions') {
+      handleGetQuickActions(req, res);
       return;
     }
 
@@ -1377,6 +1399,101 @@ function handleOpenIde(req, res, targetRepo) {
     console.error('handleOpenIde exception:', error.message);
     sendJsonError(res, error.httpStatus || 500, error.message);
   }
+}
+
+function handleGetQuickActions(req, res) {
+  sendJson(res, { actions: quickActions.listQuickActions() });
+}
+
+function handleSaveQuickActions(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Saving quick actions is only available from 127.0.0.1.');
+  }
+  readJsonBody(req).then(function (body) {
+    body = body || {};
+    var actionList = body.actions || body;
+    var saved = quickActions.saveQuickActions(actionList);
+    sendJson(res, { status: 'ok', actions: saved });
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleResetQuickActions(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Resetting quick actions is only available from 127.0.0.1.');
+  }
+  var defaults = quickActions.resetQuickActions();
+  sendJson(res, { status: 'ok', actions: defaults });
+}
+
+function handlePickApp(req, res) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Picking applications is only available from 127.0.0.1.');
+  }
+  quickActions.chooseAppPath().then(function (result) {
+    sendJson(res, result);
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleLaunchAction(req, res, targetRepo) {
+  if (!isLoopbackRequest(req)) {
+    return sendJsonError(res, 403, 'Launching quick actions is only available from 127.0.0.1.');
+  }
+  readJsonBody(req).then(function (body) {
+    body = body || {};
+    var repo = body.repo || targetRepo;
+    if (!repo) {
+      return sendJsonError(res, 400, 'Missing repo parameter');
+    }
+    var repoRoot = git.repoRoot(repo);
+    if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+      throwHttpError('Repository path does not exist: ' + repoRoot);
+    }
+    var action = body.action;
+    if (!action && body.id) {
+      var all = quickActions.listQuickActions();
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].id === body.id) {
+          action = all[i];
+          break;
+        }
+      }
+    }
+    if (!action) {
+      return sendJsonError(res, 404, 'Action not found');
+    }
+
+    if (action.type === 'builtin' || action.builtinId) {
+      if (action.builtinId === 'terminal') {
+        return sendJson(res, openTerminalAtRepository(repoRoot));
+      }
+      if (action.builtinId === 'open-ide') {
+        return handleOpenIde(req, res, repoRoot);
+      }
+      if (action.builtinId === 'opencode' || action.builtinId === 'claude' || action.builtinId === 'codex' || action.builtinId === 'antigravity') {
+        return sendJson(res, openAgentAtRepository(repoRoot, action.builtinId));
+      }
+    }
+
+    var branch = git.currentBranch(repoRoot);
+    var launchResult = quickActions.launchCustomAction(action, repoRoot, branch, {
+      openTerminal: function (root, cmd) {
+        if (process.platform !== 'darwin') {
+          throwHttpError('Opening Terminal is only supported on macOS.');
+        }
+        if (hasMacApplication('iTerm')) {
+          return openITermAtPath(root, cmd);
+        }
+        return openTerminalAppAtPath(root, cmd);
+      }
+    });
+    sendJson(res, launchResult);
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
 }
 
 function handleOpenApp(req, res) {
@@ -5340,6 +5457,56 @@ h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-heigh
 .clean-branches-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .clean-selected-summary { margin-right: auto; font-size: 12px; color: var(--muted); }
 .clean-confirm-btn.danger { background: var(--rose) !important; border-color: var(--rose) !important; color: #fff !important; }
+.qa-list-inline { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+.qa-config-btn { opacity: 0.75; transition: opacity .15s; }
+.qa-config-btn:hover { opacity: 1; border-color: var(--accent); color: var(--accent); }
+.quick-actions-modal { width: min(680px, 96%); max-height: 88vh; display: flex; flex-direction: column; }
+.quick-actions-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.quick-actions-body { flex: 1 1 auto; max-height: min(58vh, 480px); min-height: 160px; overflow-y: auto; padding-right: 4px; }
+.qa-manager-list { display: flex; flex-direction: column; gap: 8px; }
+.qa-manager-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--panel-soft); transition: background .12s, border-color .12s; }
+.qa-manager-item:hover { border-color: var(--line); }
+.qa-manager-item.disabled { opacity: 0.55; }
+.qa-item-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.qa-item-order-btns { display: flex; flex-direction: column; gap: 2px; }
+.qa-order-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 1px 4px; font-size: 10px; border-radius: 3px; line-height: 1; }
+.qa-order-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.qa-order-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.qa-item-icon-wrap { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--panel); border: 1px solid var(--line-soft); flex-shrink: 0; }
+.qa-item-icon-wrap img, .qa-item-icon-wrap svg { width: 18px; height: 18px; }
+.qa-item-info { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.qa-item-name { font-weight: 600; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qa-item-detail { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qa-item-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.qa-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 999px; text-transform: uppercase; }
+.qa-badge-builtin { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+.qa-badge-app { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+.qa-badge-command { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+.qa-btn-sm { border: 1px solid var(--line-soft); background: var(--panel); color: var(--muted); padding: 4px 8px; border-radius: 5px; cursor: pointer; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; transition: all .12s; }
+.qa-btn-sm:hover { color: var(--text); border-color: var(--line); }
+.qa-btn-sm.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.qa-btn-sm.danger:hover { color: var(--rose); border-color: var(--rose); background: rgba(239, 68, 68, 0.1); }
+.qa-modal-footer { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+.qa-footer-left { display: flex; gap: 8px; }
+.qa-footer-right { display: flex; gap: 8px; }
+.qa-edit-card { margin-top: 12px; padding: 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel-soft); box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+.qa-edit-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
+.qa-edit-header h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.qa-edit-fields { display: flex; flex-direction: column; gap: 10px; }
+.qa-form-row { display: flex; flex-direction: column; gap: 4px; }
+.qa-form-row label { font-size: 12px; font-weight: 600; color: var(--text); }
+.qa-type-selector { display: flex; gap: 14px; margin: 2px 0 4px; }
+.qa-type-radio { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; color: var(--text); }
+.qa-input-with-btn { display: flex; gap: 8px; align-items: center; }
+.qa-input-with-btn input { flex: 1; }
+.qa-help-tip { font-size: 11px; color: var(--muted); margin-top: 2px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.qa-var-badge { border: 1px solid var(--line-soft); background: var(--panel); color: var(--accent); font-family: ui-monospace, monospace; font-size: 11px; padding: 1px 5px; border-radius: 4px; cursor: pointer; }
+.qa-var-badge:hover { background: var(--accent-soft); border-color: var(--accent); }
+.qa-checkbox-row { flex-direction: row; align-items: center; gap: 8px; margin-top: 4px; }
+.qa-checkbox-row label { font-weight: normal; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.qa-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+.btn-danger-soft:hover { color: var(--rose) !important; border-color: var(--rose) !important; }
+.qa-empty-placeholder { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
 .task-detail-head { display: grid; gap: 7px; margin-bottom: 14px; }
 .task-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 12px; }
 .task-detail-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 999px; background: var(--panel-soft); color: var(--muted); font-weight: 750; }
@@ -6957,29 +7124,10 @@ body.city-3d-zen-active .home-page {
         <div class="action-meter"><strong id="dirty">0</strong><span data-i18n="changedFiles">changed files</span></div>
       </div>
       <div id="quickActions" class="action-buttons" hidden>
-        <button id="qaTerminal" class="qa-btn" type="button" data-agent="terminal" title="在终端中打开">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-          <span>Terminal</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="opencode" title="OpenCode">
-          <img class="qa-icon" src="/icons/opencode.svg" alt="" width="20" height="20">
-          <span>OpenCode</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="claude" title="Claude Code">
-          <img class="qa-icon" src="/icons/claude.svg" alt="" width="20" height="20">
-          <span>Claude</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="codex" title="Codex CLI">
-          <img class="qa-icon" src="/icons/codex.svg" alt="" width="20" height="20">
-          <span>Codex</span>
-        </button>
-        <button class="qa-btn" type="button" data-agent="antigravity" title="Antigravity CLI">
-          <img class="qa-icon" src="/icons/antigravity.svg" alt="" width="20" height="20">
-          <span>Antigravity</span>
-        </button>
-        <button id="qaOpenIde" class="qa-btn qa-ide-btn" type="button" data-agent="open-ide" title="在 IDE 中打开项目" hidden>
-          <img id="qaIdeIcon" class="qa-icon" src="/icons/vscode.svg" alt="" width="20" height="20">
-          <span id="qaIdeLabel">VS Code</span>
+        <div id="quickActionsList" class="qa-list-inline"></div>
+        <button id="qaConfigBtn" class="qa-btn qa-config-btn" type="button" data-i18n-title="customizeQuickActions" title="自定义快捷启动">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="16" height="16"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          <span data-i18n="customizeQuickActions">自定义</span>
         </button>
       </div>
     </div>
@@ -7326,10 +7474,108 @@ body.city-3d-zen-active .home-page {
   </div>
 </div>
 
+<div id="quickActionsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="quickActionsModalTitle">
+  <div class="modal quick-actions-modal">
+    <div class="quick-actions-header">
+      <div>
+        <h2 id="quickActionsModalTitle" data-i18n="quickActionsModalTitle">自定义快捷启动按钮</h2>
+        <p data-i18n="quickActionsModalIntro">管理、添加或替换顶部的快捷操作。可选取系统应用并自定义启动参数。</p>
+      </div>
+      <button id="closeQuickActionsX" class="clean-branches-close-btn" type="button" aria-label="Close">✕</button>
+    </div>
+
+    <div class="quick-actions-body">
+      <div id="qaManagerList" class="qa-manager-list"></div>
+
+      <div id="qaEditCard" class="qa-edit-card" hidden>
+        <div class="qa-edit-header">
+          <h3 id="qaEditTitle">添加快捷启动</h3>
+        </div>
+        <div class="qa-edit-fields">
+          <div class="qa-form-row">
+            <label for="qaFormName" data-i18n="qaActionName">按钮名称</label>
+            <input type="text" id="qaFormName" class="home-config-input" placeholder="例如：Cursor 或 Warp">
+          </div>
+          <div class="qa-form-row">
+            <label data-i18n="qaActionType">启动类型</label>
+            <div class="qa-type-selector">
+              <label class="qa-type-radio"><input type="radio" name="qaType" value="app" checked> <span data-i18n="appTypeApp">系统应用程序 (App)</span></label>
+              <label class="qa-type-radio"><input type="radio" name="qaType" value="command"> <span data-i18n="appTypeCommand">命令行工具 / 脚本</span></label>
+            </div>
+          </div>
+          <div class="qa-form-row" id="qaAppPathRow">
+            <label for="qaFormAppPath" data-i18n="qaAppPath">应用路径</label>
+            <div class="qa-input-with-btn">
+              <input type="text" id="qaFormAppPath" class="home-config-input" placeholder="/Applications/xxx.app 或应用名">
+              <button id="qaPickAppBtn" class="copy-button" type="button" data-i18n="pickSystemApp">📁 选取系统 App...</button>
+            </div>
+          </div>
+          <div class="qa-form-row" id="qaCommandRow" hidden>
+            <label for="qaFormCommand" data-i18n="qaCommand">执行命令</label>
+            <input type="text" id="qaFormCommand" class="home-config-input" placeholder="例如：lazygit 或 ./scripts/run.sh">
+          </div>
+          <div class="qa-form-row">
+            <label for="qaFormArgs" data-i18n="qaArgs">启动参数</label>
+            <input type="text" id="qaFormArgs" class="home-config-input" placeholder="留空默认在应用中打开当前仓库">
+            <div class="qa-help-tip">
+              <span>支持变量：</span>
+              <button type="button" class="qa-var-badge" data-var="{repo}">{repo}</button> (仓库根目录)
+              <button type="button" class="qa-var-badge" data-var="{branch}">{branch}</button> (当前分支)
+            </div>
+          </div>
+          <div class="qa-form-row">
+            <label for="qaFormIcon" data-i18n="qaIcon">按钮图标</label>
+            <select id="qaFormIcon" class="home-config-input">
+              <option value="terminal">Terminal</option>
+              <option value="vscode">VS Code</option>
+              <option value="cursor">Cursor</option>
+              <option value="xcode">Xcode</option>
+              <option value="android-studio">Android Studio</option>
+              <option value="sublime">Sublime Text</option>
+              <option value="claude">Claude</option>
+              <option value="codex">Codex</option>
+              <option value="opencode">OpenCode</option>
+              <option value="antigravity">Antigravity</option>
+              <option value="code">Code</option>
+              <option value="rocket">Rocket</option>
+              <option value="play">Play</option>
+              <option value="bot">Robot</option>
+              <option value="sparkles">Sparkles</option>
+              <option value="folder">Folder</option>
+              <option value="app">App Window</option>
+            </select>
+          </div>
+          <div class="qa-form-row qa-checkbox-row">
+            <label>
+              <input type="checkbox" id="qaFormRunInTerminal">
+              <span data-i18n="qaRunInTerminal">在终端窗口中运行（适合 CLI / TUI 工具）</span>
+            </label>
+          </div>
+        </div>
+        <div class="qa-edit-actions">
+          <button id="qaCancelEditBtn" class="copy-button" type="button" data-i18n="cancel">取消</button>
+          <button id="qaSaveEditBtn" class="commit-button" type="button" data-i18n="saveAction">保存启动项</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-actions qa-modal-footer">
+      <div class="qa-footer-left">
+        <button id="qaAddActionBtn" class="copy-button" type="button" data-i18n="addAction">+ 添加启动项</button>
+        <button id="qaResetDefaultsBtn" class="copy-button btn-danger-soft" type="button" data-i18n="resetDefaults">恢复默认</button>
+      </div>
+      <div class="qa-footer-right">
+        <button id="qaCloseModalBtn" class="commit-button" type="button" data-i18n="done">完成</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
 var INITIAL_AVAILABLE_AGENTS = ${JSON.stringify(config.listAgentAvailability())};
+var INITIAL_QUICK_ACTIONS = ${JSON.stringify(quickActions.listQuickActions())};
 var AUTH_QUERY_PARAM = ${JSON.stringify(AUTH_QUERY_PARAM)};
 (function() {
   var nativeFetch = window.fetch.bind(window);
@@ -7360,7 +7606,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', cleanBranchesData: null, cleanBranchesFilter: 'all', cleanSelected: {}, cleanAllowForce: false, cleanBaseBranch: '', cleanLoading: false, repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', availableAgents: INITIAL_AVAILABLE_AGENTS || [], security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', cleanBranchesData: null, cleanBranchesFilter: 'all', cleanSelected: {}, cleanAllowForce: false, cleanBaseBranch: '', cleanLoading: false, repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', availableAgents: INITIAL_AVAILABLE_AGENTS || [], quickActions: INITIAL_QUICK_ACTIONS || [], editingQuickActionId: null, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -7477,6 +7723,32 @@ var I18N = {
     openTerminalPrefix: '在终端中打开：',
     terminalLocalOnly: '仅从 127.0.0.1 访问时可以打开终端。',
     openTerminalFailed: '打开终端失败：',
+    customizeQuickActions: '自定义',
+    quickActionsModalTitle: '自定义快捷启动按钮',
+    quickActionsModalIntro: '管理、添加或替换顶部的快捷操作。可选取系统应用并自定义启动参数。',
+    addAction: '添加启动项',
+    editAction: '编辑启动项',
+    qaActionName: '按钮名称',
+    qaActionType: '启动类型',
+    qaAppPath: '应用路径',
+    qaCommand: '执行命令',
+    qaArgs: '启动参数',
+    qaIcon: '按钮图标',
+    qaRunInTerminal: '在终端窗口中运行（适合 CLI / TUI 工具）',
+    pickSystemApp: '📁 选取系统 App...',
+    resetDefaultsConfirm: '确定要重置所有快捷启动按钮为默认值吗？',
+    actionSaved: '快捷启动配置已保存',
+    actionLaunchFailed: '启动失败：',
+    saveAction: '保存启动项',
+    resetDefaults: '恢复默认',
+    done: '完成',
+    hideAction: '隐藏',
+    showAction: '显示',
+    deleteAction: '删除',
+    appTypeApp: '系统应用程序 (App)',
+    appTypeCommand: '命令行工具 / 脚本',
+    moveUp: '上移',
+    moveDown: '下移',
     cleanWorkingTree: '工作区干净。',
     modifiedFiles: '已修改',
     stagedFiles: '暂存区',
@@ -7837,6 +8109,32 @@ var I18N = {
     openTerminalPrefix: 'Open in Terminal: ',
     terminalLocalOnly: 'Terminal opening is available only from 127.0.0.1.',
     openTerminalFailed: 'Open in Terminal failed: ',
+    customizeQuickActions: 'Customize',
+    quickActionsModalTitle: 'Customize Quick Actions',
+    quickActionsModalIntro: 'Manage, add or replace quick action buttons. Select system apps and customize launch parameters.',
+    addAction: 'Add Action',
+    editAction: 'Edit Action',
+    qaActionName: 'Button Name',
+    qaActionType: 'Type',
+    qaAppPath: 'App Path',
+    qaCommand: 'Command',
+    qaArgs: 'Launch Arguments',
+    qaIcon: 'Icon',
+    qaRunInTerminal: 'Run in Terminal window (suitable for CLI/TUI tools)',
+    pickSystemApp: '📁 Choose System App...',
+    resetDefaultsConfirm: 'Are you sure you want to reset all quick actions to defaults?',
+    actionSaved: 'Quick actions saved',
+    actionLaunchFailed: 'Launch failed: ',
+    saveAction: 'Save Action',
+    resetDefaults: 'Reset to Defaults',
+    done: 'Done',
+    hideAction: 'Hide',
+    showAction: 'Show',
+    deleteAction: 'Delete',
+    appTypeApp: 'Application (App)',
+    appTypeCommand: 'Command Line / Script',
+    moveUp: 'Move Up',
+    moveDown: 'Move Down',
     cleanWorkingTree: 'Clean working tree.',
     modifiedFiles: 'Modified',
     stagedFiles: 'Staged',
@@ -10939,13 +11237,434 @@ function updateTerminalButton(repoPath) {
   var canOpen = !!(repoPath && canOpenRepositoryLocally());
   qaBar.hidden = !canOpen;
   if (canOpen) {
-    var terminalBtn = $('qaTerminal');
-    if (terminalBtn) {
-      terminalBtn.title = t('openTerminalPrefix') + repoPath;
-      terminalBtn.setAttribute('aria-label', t('openTerminal'));
+    renderQuickActions(repoPath);
+  }
+}
+
+function getQuickActionIconHtml(iconName, isIde) {
+  if (isIde) {
+    return '<img id="qaIdeIcon" class="qa-icon" src="/icons/vscode.svg" alt="" width="20" height="20">';
+  }
+  if (iconName === 'terminal') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="18" height="18"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
+  }
+  if (iconName === 'code') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
+  }
+  if (iconName === 'rocket') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path></svg>';
+  }
+  if (iconName === 'play') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+  }
+  if (iconName === 'folder') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
+  }
+  var imgIcons = ['opencode', 'claude', 'codex', 'antigravity', 'vscode', 'cursor', 'xcode', 'android-studio', 'sublime'];
+  if (imgIcons.indexOf(iconName) !== -1) {
+    return '<img class="qa-icon" src="/icons/' + escapeHtml(iconName) + '.svg" alt="" width="18" height="18">';
+  }
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>';
+}
+
+function renderQuickActions(repoPath) {
+  var listEl = $('quickActionsList');
+  if (!listEl) return;
+  var actions = state.quickActions || [];
+  var html = '';
+  var hasIde = false;
+
+  actions.forEach(function(item) {
+    if (item.enabled === false) return;
+    var isTerminal = item.builtinId === 'terminal';
+    var isIde = item.builtinId === 'open-ide';
+    if (isIde) hasIde = true;
+
+    var btnIdAttr = isTerminal ? ' id="qaTerminal"' : (isIde ? ' id="qaOpenIde"' : '');
+    var extraClass = isIde ? ' qa-ide-btn' : '';
+    var agentAttr = item.builtinId ? ' data-agent="' + escapeHtml(item.builtinId) + '"' : '';
+    var title = isTerminal
+      ? ((t('openTerminalPrefix') || '在终端中打开：') + (repoPath || ''))
+      : (item.args ? (item.name + ' (' + item.args + ')') : item.name);
+
+    html += '<button' + btnIdAttr + ' class="qa-btn' + extraClass + '" type="button" data-action-id="' + escapeHtml(item.id) + '"' + agentAttr + ' title="' + escapeHtml(title) + '">';
+    html += getQuickActionIconHtml(item.icon, isIde);
+    if (isIde) {
+      html += '<span id="qaIdeLabel">' + escapeHtml(item.name || 'VS Code') + '</span>';
+    } else {
+      html += '<span>' + escapeHtml(item.name) + '</span>';
     }
+    html += '</button>';
+  });
+
+  listEl.innerHTML = html;
+
+  if (hasIde && repoPath) {
     detectProjectAndUpdateIde(repoPath);
   }
+}
+
+function handleQuickActionClick(event, actionId, btn) {
+  if (event) event.preventDefault();
+  if (!targetRepo) return;
+  if (!canOpenRepositoryLocally()) return;
+
+  var actions = state.quickActions || [];
+  var action = null;
+  for (var i = 0; i < actions.length; i++) {
+    if (actions[i].id === actionId) {
+      action = actions[i];
+      break;
+    }
+  }
+
+  if (!action) {
+    var agent = btn.getAttribute('data-agent');
+    if (agent === 'terminal') {
+      openCurrentTerminal(event);
+    } else if (agent === 'open-ide') {
+      openProjectIde(event);
+    } else if (agent) {
+      openAgentTerminal(event, btn, agent);
+    }
+    return;
+  }
+
+  if (action.type === 'builtin' || action.builtinId) {
+    if (action.builtinId === 'terminal') {
+      openCurrentTerminal(event);
+      return;
+    }
+    if (action.builtinId === 'open-ide') {
+      openProjectIde(event);
+      return;
+    }
+    if (action.builtinId === 'opencode' || action.builtinId === 'claude' || action.builtinId === 'codex' || action.builtinId === 'antigravity') {
+      openAgentTerminal(event, btn, action.builtinId);
+      return;
+    }
+  }
+
+  var origHtml = btn.innerHTML;
+  btn.classList.add('working');
+  btn.style.pointerEvents = 'none';
+
+  fetch('/api/launch-action?repo=' + encodeURIComponent(targetRepo), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: action.id, action: action })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function() {
+      btn.classList.remove('working');
+      btn.classList.add('success');
+      setTimeout(function() {
+        btn.classList.remove('success');
+        btn.style.pointerEvents = '';
+      }, 1500);
+    })
+    .catch(function(error) {
+      btn.classList.remove('working');
+      btn.style.pointerEvents = '';
+      alert((t('actionLaunchFailed') || '启动失败：') + error.message);
+    });
+}
+
+function openQuickActionsModal() {
+  var modal = $('quickActionsModal');
+  if (!modal) return;
+  hideQuickActionEditor();
+  renderQuickActionsManager();
+  modal.classList.add('visible');
+}
+
+function closeQuickActionsModal() {
+  var modal = $('quickActionsModal');
+  if (modal) modal.classList.remove('visible');
+  hideQuickActionEditor();
+}
+
+function renderQuickActionsManager() {
+  var container = $('qaManagerList');
+  if (!container) return;
+  var actions = state.quickActions || [];
+
+  if (!actions.length) {
+    container.innerHTML = '<div class="qa-empty-placeholder">' + escapeHtml(t('noActions') || '暂无快捷启动项，点击下方「+ 添加启动项」开始自定义') + '</div>';
+    return;
+  }
+
+  var html = '';
+  actions.forEach(function(item, idx) {
+    var isFirst = idx === 0;
+    var isLast = idx === actions.length - 1;
+    var isEnabled = item.enabled !== false;
+    var typeBadge = item.type === 'builtin'
+      ? '<span class="qa-badge qa-badge-builtin">内置</span>'
+      : (item.type === 'command' ? '<span class="qa-badge qa-badge-command">CLI</span>' : '<span class="qa-badge qa-badge-app">App</span>');
+    var subtitle = item.type === 'builtin'
+      ? (item.builtinId || 'builtin')
+      : (item.type === 'command' ? (item.command + (item.args ? ' ' + item.args : '')) : (item.appPath + (item.args ? ' ' + item.args : '')));
+
+    html += '<div class="qa-manager-item' + (isEnabled ? '' : ' disabled') + '" data-action-id="' + escapeHtml(item.id) + '">';
+    html += '  <div class="qa-item-left">';
+    html += '    <div class="qa-item-order-btns">';
+    html += '      <button class="qa-order-btn" type="button" data-qa-action="up" data-idx="' + idx + '"' + (isFirst ? ' disabled' : '') + ' title="' + escapeHtml(t('moveUp') || '上移') + '">▲</button>';
+    html += '      <button class="qa-order-btn" type="button" data-qa-action="down" data-idx="' + idx + '"' + (isLast ? ' disabled' : '') + ' title="' + escapeHtml(t('moveDown') || '下移') + '">▼</button>';
+    html += '    </div>';
+    html += '    <div class="qa-item-icon-wrap">' + getQuickActionIconHtml(item.icon, item.builtinId === 'open-ide') + '</div>';
+    html += '    <div class="qa-item-info">';
+    html += '      <div class="qa-item-name">' + escapeHtml(item.name) + ' ' + typeBadge + '</div>';
+    html += '      <div class="qa-item-detail" title="' + escapeHtml(subtitle) + '">' + escapeHtml(subtitle) + '</div>';
+    html += '    </div>';
+    html += '  </div>';
+    html += '  <div class="qa-item-right">';
+    html += '    <button class="qa-btn-sm' + (isEnabled ? ' active' : '') + '" type="button" data-qa-action="toggle" data-idx="' + idx + '" title="' + escapeHtml(isEnabled ? (t('hideAction') || '隐藏') : (t('showAction') || '显示')) + '">';
+    html += isEnabled ? '👁️ ' + escapeHtml(t('hideAction') || '隐藏') : '👁️‍🗨️ ' + escapeHtml(t('showAction') || '显示');
+    html += '    </button>';
+    html += '    <button class="qa-btn-sm" type="button" data-qa-action="edit" data-idx="' + idx + '" title="' + escapeHtml(t('editAction') || '编辑') + '">✏️</button>';
+    html += '    <button class="qa-btn-sm danger" type="button" data-qa-action="delete" data-idx="' + idx + '" title="' + escapeHtml(t('deleteAction') || '删除') + '">🗑️</button>';
+    html += '  </div>';
+    html += '</div>';
+  });
+
+  container.innerHTML = html;
+}
+
+function showQuickActionEditor(actionId) {
+  var card = $('qaEditCard');
+  if (!card) return;
+  state.editingQuickActionId = actionId || null;
+
+  var nameInput = $('qaFormName');
+  var appPathInput = $('qaFormAppPath');
+  var cmdInput = $('qaFormCommand');
+  var argsInput = $('qaFormArgs');
+  var iconSelect = $('qaFormIcon');
+  var runInTerminalCheckbox = $('qaFormRunInTerminal');
+  var titleEl = $('qaEditTitle');
+  var typeRadios = document.querySelectorAll('input[name="qaType"]');
+
+  if (actionId) {
+    var actions = state.quickActions || [];
+    var item = null;
+    for (var i = 0; i < actions.length; i++) {
+      if (actions[i].id === actionId) {
+        item = actions[i];
+        break;
+      }
+    }
+    if (!item) return;
+
+    if (titleEl) titleEl.textContent = (t('editAction') || '编辑启动项') + ' - ' + item.name;
+    if (nameInput) nameInput.value = item.name || '';
+    if (appPathInput) appPathInput.value = item.appPath || '';
+    if (cmdInput) cmdInput.value = item.command || '';
+    if (argsInput) argsInput.value = item.args || '';
+    if (iconSelect) iconSelect.value = item.icon || 'app';
+    if (runInTerminalCheckbox) runInTerminalCheckbox.checked = Boolean(item.runInTerminal);
+
+    var isCmd = item.type === 'command';
+    for (var j = 0; j < typeRadios.length; j++) {
+      typeRadios[j].checked = (typeRadios[j].value === (isCmd ? 'command' : 'app'));
+    }
+    setQuickActionTypeVisibility(isCmd ? 'command' : 'app');
+  } else {
+    if (titleEl) titleEl.textContent = t('addAction') || '添加快捷启动';
+    if (nameInput) nameInput.value = '';
+    if (appPathInput) appPathInput.value = '';
+    if (cmdInput) cmdInput.value = '';
+    if (argsInput) argsInput.value = '';
+    if (iconSelect) iconSelect.value = 'app';
+    if (runInTerminalCheckbox) runInTerminalCheckbox.checked = false;
+
+    for (var k = 0; k < typeRadios.length; k++) {
+      typeRadios[k].checked = (typeRadios[k].value === 'app');
+    }
+    setQuickActionTypeVisibility('app');
+  }
+
+  card.hidden = false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function hideQuickActionEditor() {
+  var card = $('qaEditCard');
+  if (card) card.hidden = true;
+  state.editingQuickActionId = null;
+}
+
+function setQuickActionTypeVisibility(type) {
+  var appRow = $('qaAppPathRow');
+  var cmdRow = $('qaCommandRow');
+  if (type === 'command') {
+    if (appRow) appRow.hidden = true;
+    if (cmdRow) cmdRow.hidden = false;
+  } else {
+    if (appRow) appRow.hidden = false;
+    if (cmdRow) cmdRow.hidden = true;
+  }
+}
+
+function saveQuickActionFromEditor() {
+  var nameInput = $('qaFormName');
+  var name = nameInput ? nameInput.value.trim() : '';
+  if (!name) {
+    alert(t('nameRequired') || '请输入启动项名称');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  var selectedType = 'app';
+  var checkedRadio = document.querySelector('input[name="qaType"]:checked');
+  if (checkedRadio) selectedType = checkedRadio.value;
+
+  var appPath = $('qaFormAppPath') ? $('qaFormAppPath').value.trim() : '';
+  var command = $('qaFormCommand') ? $('qaFormCommand').value.trim() : '';
+  var args = $('qaFormArgs') ? $('qaFormArgs').value.trim() : '';
+  var icon = $('qaFormIcon') ? $('qaFormIcon').value : 'app';
+  var runInTerminal = $('qaFormRunInTerminal') ? $('qaFormRunInTerminal').checked : false;
+
+  if (selectedType === 'app' && !appPath) {
+    alert(t('appPathRequired') || '请选择或输入应用程序路径');
+    if ($('qaFormAppPath')) $('qaFormAppPath').focus();
+    return;
+  }
+  if (selectedType === 'command' && !command) {
+    alert(t('commandRequired') || '请输入要执行的命令');
+    if ($('qaFormCommand')) $('qaFormCommand').focus();
+    return;
+  }
+
+  var actions = (state.quickActions || []).slice();
+  if (state.editingQuickActionId) {
+    for (var i = 0; i < actions.length; i++) {
+      if (actions[i].id === state.editingQuickActionId) {
+        actions[i] = Object.assign({}, actions[i], {
+          name: name,
+          type: selectedType,
+          appPath: appPath,
+          command: command,
+          args: args,
+          icon: icon,
+          runInTerminal: runInTerminal
+        });
+        break;
+      }
+    }
+  } else {
+    actions.push({
+      id: 'custom_' + Date.now(),
+      name: name,
+      type: selectedType,
+      appPath: appPath,
+      command: command,
+      args: args,
+      icon: icon,
+      runInTerminal: runInTerminal,
+      enabled: true
+    });
+  }
+
+  persistQuickActions(actions, function() {
+    hideQuickActionEditor();
+    renderQuickActionsManager();
+    renderQuickActions(targetRepo);
+  });
+}
+
+function persistQuickActions(actions, callback) {
+  fetch('/api/quick-actions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actions: actions })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.quickActions = data.actions || actions;
+      if (typeof callback === 'function') callback();
+    })
+    .catch(function(err) {
+      alert((t('actionSaved') || '保存失败：') + err.message);
+    });
+}
+
+function handlePickSystemApp() {
+  var pickBtn = $('qaPickAppBtn');
+  var origText = pickBtn ? pickBtn.innerHTML : '';
+  if (pickBtn) {
+    pickBtn.disabled = true;
+    pickBtn.textContent = '⏳ 选择中...';
+  }
+
+  fetch('/api/pick-app', { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(result) {
+      if (pickBtn) {
+        pickBtn.disabled = false;
+        pickBtn.innerHTML = origText;
+      }
+      if (result && !result.canceled && result.path) {
+        var appPathInput = $('qaFormAppPath');
+        var nameInput = $('qaFormName');
+        var iconSelect = $('qaFormIcon');
+        if (appPathInput) appPathInput.value = result.path;
+        if (nameInput && (!nameInput.value || nameInput.value.indexOf('Action') === 0)) {
+          nameInput.value = result.name || '';
+        }
+        if (iconSelect && result.path) {
+          var lower = result.path.toLowerCase();
+          if (lower.indexOf('cursor') !== -1) iconSelect.value = 'cursor';
+          else if (lower.indexOf('sublime') !== -1) iconSelect.value = 'sublime';
+          else if (lower.indexOf('xcode') !== -1) iconSelect.value = 'xcode';
+          else if (lower.indexOf('android') !== -1) iconSelect.value = 'android-studio';
+          else if (lower.indexOf('code') !== -1) iconSelect.value = 'vscode';
+          else if (lower.indexOf('warp') !== -1 || lower.indexOf('term') !== -1 || lower.indexOf('ghostty') !== -1) iconSelect.value = 'terminal';
+        }
+      }
+    })
+    .catch(function(err) {
+      if (pickBtn) {
+        pickBtn.disabled = false;
+        pickBtn.innerHTML = origText;
+      }
+      alert('选择应用失败：' + err.message);
+    });
+}
+
+function resetQuickActionsToDefaults() {
+  if (!confirm(t('resetDefaultsConfirm') || '确定要重置所有快捷启动按钮为默认值吗？')) return;
+  fetch('/api/quick-actions/reset', { method: 'POST' })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.quickActions = data.actions || [];
+      hideQuickActionEditor();
+      renderQuickActionsManager();
+      renderQuickActions(targetRepo);
+    })
+    .catch(function(err) {
+      alert('重置失败：' + err.message);
+    });
 }
 
 function openCurrentRepository(event) {
@@ -11033,12 +11752,12 @@ function openProjectIde(event) {
     });
 }
 
-function openAgentTerminal(event, btn) {
+function openAgentTerminal(event, btn, explicitAgent) {
   console.log('openAgentTerminal called');
   if (event) event.preventDefault();
   if (!targetRepo) { console.log('no targetRepo'); return; }
   if (!canOpenRepositoryLocally()) { console.log('not local'); return; }
-  var agent = btn.getAttribute('data-agent');
+  var agent = explicitAgent || btn.getAttribute('data-agent');
   console.log('agent:', agent);
   if (!agent) { console.log('no agent'); return; }
   var url = '/api/open-agent?repo=' + encodeURIComponent(targetRepo) + '&agent=' + encodeURIComponent(agent);
@@ -17305,8 +18024,19 @@ $('repo').addEventListener('keydown', function(event) {
   }
 });
 $('quickActions').addEventListener('click', function(e) {
+  var configBtn = e.target.closest('#qaConfigBtn');
+  if (configBtn) {
+    e.preventDefault();
+    openQuickActionsModal();
+    return;
+  }
   var btn = e.target.closest('.qa-btn');
   if (!btn) return;
+  var actionId = btn.getAttribute('data-action-id');
+  if (actionId) {
+    handleQuickActionClick(e, actionId, btn);
+    return;
+  }
   var agent = btn.getAttribute('data-agent');
   if (agent === 'terminal') {
     openCurrentTerminal(e);
@@ -17316,6 +18046,108 @@ $('quickActions').addEventListener('click', function(e) {
     openAgentTerminal(e, btn);
   }
 });
+
+function bindQuickActionsModalEvents() {
+  var modal = $('quickActionsModal');
+  if (!modal) return;
+
+  modal.addEventListener('click', function(event) {
+    if (event.target === modal) closeQuickActionsModal();
+  });
+
+  var closeX = $('closeQuickActionsX');
+  if (closeX) closeX.addEventListener('click', closeQuickActionsModal);
+
+  var closeBtn = $('qaCloseModalBtn');
+  if (closeBtn) closeBtn.addEventListener('click', closeQuickActionsModal);
+
+  var addBtn = $('qaAddActionBtn');
+  if (addBtn) addBtn.addEventListener('click', function() {
+    showQuickActionEditor(null);
+  });
+
+  var resetBtn = $('qaResetDefaultsBtn');
+  if (resetBtn) resetBtn.addEventListener('click', resetQuickActionsToDefaults);
+
+  var pickBtn = $('qaPickAppBtn');
+  if (pickBtn) pickBtn.addEventListener('click', handlePickSystemApp);
+
+  var cancelEditBtn = $('qaCancelEditBtn');
+  if (cancelEditBtn) cancelEditBtn.addEventListener('click', hideQuickActionEditor);
+
+  var saveEditBtn = $('qaSaveEditBtn');
+  if (saveEditBtn) saveEditBtn.addEventListener('click', saveQuickActionFromEditor);
+
+  var typeRadios = document.querySelectorAll('input[name="qaType"]');
+  for (var i = 0; i < typeRadios.length; i++) {
+    typeRadios[i].addEventListener('change', function(e) {
+      setQuickActionTypeVisibility(e.target.value);
+    });
+  }
+
+  var varBadges = document.querySelectorAll('.qa-var-badge');
+  for (var j = 0; j < varBadges.length; j++) {
+    varBadges[j].addEventListener('click', function(e) {
+      var variable = e.target.getAttribute('data-var');
+      var argsInput = $('qaFormArgs');
+      if (variable && argsInput) {
+        var current = argsInput.value.trim();
+        argsInput.value = current ? current + ' ' + variable : variable;
+        argsInput.focus();
+      }
+    });
+  }
+
+  var managerList = $('qaManagerList');
+  if (managerList) {
+    managerList.addEventListener('click', function(e) {
+      var target = e.target.closest('[data-qa-action]');
+      if (!target) return;
+      var qaAction = target.getAttribute('data-qa-action');
+      var idx = parseInt(target.getAttribute('data-idx'), 10);
+      var actions = (state.quickActions || []).slice();
+      if (isNaN(idx) || idx < 0 || idx >= actions.length) return;
+
+      if (qaAction === 'up') {
+        if (idx > 0) {
+          var tmp = actions[idx - 1];
+          actions[idx - 1] = actions[idx];
+          actions[idx] = tmp;
+          persistQuickActions(actions, function() {
+            renderQuickActionsManager();
+            renderQuickActions(targetRepo);
+          });
+        }
+      } else if (qaAction === 'down') {
+        if (idx < actions.length - 1) {
+          var tmp2 = actions[idx + 1];
+          actions[idx + 1] = actions[idx];
+          actions[idx] = tmp2;
+          persistQuickActions(actions, function() {
+            renderQuickActionsManager();
+            renderQuickActions(targetRepo);
+          });
+        }
+      } else if (qaAction === 'toggle') {
+        actions[idx].enabled = actions[idx].enabled === false ? true : false;
+        persistQuickActions(actions, function() {
+          renderQuickActionsManager();
+          renderQuickActions(targetRepo);
+        });
+      } else if (qaAction === 'edit') {
+        showQuickActionEditor(actions[idx].id);
+      } else if (qaAction === 'delete') {
+        actions.splice(idx, 1);
+        persistQuickActions(actions, function() {
+          if (state.editingQuickActionId) hideQuickActionEditor();
+          renderQuickActionsManager();
+          renderQuickActions(targetRepo);
+        });
+      }
+    });
+  }
+}
+
 $('sidebarToggle').addEventListener('click', toggleSidebar);
 $('sidebarClose').addEventListener('click', toggleSidebar);
 
@@ -17329,6 +18161,7 @@ $('copyDetail').addEventListener('click', copyCommitDetail);
 $('closeDetail').addEventListener('click', closeCommitDetail);
 $('btnInstall').addEventListener('click', installGmc);
 bindCommitDetailEvents();
+bindQuickActionsModalEvents();
 window.addEventListener('resize', function() {
   if (state.commits.length) renderGraph(state.commits);
   if (state.contributions || state.globalContributions) renderCalendar(state.contributions, state.globalContributions);
