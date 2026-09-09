@@ -11,6 +11,10 @@ var DEFAULT_QUICK_ACTIONS = [
     name: 'Terminal',
     type: 'builtin',
     builtinId: 'terminal',
+    appPath: '/System/Applications/Utilities/Terminal.app',
+    command: 'open',
+    args: '-a Terminal {repo}',
+    runInTerminal: false,
     icon: 'terminal',
     enabled: true
   },
@@ -19,6 +23,10 @@ var DEFAULT_QUICK_ACTIONS = [
     name: 'OpenCode',
     type: 'builtin',
     builtinId: 'opencode',
+    appPath: '',
+    command: 'opencode',
+    args: '',
+    runInTerminal: true,
     icon: 'opencode',
     enabled: true
   },
@@ -27,6 +35,10 @@ var DEFAULT_QUICK_ACTIONS = [
     name: 'Claude',
     type: 'builtin',
     builtinId: 'claude',
+    appPath: '',
+    command: 'claude',
+    args: '',
+    runInTerminal: true,
     icon: 'claude',
     enabled: true
   },
@@ -35,6 +47,10 @@ var DEFAULT_QUICK_ACTIONS = [
     name: 'Codex',
     type: 'builtin',
     builtinId: 'codex',
+    appPath: '',
+    command: 'codex',
+    args: '--cd {repo}',
+    runInTerminal: true,
     icon: 'codex',
     enabled: true
   },
@@ -43,6 +59,10 @@ var DEFAULT_QUICK_ACTIONS = [
     name: 'Antigravity',
     type: 'builtin',
     builtinId: 'antigravity',
+    appPath: '',
+    command: 'agy',
+    args: '',
+    runInTerminal: true,
     icon: 'antigravity',
     enabled: true
   },
@@ -51,10 +71,19 @@ var DEFAULT_QUICK_ACTIONS = [
     name: 'VS Code',
     type: 'builtin',
     builtinId: 'open-ide',
-    icon: 'ide',
+    appPath: 'Visual Studio Code',
+    command: 'code',
+    args: '{repo}',
+    runInTerminal: false,
+    icon: 'vscode',
     enabled: true
   }
 ];
+
+var DEFAULT_ACTIONS_MAP = {};
+DEFAULT_QUICK_ACTIONS.forEach(function (item) {
+  DEFAULT_ACTIONS_MAP[item.id] = item;
+});
 
 function configFilePath(customPath) {
   if (customPath && typeof customPath === 'string') {
@@ -64,15 +93,29 @@ function configFilePath(customPath) {
 }
 
 function cloneAction(action) {
+  var def = (action.builtinId && DEFAULT_ACTIONS_MAP[action.builtinId]) || DEFAULT_ACTIONS_MAP[action.id] || null;
+  var command = (action.command !== undefined && action.command !== null && String(action.command) !== '')
+    ? String(action.command)
+    : (def ? def.command : '');
+  var args = (action.args !== undefined && action.args !== null && String(action.args) !== '')
+    ? String(action.args)
+    : (def ? def.args : '');
+  var appPath = (action.appPath !== undefined && action.appPath !== null && String(action.appPath) !== '')
+    ? String(action.appPath)
+    : (def ? def.appPath : '');
+  var runInTerminal = (action.runInTerminal !== undefined && action.runInTerminal !== null)
+    ? Boolean(action.runInTerminal)
+    : (def ? def.runInTerminal : false);
+
   var cloned = {
     id: String(action.id || ''),
-    name: String(action.name || ''),
-    type: String(action.type || 'app'),
-    appPath: action.appPath ? String(action.appPath) : '',
-    command: action.command ? String(action.command) : '',
-    args: action.args ? String(action.args) : '',
-    runInTerminal: Boolean(action.runInTerminal),
-    icon: action.icon ? String(action.icon) : 'app',
+    name: String(action.name || (def ? def.name : '')),
+    type: String(action.type || (def ? def.type : 'app')),
+    appPath: appPath,
+    command: command,
+    args: args,
+    runInTerminal: runInTerminal,
+    icon: action.icon ? String(action.icon) : (def ? def.icon : 'app'),
     enabled: action.enabled !== false
   };
   if (action.builtinId) {
@@ -163,6 +206,88 @@ function resetQuickActions(options) {
   return defaults;
 }
 
+function extractAppIcon(appPath) {
+  if (process.platform !== 'darwin' || !appPath) return null;
+  var resolved = path.resolve(String(appPath).trim());
+  if (!fs.existsSync(resolved)) {
+    var candidates = [
+      path.join('/Applications', appPath + '.app'),
+      path.join('/Applications', appPath),
+      path.join('/System/Applications', appPath + '.app'),
+      path.join('/System/Applications/Utilities', appPath + '.app')
+    ];
+    for (var c = 0; c < candidates.length; c++) {
+      if (fs.existsSync(candidates[c])) {
+        resolved = candidates[c];
+        break;
+      }
+    }
+  }
+  if (!fs.existsSync(resolved)) return null;
+
+  var appBase = path.basename(resolved).replace(/\.app$/i, '');
+  var safeName = appBase.replace(/[^a-zA-Z0-9_\-\.]/g, '_').toLowerCase();
+  var iconCacheDir = path.join(os.homedir(), '.config', 'gmc', 'icons');
+  try {
+    fs.mkdirSync(iconCacheDir, { recursive: true });
+  } catch (e) {}
+
+  var cacheFile = path.join(iconCacheDir, safeName + '.png');
+  if (fs.existsSync(cacheFile) && fs.statSync(cacheFile).size > 0) {
+    return '/api/app-icon?name=' + encodeURIComponent(safeName);
+  }
+
+  // 1. Try finding .icns in Contents/Resources
+  var icnsPath = null;
+  var plistPath = path.join(resolved, 'Contents', 'Info.plist');
+  if (fs.existsSync(plistPath)) {
+    try {
+      var plRes = childProcess.spawnSync('plutil', ['-extract', 'CFBundleIconFile', 'raw', '-o', '-', plistPath], { encoding: 'utf8' });
+      if (!plRes.error && plRes.status === 0 && plRes.stdout && plRes.stdout.trim()) {
+        var iconFile = plRes.stdout.trim();
+        if (!iconFile.endsWith('.icns')) iconFile += '.icns';
+        var cand = path.join(resolved, 'Contents', 'Resources', iconFile);
+        if (fs.existsSync(cand)) icnsPath = cand;
+      }
+    } catch (err) {}
+  }
+
+  if (!icnsPath) {
+    var resDir = path.join(resolved, 'Contents', 'Resources');
+    if (fs.existsSync(resDir)) {
+      try {
+        var entries = fs.readdirSync(resDir);
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i].toLowerCase().endsWith('.icns')) {
+            icnsPath = path.join(resDir, entries[i]);
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  if (icnsPath) {
+    try {
+      var sipsRes = childProcess.spawnSync('sips', ['-s', 'format', 'png', icnsPath, '-Z', '64', '--out', cacheFile], { encoding: 'utf8' });
+      if (!sipsRes.error && sipsRes.status === 0 && fs.existsSync(cacheFile)) {
+        return '/api/app-icon?name=' + encodeURIComponent(safeName);
+      }
+    } catch (e) {}
+  }
+
+  // 2. Fallback: Cocoa NSWorkspace via swift
+  try {
+    var swiftScript = 'import Cocoa; let p = CommandLine.arguments[1]; let o = CommandLine.arguments[2]; let i = NSWorkspace.shared.icon(forFile: p); i.size = NSSize(width: 64, height: 64); if let t = i.tiffRepresentation, let r = NSBitmapImageRep(data: t), let b = r.representation(using: .png, properties: [:]) { try? b.write(to: URL(fileURLWithPath: o)) }';
+    var swiftRes = childProcess.spawnSync('swift', ['-e', swiftScript, resolved, cacheFile], { encoding: 'utf8', timeout: 5000 });
+    if (!swiftRes.error && swiftRes.status === 0 && fs.existsSync(cacheFile)) {
+      return '/api/app-icon?name=' + encodeURIComponent(safeName);
+    }
+  } catch (e) {}
+
+  return null;
+}
+
 function chooseAppPath() {
   return new Promise(function (resolve, reject) {
     if (process.platform !== 'darwin') {
@@ -187,10 +312,12 @@ function chooseAppPath() {
       }
       var base = path.basename(appPath);
       var appName = base.replace(/\.app$/i, '');
+      var extractedIcon = extractAppIcon(appPath);
       resolve({
         canceled: false,
         path: appPath,
-        name: appName
+        name: appName,
+        icon: extractedIcon || 'app'
       });
     });
   });
@@ -281,12 +408,18 @@ function launchCustomAction(action, repoRoot, branch, helpers) {
   if (action.type === 'command' || action.command) {
     var cmd = interpolatePlaceholders(action.command, repoRoot, branch);
     var cmdArgs = parseCommandLineArgs(interpolatePlaceholders(action.args || '', repoRoot, branch));
-    var execRes = childProcess.spawnSync(cmd, cmdArgs, { cwd: repoRoot, env: env, encoding: 'utf8' });
-    if (execRes.error || execRes.status !== 0) {
-      var err = (execRes.stderr || '').trim() || (execRes.error && execRes.error.message) || ('Exit code ' + execRes.status);
-      throw new Error(err || 'Failed to execute command: ' + cmd);
+    try {
+      var commandProc = childProcess.spawn(cmd, cmdArgs, {
+        cwd: repoRoot,
+        env: env,
+        detached: true,
+        stdio: 'ignore'
+      });
+      commandProc.unref();
+      return { status: 'ok', launched: action.name || cmd };
+    } catch (spawnError) {
+      throw new Error((spawnError && spawnError.message) || ('Failed to execute command: ' + cmd));
     }
-    return { status: 'ok', launched: action.name || cmd };
   }
 
   throw new Error('Invalid action configuration: missing appPath or command');
@@ -304,5 +437,6 @@ module.exports = {
   chooseAppPath: chooseAppPath,
   interpolatePlaceholders: interpolatePlaceholders,
   parseCommandLineArgs: parseCommandLineArgs,
-  launchCustomAction: launchCustomAction
+  launchCustomAction: launchCustomAction,
+  extractAppIcon: extractAppIcon
 };

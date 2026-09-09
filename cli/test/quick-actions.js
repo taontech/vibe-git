@@ -132,6 +132,10 @@ async function run() {
     assert.strictEqual(resetJson.status, 'ok');
     assert.strictEqual(resetJson.actions.length, 6);
 
+    // GET /api/app-icon (missing app)
+    var missingIconRes = await fetch(new URL('/api/app-icon?name=non_existent_app', info.url), { headers: headers });
+    assert.strictEqual(missingIconRes.status, 404);
+
     console.log('Quick actions tests passed.');
   } finally {
     if (info && info.server) {

@@ -488,6 +488,31 @@ function handleRequest(req, res) {
       return;
     }
 
+    if (parsed.pathname === '/api/app-icon') {
+      var iconName = parsed.query.name;
+      var targetAppPath = parsed.query.path;
+      var iconFile = null;
+      if (iconName) {
+        var cleanName = path.basename(iconName).replace(/[^a-zA-Z0-9_\-\.]/g, '');
+        iconFile = path.join(os.homedir(), '.config', 'gmc', 'icons', cleanName + '.png');
+      } else if (targetAppPath) {
+        var extracted = quickActions.extractAppIcon(targetAppPath);
+        if (extracted) {
+          var m = extracted.match(/name=([^&]+)/);
+          if (m) {
+            iconFile = path.join(os.homedir(), '.config', 'gmc', 'icons', decodeURIComponent(m[1]) + '.png');
+          }
+        }
+      }
+      if (iconFile && fs.existsSync(iconFile)) {
+        var imgBuffer = fs.readFileSync(iconFile);
+        send(res, 200, 'image/png', imgBuffer);
+      } else {
+        send(res, 404, 'text/plain; charset=utf-8', 'App icon not found');
+      }
+      return;
+    }
+
     var targetRepo = parsed.query.repo;
     if (!targetRepo) {
       if (parsed.pathname.startsWith('/api/')) {
@@ -1466,7 +1491,7 @@ function handleLaunchAction(req, res, targetRepo) {
       return sendJsonError(res, 404, 'Action not found');
     }
 
-    if (action.type === 'builtin' || action.builtinId) {
+    if (action.type === 'builtin') {
       if (action.builtinId === 'terminal') {
         return sendJson(res, openTerminalAtRepository(repoRoot));
       }
@@ -11242,8 +11267,11 @@ function updateTerminalButton(repoPath) {
 }
 
 function getQuickActionIconHtml(iconName, isIde) {
-  if (isIde) {
+  if (isIde && (!iconName || iconName === 'ide' || iconName === 'vscode')) {
     return '<img id="qaIdeIcon" class="qa-icon" src="/icons/vscode.svg" alt="" width="20" height="20">';
+  }
+  if (iconName && (iconName.startsWith('/api/') || iconName.startsWith('/icons/') || iconName.startsWith('data:') || iconName.indexOf('/') !== -1)) {
+    return '<img class="qa-icon" src="' + escapeHtml(iconName) + '" alt="" width="18" height="18">';
   }
   if (iconName === 'terminal') {
     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="18" height="18"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
@@ -11276,8 +11304,8 @@ function renderQuickActions(repoPath) {
 
   actions.forEach(function(item) {
     if (item.enabled === false) return;
-    var isTerminal = item.builtinId === 'terminal';
-    var isIde = item.builtinId === 'open-ide';
+    var isTerminal = item.builtinId === 'terminal' && item.type === 'builtin';
+    var isIde = item.builtinId === 'open-ide' && item.type === 'builtin';
     if (isIde) hasIde = true;
 
     var btnIdAttr = isTerminal ? ' id="qaTerminal"' : (isIde ? ' id="qaOpenIde"' : '');
@@ -11287,8 +11315,12 @@ function renderQuickActions(repoPath) {
       ? ((t('openTerminalPrefix') || '在终端中打开：') + (repoPath || ''))
       : (item.args ? (item.name + ' (' + item.args + ')') : item.name);
 
+    var effectiveIcon = (item.appPath && (!item.icon || item.icon === 'app'))
+      ? ('/api/app-icon?path=' + encodeURIComponent(item.appPath))
+      : item.icon;
+
     html += '<button' + btnIdAttr + ' class="qa-btn' + extraClass + '" type="button" data-action-id="' + escapeHtml(item.id) + '"' + agentAttr + ' title="' + escapeHtml(title) + '">';
-    html += getQuickActionIconHtml(item.icon, isIde);
+    html += getQuickActionIconHtml(effectiveIcon, isIde);
     if (isIde) {
       html += '<span id="qaIdeLabel">' + escapeHtml(item.name || 'VS Code') + '</span>';
     } else {
@@ -11330,7 +11362,7 @@ function handleQuickActionClick(event, actionId, btn) {
     return;
   }
 
-  if (action.type === 'builtin' || action.builtinId) {
+  if (action.type === 'builtin') {
     if (action.builtinId === 'terminal') {
       openCurrentTerminal(event);
       return;
@@ -11407,9 +11439,13 @@ function renderQuickActionsManager() {
     var typeBadge = item.type === 'builtin'
       ? '<span class="qa-badge qa-badge-builtin">内置</span>'
       : (item.type === 'command' ? '<span class="qa-badge qa-badge-command">CLI</span>' : '<span class="qa-badge qa-badge-app">App</span>');
-    var subtitle = item.type === 'builtin'
-      ? (item.builtinId || 'builtin')
-      : (item.type === 'command' ? (item.command + (item.args ? ' ' + item.args : '')) : (item.appPath + (item.args ? ' ' + item.args : '')));
+    var subtitle = item.type === 'command'
+      ? (item.command + (item.args ? ' ' + item.args : '') + (item.runInTerminal ? ' (终端)' : ''))
+      : (item.appPath ? (item.appPath + (item.args ? ' ' + item.args : '')) : (item.command ? (item.command + (item.args ? ' ' + item.args : '')) : (item.builtinId || 'builtin')));
+
+    var managerIcon = (item.appPath && (!item.icon || item.icon === 'app'))
+      ? ('/api/app-icon?path=' + encodeURIComponent(item.appPath))
+      : item.icon;
 
     html += '<div class="qa-manager-item' + (isEnabled ? '' : ' disabled') + '" data-action-id="' + escapeHtml(item.id) + '">';
     html += '  <div class="qa-item-left">';
@@ -11417,7 +11453,7 @@ function renderQuickActionsManager() {
     html += '      <button class="qa-order-btn" type="button" data-qa-action="up" data-idx="' + idx + '"' + (isFirst ? ' disabled' : '') + ' title="' + escapeHtml(t('moveUp') || '上移') + '">▲</button>';
     html += '      <button class="qa-order-btn" type="button" data-qa-action="down" data-idx="' + idx + '"' + (isLast ? ' disabled' : '') + ' title="' + escapeHtml(t('moveDown') || '下移') + '">▼</button>';
     html += '    </div>';
-    html += '    <div class="qa-item-icon-wrap">' + getQuickActionIconHtml(item.icon, item.builtinId === 'open-ide') + '</div>';
+    html += '    <div class="qa-item-icon-wrap">' + getQuickActionIconHtml(managerIcon, item.builtinId === 'open-ide') + '</div>';
     html += '    <div class="qa-item-info">';
     html += '      <div class="qa-item-name">' + escapeHtml(item.name) + ' ' + typeBadge + '</div>';
     html += '      <div class="qa-item-detail" title="' + escapeHtml(subtitle) + '">' + escapeHtml(subtitle) + '</div>';
@@ -11466,7 +11502,19 @@ function showQuickActionEditor(actionId) {
     if (appPathInput) appPathInput.value = item.appPath || '';
     if (cmdInput) cmdInput.value = item.command || '';
     if (argsInput) argsInput.value = item.args || '';
-    if (iconSelect) iconSelect.value = item.icon || 'app';
+    if (iconSelect) {
+      if (item.icon && (item.icon.indexOf('/') !== -1 || item.icon.startsWith('data:'))) {
+        var existingOpt = iconSelect.querySelector('option[data-app-icon="true"]');
+        if (!existingOpt) {
+          existingOpt = document.createElement('option');
+          existingOpt.setAttribute('data-app-icon', 'true');
+          iconSelect.insertBefore(existingOpt, iconSelect.firstChild);
+        }
+        existingOpt.value = item.icon;
+        existingOpt.textContent = '📱 应用图标 (' + (item.name || 'App') + ')';
+      }
+      iconSelect.value = item.icon || 'app';
+    }
     if (runInTerminalCheckbox) runInTerminalCheckbox.checked = Boolean(item.runInTerminal);
 
     var isCmd = item.type === 'command';
@@ -11627,7 +11675,17 @@ function handlePickSystemApp() {
         if (nameInput && (!nameInput.value || nameInput.value.indexOf('Action') === 0)) {
           nameInput.value = result.name || '';
         }
-        if (iconSelect && result.path) {
+        if (result.icon && iconSelect) {
+          var customOpt = iconSelect.querySelector('option[data-app-icon="true"]');
+          if (!customOpt) {
+            customOpt = document.createElement('option');
+            customOpt.setAttribute('data-app-icon', 'true');
+            iconSelect.insertBefore(customOpt, iconSelect.firstChild);
+          }
+          customOpt.value = result.icon;
+          customOpt.textContent = '📱 应用图标 (' + (result.name || 'App') + ')';
+          iconSelect.value = result.icon;
+        } else if (iconSelect && result.path) {
           var lower = result.path.toLowerCase();
           if (lower.indexOf('cursor') !== -1) iconSelect.value = 'cursor';
           else if (lower.indexOf('sublime') !== -1) iconSelect.value = 'sublime';
