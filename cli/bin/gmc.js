@@ -37,7 +37,8 @@ async function main() {
   }
 
   if (!command || command === 'help' || parsed.flags.help) {
-    printHelp();
+    var helpTarget = command === 'help' ? parsed.args[0] : (parsed.flags.help ? command : null);
+    printHelp(helpTarget);
     return;
   }
 
@@ -121,7 +122,8 @@ function parseArgs(argv) {
     restart: false,
     quit: false,
     watch: false,
-    version: false
+    version: false,
+    list: false
   };
   var positional = [];
 
@@ -163,6 +165,8 @@ function parseArgs(argv) {
       flags.version = true;
     } else if (arg === '-h' || arg === '--help') {
       flags.help = true;
+    } else if (arg === '--list') {
+      flags.list = true;
     } else {
       positional.push(arg);
     }
@@ -774,51 +778,334 @@ function resolveMergeCommand(fileArg, flags) {
   }
 }
 
-function printHelp() {
-  console.log([
-    'gmc - bind GitHub issues to AI coding sessions and commits',
-    'git commit -m gmc - generate commit message with gmc hooks',
-    'Usage:',
-    '  gmc --version',
-    '  gmc <issue> [--agent codex|claude|antigravity] [--exec] [--no-branch]',
-    '  gmc agent [codex|claude|antigravity]',
-    '  gmc bind <issue> [--agent codex|claude|antigravity]',
-    '  gmc status',
-    '  gmc message [--print-prompt]',
-    '  gmc commit [--no-edit]',
-  '  gmc retry [commit]',
-  '  gmc resolve-merge [file] [--list]',
-  '  gmc install --all [--port 4277]',
-  '  gmc install-hooks',
-  '  gmc web [--port 4277] [--no-open] [--tmp] [--restart] [--quit] [--watch]',
-  '  git commit -m gmc',
+function isIssueRef(value) {
+  if (!value) return false;
+  try {
+    github.parseIssueRef(value);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getCommandHelp(command) {
+  var helps = {
+    web: [
+      'Usage:',
+      '  gmc web [options]',
+      '',
+      'Description:',
+      '  Start the local GitWeb browser dashboard and Agent Monitor.',
+      '  By default, runs as a background daemon and opens the dashboard in your default browser.',
+      '  If already running, opens the browser to the existing server.',
+      '',
+      'Options:',
+      '  --port <port>        Port to listen on (default: 4277, or GMC_GITWEB_PORT)',
+      '  --no-open            Do not open browser automatically',
+      '  --tmp                Run in foreground (blocking process) instead of background daemon',
+      '  --restart            Restart running background GitWeb server daemon',
+      '  --quit               Stop running background GitWeb server daemon',
+      '  --watch, --dev       Run in foreground with live reload when web files change',
+      '  -h, --help           Show help for web command',
+      '',
+      'Examples:',
+      '  $ gmc web',
+      '  $ gmc web --port 5000',
+      '  $ gmc web --no-open',
+      '  $ gmc web --tmp',
+      '  $ gmc web --restart',
+      '  $ gmc web --quit',
+      '  $ gmc web --watch'
+    ],
+    status: [
+      'Usage:',
+      '  gmc status',
+      '',
+      'Description:',
+      '  Display repository binding, active git branch, bound GitHub issue,',
+      '  active AI agent, and recent background commit message generation tasks.',
+      '',
+      'Options:',
+      '  -h, --help           Show help for status command',
+      '',
+      'Examples:',
+      '  $ gmc status'
+    ],
+    commit: [
+      'Usage:',
+      '  gmc commit [options]',
+      '',
+      'Description:',
+      '  Generate an AI commit message based on staged changes and commit them.',
+      '  Opens your editor ($GIT_EDITOR, $EDITOR, or vi) to review and edit the',
+      '  generated message before committing. Also advances related Markdown',
+      '  task statuses in .gmc/tasks/ when applicable.',
+      '',
+      'Options:',
+      '  --no-edit            Commit immediately without opening editor',
+      '  --print-prompt       Print generated prompt to stdout instead of committing',
+      '  -h, --help           Show help for commit command',
+      '',
+      'Examples:',
+      '  $ git add . && gmc commit',
+      '  $ git add . && gmc commit --no-edit',
+      '  $ gmc commit --print-prompt'
+    ],
+    message: [
+      'Usage:',
+      '  gmc message [options]',
+      '',
+      'Description:',
+      '  Generate an AI commit message based on staged changes and print it',
+      '  to stdout without committing.',
+      '',
+      'Options:',
+      '  --print-prompt       Print generated prompt to stdout instead of calling AI',
+      '  -h, --help           Show help for message command',
+      '',
+      'Examples:',
+      '  $ git add . && gmc message',
+      '  $ gmc message --print-prompt'
+    ],
+    retry: [
+      'Usage:',
+      '  gmc retry [commit]',
+      '',
+      'Description:',
+      '  Re-queue background commit message generation for a commit that failed',
+      '  or needs regeneration. Background worker generates the message and',
+      '  rewrites the commit (only if it is still HEAD).',
+      '',
+      'Arguments:',
+      '  [commit]             Commit reference to retry (default: HEAD)',
+      '',
+      'Options:',
+      '  -h, --help           Show help for retry command',
+      '',
+      'Examples:',
+      '  $ gmc retry',
+      '  $ gmc retry HEAD',
+      '  $ gmc retry a1b2c3d'
+    ],
+    'resolve-merge': [
+      'Usage:',
+      '  gmc resolve-merge [file] [options]',
+      '',
+      'Description:',
+      '  Resolve Git merge conflicts using AI. If a file is specified, resolves',
+      '  conflicts in that file and stages it. If no file is specified, resolves',
+      '  all conflicted files in the repository and stages them.',
+      '',
+      'Arguments:',
+      '  [file]               Specific conflicted file to resolve',
+      '',
+      'Options:',
+      '  --list               List conflicted files and merge branches without resolving',
+      '  -h, --help           Show help for resolve-merge command',
+      '',
+      'Examples:',
+      '  $ gmc resolve-merge --list',
+      '  $ gmc resolve-merge',
+      '  $ gmc resolve-merge path/to/conflicted-file.js'
+    ],
+    agent: [
+      'Usage:',
+      '  gmc agent [name]',
+      '',
+      'Description:',
+      '  Display or configure the default AI coding agent. Configuration is',
+      '  saved globally in ~/.config/gmc/config.json.',
+      '',
+      'Arguments:',
+      '  [name]               Agent name to set: codex | claude | antigravity',
+      '                       If omitted, displays the currently active agent.',
+      '',
+      'Options:',
+      '  -h, --help           Show help for agent command',
+      '',
+      'Examples:',
+      '  $ gmc agent',
+      '  $ gmc agent codex',
+      '  $ gmc agent claude',
+      '  $ gmc agent antigravity'
+    ],
+    bind: [
+      'Usage:',
+      '  gmc bind <issue> [options]',
+      '',
+      'Description:',
+      '  Bind current repository and branch to a GitHub issue without',
+      '  launching an AI agent session.',
+      '',
+      'Arguments:',
+      '  <issue>              GitHub issue reference (e.g. 42, #42, GH-42, full URL)',
+      '',
+      'Options:',
+      '  --agent <name>       AI agent to associate with binding (codex, claude, antigravity)',
+      '  -h, --help           Show help for bind command',
+      '',
+      'Examples:',
+      '  $ gmc bind GH-234',
+      '  $ gmc bind 42 --agent claude',
+      '  $ gmc bind https://github.com/owner/repo/issues/42'
+    ],
+    install: [
+      'Usage:',
+      '  gmc install --all',
+      '  gmc install-hooks',
+      '',
+      'Description:',
+      '  Install gmc Git hooks (commit-msg and post-commit) into .git/hooks.',
+      '  Enables the background AI commit workflow: `git commit -m gmc`.',
+      '',
+      'Options:',
+      '  --all                Confirm installation of all hooks (required for gmc install)',
+      '  -h, --help           Show help for install command',
+      '',
+      'Examples:',
+      '  $ gmc install --all',
+      '  $ gmc install-hooks'
+    ],
+    issue: [
+      'Usage:',
+      '  gmc <issue> [options]',
+      '',
+      'Description:',
+      '  Fetch a GitHub issue, create a dedicated branch, bind the issue to',
+      '  the repository, and launch an AI coding session.',
+      '',
+      'Arguments:',
+      '  <issue>              GitHub issue reference (e.g. 42, #42, GH-42, full URL)',
+      '',
+      'Options:',
+      '  --agent <name>       AI agent to launch: codex | claude | antigravity',
+      '  --exec               Run agent in interactive execution mode',
+      '  --no-branch          Stay on current branch instead of creating an issue branch',
+      '  --dry-run            Print issue prompt without launching the agent',
+      '  --print-prompt       Same as --dry-run; print prompt to stdout',
+      '  -h, --help           Show help',
+      '',
+      'Examples:',
+      '  $ gmc 42',
+      '  $ gmc GH-234 --agent codex',
+      '  $ gmc https://github.com/owner/repo/issues/101 --exec',
+      '  $ gmc GH-234 --dry-run'
+    ],
+    hook: [
+      'Usage:',
+      '  gmc hook <commit-msg|post-commit> [args]',
+      '  gmc hook-worker <task-oid>',
+      '',
+      'Description:',
+      '  Internal plumbing commands invoked by Git hooks and background workers.',
+      '  Not intended for direct manual invocation.',
+      '',
+      'Options:',
+      '  -h, --help           Show help for hook command'
+    ]
+  };
+
+  helps['install-hooks'] = helps.install;
+  helps['hook-worker'] = helps.hook;
+
+  return helps[command] || null;
+}
+
+function getMainHelp() {
+  return [
+    'gmc - Local GitWeb dashboard and AI-assisted commit messages for Git repositories',
     '',
-    'Environment:',
-    '  GITHUB_TOKEN or GH_TOKEN is used for GitHub API authentication.',
-    '  GMC_CODEX_MODEL overrides the model used for commit message generation.',
-    '  GMC_CODEX_TIMEOUT_MS overrides the Codex generation timeout.',
-    '  GMC_GITWEB_PORT overrides the default local GitWeb port.',
-    '  gmc install --all installs hooks.',
-    '  gmc install-hooks sets up Git hooks for AI commit messages and task status updates.',
-    '  gmc web starts the Git Web UI in the background as a daemon.',
-    '  gmc web --tmp starts the Git Web UI in the foreground.',
-    '  gmc web --restart restarts the background Git Web UI daemon.',
-    '  gmc web --quit stops the background Git Web UI daemon.',
-  '  gmc web --watch restarts GitWeb when cli/lib/web.js changes and refreshes the browser.',
-  '  gmc resolve-merge [file] resolves merge conflicts using AI. Omit file to resolve all conflicts.',
-  '  gmc resolve-merge --list shows conflicted files without resolving.',
-  'Examples:',
-  '  git commit -m gmc',  // commit message generated by gmc hooks
-    '  gmc agent antigravity',
-    '  gmc GH-234 --agent codex',
-    '  git add . && gmc message',
-    '  git add . && gmc commit',
-    '  gmc retry HEAD',
-    '  gmc install --all',
-    '  gmc install-hooks && git commit -m gmc',
-    '  gmc resolve-merge',
-    '  gmc resolve-merge --list',
-    '  gmc web',
-    '  gmc web --watch'
-  ].join('\n'));
+    'Usage:',
+    '  gmc <command> [options] [arguments]',
+    '  gmc <issue> [options]',
+    '  git commit -m gmc',
+    '',
+    'Commands:',
+    '  web              Start local GitWeb browser dashboard and Agent Monitor',
+    '  status           Show repository status, issue binding, and background tasks',
+    '  commit           Generate AI commit message for staged changes and commit',
+    '  message          Generate AI commit message for staged changes to stdout',
+    '  retry            Re-queue background commit message generation for a commit',
+    '  resolve-merge    Resolve Git merge conflicts using AI',
+    '  agent            View or configure default AI coding agent',
+    '  bind             Bind current branch to a GitHub issue without launching agent',
+    '  install          Install git hooks into repository (--all required)',
+    '  install-hooks    Install gmc Git hooks (commit-msg, post-commit) directly',
+    '  help             Display help for a specific command (e.g., gmc help web)',
+    '',
+    'Issue Workflow:',
+    '  gmc <issue>      Fetch GitHub issue, create branch, bind repo, and launch AI agent',
+    '                   Supported formats: 42, #42, GH-42, or full GitHub issue URL',
+    '',
+    'Options:',
+    '  -h, --help           Show help information (use "gmc <command> -h" for command details)',
+    '  -v, --version        Show version number',
+    '  --agent <name>       Specify AI agent: codex | claude | antigravity',
+    '  --exec               Run agent in interactive execution mode (issue workflow)',
+    '  --no-branch          Do not create a new branch for the issue',
+    '  --no-edit            Commit directly without opening editor for confirmation',
+    '  --no-open            Do not open browser automatically (web command)',
+    '  --port <port>        Set GitWeb server port (default: 4277 or GMC_GITWEB_PORT)',
+    '  --tmp                Run GitWeb server in foreground (blocking process)',
+    '  --restart            Restart running background GitWeb server daemon',
+    '  --quit               Stop running background GitWeb server daemon',
+    '  --watch, --dev       Watch web files and auto-reload GitWeb on change',
+    '  --list               List conflicted files without resolving (resolve-merge)',
+    '  --all                Confirm installation of all hooks (required for gmc install)',
+    '  --dry-run            Print issue prompt without executing the agent',
+    '  --print-prompt       Print generated prompt to stdout without calling AI',
+    '',
+    'AI Commit Workflow (Background Generation):',
+    '  1. Install hooks:    gmc install --all',
+    '  2. Stage changes:    git add .',
+    '  3. Commit with gmc:  git commit -m gmc',
+    '     (Returns immediately; AI generates commit message in background and rewrites HEAD)',
+    '  4. Check progress:   gmc status',
+    '  5. Retry if needed:  gmc retry HEAD',
+    '',
+    'Environment Variables:',
+    '  GITHUB_TOKEN, GH_TOKEN     GitHub API token for issue authentication',
+    '  GMC_CODEX_MODEL            Override AI model used for commit message generation',
+    '  GMC_CODEX_TIMEOUT_MS       Timeout for AI generation in milliseconds (default: 600000)',
+    '  GMC_GITWEB_PORT            Default port for local GitWeb dashboard (default: 4277)',
+    '  GIT_EDITOR, EDITOR         Editor for reviewing commit messages (default: vi)',
+    '',
+    'Examples:',
+    '  $ gmc web                          # Start GitWeb dashboard in background',
+    '  $ gmc web --port 5000              # Start GitWeb on custom port',
+    '  $ gmc web --watch                  # Run GitWeb in dev mode with live reload',
+    '  $ git commit -m gmc                # Commit immediately; AI rewrites in background',
+    '  $ gmc status                       # Check background commit message status',
+    '  $ gmc retry HEAD                   # Retry failed message generation for HEAD',
+    '  $ git add . && gmc commit          # Generate AI message and review in editor',
+    '  $ git add . && gmc commit --no-edit # Commit directly with AI message (no editor)',
+    '  $ git add . && gmc message         # Preview AI commit message in terminal',
+    '  $ gmc resolve-merge                # Resolve all merge conflicts using AI',
+    '  $ gmc resolve-merge --list         # List conflicted files without resolving',
+    '  $ gmc resolve-merge src/app.js     # Resolve conflicts in a specific file',
+    '  $ gmc agent antigravity            # Set default AI coding agent',
+    '  $ gmc GH-234 --agent codex         # Start issue GH-234 with Codex agent',
+    '  $ gmc install --all                # Install commit hooks in current repo',
+    '',
+    'Learn more:',
+    '  Use "gmc <command> --help" for more information about a specific command.'
+  ];
+}
+
+function printHelp(target) {
+  if (target) {
+    var cmdHelp = getCommandHelp(target);
+    if (cmdHelp) {
+      console.log(cmdHelp.join('\n'));
+      return;
+    }
+    if (target === 'issue' || target === '<issue>' || isIssueRef(target)) {
+      var issueHelp = getCommandHelp('issue');
+      if (issueHelp) {
+        console.log(issueHelp.join('\n'));
+        return;
+      }
+    }
+  }
+  console.log(getMainHelp().join('\n'));
 }

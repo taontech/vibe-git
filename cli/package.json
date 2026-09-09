@@ -19,7 +19,8 @@
     "agent-monitor"
   ],
   "bin": {
-    "gmc": "bin/gmc.js"
+    "gmc": "bin/gmc.js",
+    "gcm": "bin/gmc.js"
   },
   "repository": {
     "type": "git",
