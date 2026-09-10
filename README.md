@@ -1,4 +1,4 @@
-# GMC
+# GMC (vibe-git)
 
 > A local Git workbench for AI-assisted development. Start with `gmc web`: a visual dashboard for Git state, repository tasks, changes, commit history, and AI-generated commit messages.
 
