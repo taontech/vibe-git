@@ -4,6 +4,7 @@ var childProcess = require('child_process');
 var fs = require('fs');
 var os = require('os');
 var path = require('path');
+var env = require('./env');
 
 var codexExecHelpCache = null;
 var DEFAULT_CODEX_TIMEOUT_MS = 10 * 60 * 1000;
@@ -14,7 +15,8 @@ var CLAUDE_TEXT_SYSTEM_PROMPT = [
 ].join(' ');
 
 function spawnInherited(command, args, cwd) {
-  var result = childProcess.spawnSync(command, args, {
+  var resolvedCommand = env.resolveCommand(command);
+  var result = childProcess.spawnSync(resolvedCommand, args, {
     cwd: cwd,
     stdio: 'inherit'
   });
@@ -33,19 +35,19 @@ function interactiveInvocation(selectedAgent, cwd, prompt) {
   if (selectedAgent === 'codex') {
     args = ['--cd', cwd];
     if (prompt) args.push(prompt);
-    return { command: 'codex', args: args };
+    return { command: env.resolveCommand('codex'), args: args };
   }
   if (selectedAgent === 'claude') {
     if (prompt) args.push(prompt);
-    return { command: 'claude', args: args };
+    return { command: env.resolveCommand('claude'), args: args };
   }
   if (selectedAgent === 'antigravity') {
     if (prompt) args = ['--prompt-interactive', prompt];
-    return { command: 'agy', args: args };
+    return { command: env.resolveCommand('agy'), args: args };
   }
   if (selectedAgent === 'opencode') {
     if (prompt) args = ['--prompt', prompt];
-    return { command: 'opencode', args: args };
+    return { command: env.resolveCommand('opencode'), args: args };
   }
 
   throw new Error('Unsupported agent: ' + selectedAgent + '. Use codex, claude, antigravity or opencode.');
@@ -63,7 +65,7 @@ function launchAgent(options) {
 
   if (agent === 'codex') {
     if (options.execMode) {
-      var result = childProcess.spawnSync('codex', ['exec', '--cd', cwd, '-'], {
+      var result = childProcess.spawnSync(env.resolveCommand('codex'), ['exec', '--cd', cwd, '-'], {
         cwd: cwd,
         input: prompt,
         stdio: ['pipe', 'inherit', 'inherit']
@@ -83,7 +85,7 @@ function launchAgent(options) {
 
   if (agent === 'claude') {
     if (options.execMode) {
-      spawnInherited('claude', ['-p', prompt], cwd);
+      spawnInherited(env.resolveCommand('claude'), ['-p', prompt], cwd);
     } else {
       var claudeInvocation = interactiveInvocation(agent, cwd, prompt);
       spawnInherited(claudeInvocation.command, claudeInvocation.args, cwd);
@@ -166,7 +168,7 @@ function generateCodexText(prompt, cwd, options) {
 
   args.push('-');
 
-  var result = childProcess.spawnSync('codex', args, {
+  var result = childProcess.spawnSync(env.resolveCommand('codex'), args, {
     cwd: cwd,
     encoding: 'utf8',
     input: prompt,
@@ -243,7 +245,7 @@ function generateCodexTextAsync(prompt, cwd, options) {
 }
 
 function generateClaudeText(prompt, cwd) {
-  var result = childProcess.spawnSync('claude', [
+  var result = childProcess.spawnSync(env.resolveCommand('claude'), [
     '-p',
     '--no-session-persistence',
     '--disable-slash-commands',
@@ -298,7 +300,7 @@ function generateClaudeTextAsync(prompt, cwd) {
 }
 
 function generateAntigravityText(prompt, cwd) {
-  var result = childProcess.spawnSync('agy', ['--prompt', prompt], {
+  var result = childProcess.spawnSync(env.resolveCommand('agy'), ['--prompt', prompt], {
     cwd: cwd,
     encoding: 'utf8',
     timeout: codexTimeoutMs(),
@@ -335,7 +337,7 @@ function generateAntigravityTextAsync(prompt, cwd) {
 }
 
 function generateOpencodeText(prompt, cwd) {
-  var result = childProcess.spawnSync('opencode', ['run', prompt], {
+  var result = childProcess.spawnSync(env.resolveCommand('opencode'), ['run', prompt], {
     cwd: cwd,
     encoding: 'utf8',
     timeout: codexTimeoutMs(),
@@ -392,7 +394,8 @@ function spawnTextCommand(command, args, options) {
     }
 
     try {
-      child = childProcess.spawn(command, args, {
+      var resolvedCommand = env.resolveCommand(command);
+      child = childProcess.spawn(resolvedCommand, args, {
         cwd: options.cwd,
         stdio: ['pipe', 'pipe', 'pipe']
       });
@@ -478,7 +481,7 @@ function codexExecHelp() {
   if (codexExecHelpCache !== null) {
     return codexExecHelpCache;
   }
-  var result = childProcess.spawnSync('codex', ['exec', '--help'], {
+  var result = childProcess.spawnSync(env.resolveCommand('codex'), ['exec', '--help'], {
     encoding: 'utf8'
   });
   codexExecHelpCache = (result.stdout || '') + (result.stderr || '');

@@ -2,6 +2,7 @@
 
 'use strict';
 
+var env = require('../lib/env');
 var childProcess = require('child_process');
 var crypto = require('crypto');
 var fs = require('fs');

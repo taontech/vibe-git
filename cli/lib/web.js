@@ -8,6 +8,7 @@ var net = require('net');
 var os = require('os');
 var path = require('path');
 var url = require('url');
+var env = require('./env');
 var autogmc = require('./autogmc');
 var agent = require('./agent');
 var config = require('./config');

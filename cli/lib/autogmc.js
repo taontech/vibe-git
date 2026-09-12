@@ -3,6 +3,7 @@
 var childProcess = require('child_process');
 var fs = require('fs');
 var path = require('path');
+var env = require('./env');
 var agent = require('./agent');
 var config = require('./config');
 var commitMessage = require('./commit-message');
