@@ -56,7 +56,7 @@ gmc retry HEAD
 | `gmc install-hooks` | Ready | Install commit-message and task-status hooks. |
 | `gmc status` | Ready | Show current repository status and recent background work. |
 | `gmc message` | Ready | Generate a commit message from staged changes. |
-| `gmc commit [--no-edit]` | Ready | Generate a message, commit staged changes, and update related task statuses. |
+| `gmc commit [--edit]` | Ready | Generate a message, commit staged changes directly, and update related task statuses. |
 | `gmc retry [commit]` | Ready | Queue another background message attempt. |
 
 ## Requirements

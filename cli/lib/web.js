@@ -4643,7 +4643,7 @@ function gmcHelpText() {
     '  gmc bind <issue> [--agent codex|claude|antigravity|opencode]',
     '  gmc status',
     '  gmc message [--print-prompt]',
-    '  gmc commit [--no-edit]',
+    '  gmc commit [--edit]',
     '  gmc retry [commit]',
     '  gmc install --all [--port 4277]',
     '  gmc install-hooks',

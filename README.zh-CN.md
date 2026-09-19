@@ -108,7 +108,7 @@ git add .
 gmc message
 ```
 
-生成、编辑并提交：
+生成并直接提交：
 
 ```sh
 git add .
@@ -150,7 +150,7 @@ export GMC_CODEX_TIMEOUT_MS=600000
 | `gmc install-hooks` | 可用 | 安装 commit message 和任务状态 hooks。 |
 | `gmc status` | 可用 | 查看当前仓库状态和最近后台任务。 |
 | `gmc message` | 可用 | 基于 staged changes 生成 commit message。 |
-| `gmc commit [--no-edit]` | 可用 | 生成 message、提交 staged changes，并更新相关任务状态。 |
+| `gmc commit [--edit]` | 可用 | 生成 message、直接提交 staged changes，并更新相关任务状态。 |
 | `gmc retry [commit]` | 可用 | 重新排队一次后台 message 生成。 |
 
 ## 安全模型

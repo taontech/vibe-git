@@ -108,7 +108,7 @@ git add .
 gmc message
 ```
 
-Or generate, edit, and commit:
+Or generate and commit directly:
 
 ```sh
 git add .
@@ -150,7 +150,7 @@ export GMC_CODEX_TIMEOUT_MS=600000
 | `gmc install-hooks` | Ready | Install commit-message and task-status hooks. |
 | `gmc status` | Ready | Show current repository status and recent background work. |
 | `gmc message` | Ready | Generate a commit message from staged changes. |
-| `gmc commit [--no-edit]` | Ready | Generate a message, commit staged changes, and update related task statuses. |
+| `gmc commit [--edit]` | Ready | Generate a message, commit staged changes directly, and update related task statuses. |
 | `gmc retry [commit]` | Ready | Queue another background message attempt. |
 
 ## Safety Model

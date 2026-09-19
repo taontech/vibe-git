@@ -18,15 +18,18 @@ var taskStatus = require('../lib/task-status');
 var web = require('../lib/web');
 var agentMonitor = require('../lib/agent-monitor');
 var mergeConflict = require('../lib/merge-conflict');
+var Spinner = require('../lib/spinner');
 var packageInfo = require('../package.json');
 
 var COMMANDS = ['agent', 'bind', 'status', 'message', 'commit', 'retry', 'install', 'install-hooks', 'web', 'hook', 'hook-worker', 'resolve-merge', 'help'];
 var DIFF_LIMIT = 120000;
 
-main().catch(function(error) {
-  console.error('gmc: ' + error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(function(error) {
+    console.error('gmc: ' + error.message);
+    process.exit(1);
+  });
+}
 
 async function main() {
   var parsed = parseArgs(process.argv.slice(2));
@@ -64,7 +67,7 @@ async function main() {
   }
 
   if (command === 'commit') {
-    commitCommand(parsed.flags);
+    await commitCommand(parsed.flags);
     return;
   }
 
@@ -113,6 +116,7 @@ function parseArgs(argv) {
     dryRun: false,
     noBranch: false,
     noEdit: false,
+    edit: false,
     noOpen: false,
     all: false,
     help: false,
@@ -142,6 +146,8 @@ function parseArgs(argv) {
       flags.noBranch = true;
     } else if (arg === '--no-edit') {
       flags.noEdit = true;
+    } else if (arg === '--edit' || arg === '-e') {
+      flags.edit = true;
     } else if (arg === '--no-open') {
       flags.noOpen = true;
     } else if (arg === '--all') {
@@ -271,20 +277,51 @@ function generateMessageCommand(flags) {
   process.stdout.write(message);
 }
 
-function commitCommand(flags) {
+async function commitCommand(flags) {
+  flags = flags || {};
   var root = git.repoRoot(process.cwd());
-  var generated = generateCommitMessage(root, flags, { taskStatus: true });
+
+  if (flags.printPrompt) {
+    var generatedPrompt = generateCommitMessage(root, flags, { taskStatus: true });
+    process.stdout.write(generatedPrompt.message);
+    return;
+  }
+
+  if (!git.hasStagedDiff(root)) {
+    throw new Error('No staged changes. Run git add before gmc message or gmc commit.');
+  }
+
+  var selectedAgent = flags.agent ? config.normalizeAgent(flags.agent) : config.currentCommitAgent();
+  var spinner = new Spinner({
+    text: 'Generating commit message using ' + selectedAgent + '...'
+  }).start();
+
+  var generated;
+  try {
+    generated = await generateCommitMessageAsync(root, flags, {
+      taskStatus: true,
+      agent: selectedAgent
+    });
+    spinner.succeed('Generated commit message using ' + selectedAgent);
+  } catch (error) {
+    spinner.fail('Failed to generate commit message using ' + selectedAgent);
+    throw error;
+  }
+
   var message = generated.message;
   var binding = generated.binding;
   var messageFile = git.writeGitFile(root, 'GMC_COMMIT_EDITMSG', message);
 
-  if (!flags.noEdit) {
+  if (flags.edit && !flags.noEdit) {
     editFile(messageFile, root);
     message = fs.readFileSync(messageFile, 'utf8');
     commitMessage.validate(message, binding);
   }
 
-  git.runGit(['commit', '-F', messageFile], { cwd: root });
+  var commitOutput = git.runGit(['commit', '-F', messageFile], { cwd: root });
+  if (commitOutput) {
+    console.log(commitOutput);
+  }
   console.log('Committed with message from ' + messageFile + '.');
   applyTaskUpdates(root, generated.taskUpdates);
 }
@@ -632,8 +669,9 @@ function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
-function generateCommitMessage(root, flags, options) {
+function prepareCommitMessageContext(root, flags, options) {
   options = options || {};
+  flags = flags || {};
   var binding = config.readBinding(root);
   if (!git.hasStagedDiff(root)) {
     throw new Error('No staged changes. Run git add before gmc message or gmc commit.');
@@ -656,35 +694,77 @@ function generateCommitMessage(root, flags, options) {
     git.statusShort(root)
   );
 
-  if (flags.printPrompt) {
-    return {
-      binding: binding,
-      message: prompt + '\n',
-      taskUpdates: []
-    };
-  }
+  var selectedAgent = options.agent || (flags.agent ? config.normalizeAgent(flags.agent) : config.currentCommitAgent());
 
-  var selectedAgent = config.currentCommitAgent();
-  var raw = agent.generateText(prompt, root, selectedAgent, {
-    outputPrefix: tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
-    description: tasks.length ? 'commit plan generation' : 'commit message generation'
-  });
+  return {
+    binding: binding,
+    diff: diff,
+    tasks: tasks,
+    prompt: prompt,
+    selectedAgent: selectedAgent
+  };
+}
+
+function processGeneratedMessage(raw, ctx) {
   var taskUpdates = [];
-  if (tasks.length) {
+  if (ctx.tasks.length) {
     var plan = taskStatus.parseCommitPlan(raw);
     raw = plan.message;
     taskUpdates = plan.taskUpdates;
   }
   var message = prompts.appendCreatedBy(
     raw,
-    selectedAgent
+    ctx.selectedAgent
   );
-  message = commitMessage.prepare(message, binding);
+  message = commitMessage.prepare(message, ctx.binding);
   return {
-    binding: binding,
+    binding: ctx.binding,
     message: message,
     taskUpdates: taskUpdates
   };
+}
+
+function generateCommitMessage(root, flags, options) {
+  flags = flags || {};
+  var ctx = prepareCommitMessageContext(root, flags, options);
+  if (flags.printPrompt) {
+    return {
+      binding: ctx.binding,
+      message: ctx.prompt + '\n',
+      taskUpdates: []
+    };
+  }
+
+  var raw = agent.generateText(ctx.prompt, root, ctx.selectedAgent, {
+    outputPrefix: ctx.tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
+    description: ctx.tasks.length ? 'commit plan generation' : 'commit message generation'
+  });
+  return processGeneratedMessage(raw, ctx);
+}
+
+function generateCommitMessageAsync(root, flags, options) {
+  flags = flags || {};
+  var ctx;
+  try {
+    ctx = prepareCommitMessageContext(root, flags, options);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  if (flags.printPrompt) {
+    return Promise.resolve({
+      binding: ctx.binding,
+      message: ctx.prompt + '\n',
+      taskUpdates: []
+    });
+  }
+
+  return agent.generateTextAsync(ctx.prompt, root, ctx.selectedAgent, {
+    outputPrefix: ctx.tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
+    description: ctx.tasks.length ? 'commit plan generation' : 'commit message generation'
+  }).then(function (raw) {
+    return processGeneratedMessage(raw, ctx);
+  });
 }
 
 function applyTaskUpdates(root, updates) {
@@ -838,18 +918,19 @@ function getCommandHelp(command) {
       '',
       'Description:',
       '  Generate an AI commit message based on staged changes and commit them.',
-      '  Opens your editor ($GIT_EDITOR, $EDITOR, or vi) to review and edit the',
-      '  generated message before committing. Also advances related Markdown',
-      '  task statuses in .gmc/tasks/ when applicable.',
+      '  Directly commits without opening an editor by default. Use -e / --edit',
+      '  to review and edit the generated message before committing. Also advances',
+      '  related Markdown task statuses in .gmc/tasks/ when applicable.',
       '',
       'Options:',
-      '  --no-edit            Commit immediately without opening editor',
+      '  -e, --edit           Open editor to review and edit message before committing',
+      '  --no-edit            Commit directly without opening editor (default)',
       '  --print-prompt       Print generated prompt to stdout instead of committing',
       '  -h, --help           Show help for commit command',
       '',
       'Examples:',
       '  $ git add . && gmc commit',
-      '  $ git add . && gmc commit --no-edit',
+      '  $ git add . && gmc commit --edit',
       '  $ gmc commit --print-prompt'
     ],
     message: [
@@ -1078,8 +1159,8 @@ function getMainHelp() {
     '  $ git commit -m gmc                # Commit immediately; AI rewrites in background',
     '  $ gmc status                       # Check background commit message status',
     '  $ gmc retry HEAD                   # Retry failed message generation for HEAD',
-    '  $ git add . && gmc commit          # Generate AI message and review in editor',
-    '  $ git add . && gmc commit --no-edit # Commit directly with AI message (no editor)',
+    '  $ git add . && gmc commit          # Generate AI message and commit directly',
+    '  $ git add . && gmc commit --edit   # Review and edit AI message in editor before committing',
     '  $ git add . && gmc message         # Preview AI commit message in terminal',
     '  $ gmc resolve-merge                # Resolve all merge conflicts using AI',
     '  $ gmc resolve-merge --list         # List conflicted files without resolving',
@@ -1109,4 +1190,11 @@ function printHelp(target) {
     }
   }
   console.log(getMainHelp().join('\n'));
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    parseArgs: parseArgs,
+    commitCommand: commitCommand
+  };
 }
