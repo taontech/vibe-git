@@ -321,6 +321,10 @@ function handleRequest(req, res) {
         handleSetAgent(req, res, parsed.query.repo);
         return;
       }
+      if (parsed.pathname === '/api/terminal') {
+        handleSetTerminal(req, res);
+        return;
+      }
       if (parsed.pathname === '/api/agent-availability') {
         handleUpdateAgentAvailability(req, res);
         return;
@@ -441,6 +445,8 @@ function handleRequest(req, res) {
       var currentTaskAgent = 'codex';
       var currentRepositoryTaskAgent = null;
       var availableAgents = [];
+      var currentTerminal = 'vibetermi';
+      var installedTerminals = [];
       try {
         currentAgent = config.currentAgent();
       } catch (ignore) {
@@ -468,12 +474,44 @@ function handleRequest(req, res) {
       } catch (ignoreAvailableAgents) {
         // ignore
       }
+      try {
+        currentTerminal = config.currentTerminal();
+      } catch (ignoreTerminal) {
+        // ignore
+      }
+      try {
+        installedTerminals = detectInstalledTerminals();
+      } catch (ignoreInstalledTerminals) {
+        // ignore
+      }
       sendJson(res, {
         agent: currentAgent,
         commitAgent: currentCommitAgent,
         taskAgent: currentTaskAgent,
         repositoryTaskAgent: currentRepositoryTaskAgent,
-        availableAgents: availableAgents
+        availableAgents: availableAgents,
+        terminal: currentTerminal,
+        installedTerminals: installedTerminals
+      });
+      return;
+    }
+
+    if (parsed.pathname === '/api/terminal') {
+      var defTerminal = 'vibetermi';
+      var detectedList = [];
+      try {
+        defTerminal = config.currentTerminal();
+      } catch (ignoreDefTerminal) {
+        // ignore
+      }
+      try {
+        detectedList = detectInstalledTerminals();
+      } catch (ignoreDetect) {
+        // ignore
+      }
+      sendJson(res, {
+        terminal: defTerminal,
+        installedTerminals: detectedList
       });
       return;
     }
@@ -1510,10 +1548,7 @@ function handleLaunchAction(req, res, targetRepo) {
         if (process.platform !== 'darwin') {
           throwHttpError('Opening Terminal is only supported on macOS.');
         }
-        if (hasMacApplication('iTerm')) {
-          return openITermAtPath(root, cmd);
-        }
-        return openTerminalAppAtPath(root, cmd);
+        return openPreferredTerminal(root, cmd);
       }
     });
     sendJson(res, launchResult);
@@ -1926,12 +1961,37 @@ function handleSetAgent(req, res, targetRepo) {
         var updatedItem = config.setAgentAvailability(newAgent, enabledVal);
         sendJson(res, { status: 'ok', agent: updatedItem, scope: 'availability' });
         return;
+      } else if (scope === 'terminal') {
+        selectedAgent = config.setTerminal(newAgent);
+        sendJson(res, { status: 'ok', terminal: selectedAgent, scope: 'terminal', installedTerminals: detectInstalledTerminals() });
+        return;
       } else if (!scope) {
         selectedAgent = config.setAgent(newAgent);
       } else {
         return sendJsonError(res, 400, 'Unsupported agent setting scope: ' + scope);
       }
       sendJson(res, { agent: selectedAgent, scope: scope || 'default' });
+    } catch (error) {
+      sendJsonError(res, 400, error.message);
+    }
+  }).catch(function (error) {
+    sendJsonError(res, error.httpStatus || 500, error.message);
+  });
+}
+
+function handleSetTerminal(req, res) {
+  readJsonBody(req).then(function (body) {
+    body = body || {};
+    var newTerminal = String(body.terminal || body.agent || '').trim().toLowerCase();
+    if (!newTerminal) {
+      return sendJsonError(res, 400, 'Missing terminal parameter.');
+    }
+    try {
+      var selected = config.setTerminal(newTerminal);
+      sendJson(res, {
+        terminal: selected,
+        installedTerminals: detectInstalledTerminals()
+      });
     } catch (error) {
       sendJsonError(res, 400, error.message);
     }
@@ -2120,14 +2180,7 @@ function openTerminalAtRepository(root) {
   }
 
   var command = 'cd ' + shellQuote(repoRoot);
-  if (hasMacApplication('iTerm')) {
-    try {
-      return openITermAtPath(repoRoot, command);
-    } catch (error) {
-      return openTerminalAppAtPath(repoRoot, command);
-    }
-  }
-  return openTerminalAppAtPath(repoRoot, command);
+  return openPreferredTerminal(repoRoot, command);
 }
 
 function runTerminalAppleScript(script, fallbackMessage) {
@@ -2171,6 +2224,170 @@ function openTerminalAppAtPath(repoRoot, command) {
   };
 }
 
+function openVibeTermiAtPath(repoRoot, command) {
+  var args = ['-n', '-a', 'VibeTermi', '--args', '-w', repoRoot];
+  if (command) {
+    var trimmedCmd = String(command).trim();
+    var cdOnlyPattern = /^cd\s+([^\s&;]+|'[^']*'|"[^"]*")\s*;?\s*$/i;
+    if (!cdOnlyPattern.test(trimmedCmd)) {
+      var cdPrefixRegex = /^cd\s+([^\s&;]+|'[^']*'|"[^"]*")\s*(&&|;)\s*/i;
+      var stripped = trimmedCmd.replace(cdPrefixRegex, '').trim();
+      var cmdToRun = stripped || trimmedCmd;
+      args.push('-c', cmdToRun);
+    }
+  }
+  var result = childProcess.spawnSync('open', args, { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    var message = (result.stderr || result.stdout || result.error && result.error.message || 'Failed to open VibeTermi.').trim();
+    throwHttpError(message);
+  }
+  return {
+    status: 'ok',
+    terminal: 'VibeTermi',
+    path: repoRoot
+  };
+}
+
+function openGhosttyAtPath(repoRoot, command) {
+  var args = ['-n', '-a', 'Ghostty', '--args', '--working-directory=' + repoRoot];
+  if (command) {
+    var trimmedCmd = String(command).trim();
+    var cdOnlyPattern = /^cd\s+([^\s&;]+|'[^']*'|"[^"]*")\s*;?\s*$/i;
+    if (!cdOnlyPattern.test(trimmedCmd)) {
+      var cdPrefixRegex = /^cd\s+([^\s&;]+|'[^']*'|"[^"]*")\s*(&&|;)\s*/i;
+      var stripped = trimmedCmd.replace(cdPrefixRegex, '').trim();
+      var cmdToRun = stripped || trimmedCmd;
+      args.push('-e', cmdToRun);
+    }
+  }
+  var result = childProcess.spawnSync('open', args, { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    var message = (result.stderr || result.stdout || result.error && result.error.message || 'Failed to open Ghostty.').trim();
+    throwHttpError(message);
+  }
+  return {
+    status: 'ok',
+    terminal: 'Ghostty',
+    path: repoRoot
+  };
+}
+
+function openWarpAtPath(repoRoot, command) {
+  var result = childProcess.spawnSync('open', ['-a', 'Warp', repoRoot], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    var message = (result.stderr || result.stdout || result.error && result.error.message || 'Failed to open Warp.').trim();
+    throwHttpError(message);
+  }
+  return {
+    status: 'ok',
+    terminal: 'Warp',
+    path: repoRoot
+  };
+}
+
+function detectInstalledTerminals() {
+  if (process.platform !== 'darwin') {
+    return [];
+  }
+  return [
+    {
+      id: 'vibetermi',
+      name: 'VibeTermi',
+      installed: hasMacApplication('VibeTermi'),
+      isDefault: true
+    },
+    {
+      id: 'iterm',
+      name: 'iTerm2',
+      installed: hasMacApplication('iTerm'),
+      isDefault: false
+    },
+    {
+      id: 'terminal',
+      name: 'Terminal (macOS)',
+      installed: true,
+      isDefault: false
+    },
+    {
+      id: 'warp',
+      name: 'Warp',
+      installed: hasMacApplication('Warp'),
+      isDefault: false
+    },
+    {
+      id: 'ghostty',
+      name: 'Ghostty',
+      installed: hasMacApplication('Ghostty'),
+      isDefault: false
+    },
+    {
+      id: 'auto',
+      name: 'Auto-detect',
+      installed: true,
+      isDefault: false
+    }
+  ];
+}
+
+function openPreferredTerminal(repoRoot, command) {
+  var pref = 'vibetermi';
+  try {
+    pref = config.currentTerminal();
+  } catch (e) {
+    pref = 'vibetermi';
+  }
+  pref = String(pref || 'vibetermi').toLowerCase().trim();
+
+  if (pref === 'vibetermi') {
+    if (hasMacApplication('VibeTermi')) {
+      try {
+        return openVibeTermiAtPath(repoRoot, command);
+      } catch (err) {
+        // Fallback
+      }
+    }
+  } else if (pref === 'iterm') {
+    if (hasMacApplication('iTerm')) {
+      try {
+        return openITermAtPath(repoRoot, command);
+      } catch (err) {
+        // Fallback
+      }
+    }
+  } else if (pref === 'terminal') {
+    return openTerminalAppAtPath(repoRoot, command);
+  } else if (pref === 'warp') {
+    if (hasMacApplication('Warp')) {
+      try {
+        return openWarpAtPath(repoRoot, command);
+      } catch (err) {
+        // Fallback
+      }
+    }
+  } else if (pref === 'ghostty') {
+    if (hasMacApplication('Ghostty')) {
+      try {
+        return openGhosttyAtPath(repoRoot, command);
+      } catch (err) {
+        // Fallback
+      }
+    }
+  }
+
+  // Fallback chain: VibeTermi -> iTerm -> Terminal
+  if (hasMacApplication('VibeTermi')) {
+    try {
+      return openVibeTermiAtPath(repoRoot, command);
+    } catch (e) {}
+  }
+  if (hasMacApplication('iTerm')) {
+    try {
+      return openITermAtPath(repoRoot, command);
+    } catch (e) {}
+  }
+  return openTerminalAppAtPath(repoRoot, command);
+}
+
 function openAgentAtRepository(root, selectedAgent, prompt) {
   console.log('openAgentAtRepository called: root=%s agent=%s', root, selectedAgent);
   var repoRoot = git.repoRoot(root);
@@ -2193,10 +2410,7 @@ function openAgentAtRepository(root, selectedAgent, prompt) {
     command += ' ' + shellQuote(arg);
   });
 
-  if (hasMacApplication('iTerm')) {
-    return openITermAtPath(repoRoot, command);
-  }
-  return openTerminalAppAtPath(repoRoot, command);
+  return openPreferredTerminal(repoRoot, command);
 }
 
 function readJsonBody(req) {
@@ -5124,6 +5338,11 @@ h1 { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: 0; line-heigh
 .available-agents-loading { padding: 8px 0; color: var(--muted); font-size: 13px; font-style: italic; }
 .toggle-control.disabled, .toggle-control:has(input:disabled) { opacity: 0.6; cursor: not-allowed; pointer-events: none; }
 #availableAgentsStatus { min-height: 17px; margin-top: 4px; }
+#terminalStatus { min-height: 17px; margin-top: 4px; }
+.terminal-badge { display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 4px; font-size: 11px; line-height: 1.2; font-weight: 600; margin-left: 6px; vertical-align: middle; }
+.terminal-badge.default-badge { background: rgba(16, 185, 129, 0.15); color: var(--accent); }
+.terminal-badge.installed-badge { background: var(--panel-soft); color: var(--muted); border: 1px solid var(--line-soft); }
+.terminal-badge.uninstalled-badge { opacity: 0.55; font-size: 10.5px; border: 1px dashed var(--line-soft); }
 .settings-card-full { grid-column: 1 / -1; }
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-top: 14px; }
 .theme-card-option { position: relative; border: 2px solid var(--line); border-radius: 8px; padding: 14px; background: var(--panel); cursor: pointer; transition: border-color .16s, box-shadow .16s, transform .16s; display: flex; flex-direction: column; gap: 10px; user-select: none; }
@@ -7360,6 +7579,16 @@ body.city-3d-zen-active .home-page {
               </div>
             </div>
           </div>
+          <div class="settings-card" id="terminalSettingsCard">
+            <h3 data-i18n="terminalSettings">终端设置</h3>
+            <p data-i18n="terminalSettingsHelp">选择打开仓库、运行 Agent 或执行命令行脚本时所使用的默认终端程序。</p>
+            <div class="agent-selector" id="terminalSelector">
+              <h4 data-i18n="defaultTerminalSetting">默认终端程序</h4>
+              <p data-i18n="defaultTerminalSettingHelp">支持 VibeTermi、iTerm2、系统自带终端等，未配置时优先使用 VibeTermi。</p>
+              <div id="terminalOptions" class="radio-group"></div>
+              <div id="terminalStatus" class="meta"></div>
+            </div>
+          </div>
           <div class="settings-card">
             <h3 data-i18n="agentSettings">Agent 设置</h3>
             <p data-i18n="agentSettingsHelp">分别选择生成 commit message 和执行任务时使用的 AI agent。</p>
@@ -7602,6 +7831,8 @@ var GMC_AUTH_TOKEN = ${JSON.stringify(clientAuthToken || '')};
 var REQUEST_CONTEXT = ${JSON.stringify(publicSecuritySettings(null, req))};
 var INITIAL_AVAILABLE_AGENTS = ${JSON.stringify(config.listAgentAvailability())};
 var INITIAL_QUICK_ACTIONS = ${JSON.stringify(quickActions.listQuickActions())};
+var INITIAL_TERMINAL = ${JSON.stringify(config.currentTerminal())};
+var INITIAL_INSTALLED_TERMINALS = ${JSON.stringify(detectInstalledTerminals())};
 var AUTH_QUERY_PARAM = ${JSON.stringify(AUTH_QUERY_PARAM)};
 (function() {
   var nativeFetch = window.fetch.bind(window);
@@ -7632,7 +7863,7 @@ var AGENT_MONITOR_POLL_INTERVAL_MS = 5000;
 var AGENT_MONITOR_RECONNECT_INTERVAL_MS = 2000;
 var TASK_DECOMPOSITION_TIMEOUT_MS = ${JSON.stringify(agent.codexTimeoutMs() + 60 * 1000)};
 var TASK_SPEECH_CTRL_HOLD_MS = 400;
-var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', cleanBranchesData: null, cleanBranchesFilter: 'all', cleanSelected: {}, cleanAllowForce: false, cleanBaseBranch: '', cleanLoading: false, repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', availableAgents: INITIAL_AVAILABLE_AGENTS || [], quickActions: INITIAL_QUICK_ACTIONS || [], editingQuickActionId: null, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
+var state = { auto: true, timer: null, loading: false, pendingForceLoad: false, graphTimer: null, statusSignature: null, commits: [], files: [], tasks: [], repoTasks: [], tasksLoaded: false, taskLoading: false, pendingTaskReload: false, taskEvents: null, agentMonitor: { status: 'loading', available: false, reason: '', agents: [], usage: null }, agentMonitorLoading: false, agentMonitorTimer: null, agentMonitorRequest: null, agentMonitorSocket: null, agentMonitorReconnectTimer: null, activeView: 'git', previousViewBeforeSettings: 'git', draggedTaskId: '', activeTaskId: '', taskDetailEditing: false, commitBranch: {}, branchParent: {}, sortedBranches: [], currentBranch: '', cleanBranchesData: null, cleanBranchesFilter: 'all', cleanSelected: {}, cleanAllowForce: false, cleanBaseBranch: '', cleanLoading: false, repoBrowserPath: '', repoBrowserEntries: [], repoBrowserLoading: false, repoBrowserLoaded: false, fileTree: null, fileTreeLoading: false, fileTreeExpanded: {}, fileViewPath: '', fileViewType: '', fileViewLoading: false, diffViewPath: '', diffViewLoading: false, branchSwitching: false, selectedModified: {}, selectedStaged: {}, committing: false, ignoring: false, restoring: false, staging: false, unstaging: false, detailToken: 0, detailPinned: false, hideTimer: null, readmeLoaded: false, install: { hooks: true }, sidebarCollapsed: false, repoHistory: [], repoHistoryNeedsRefresh: true, contributions: null, globalContributions: null, gitOverview: null, gitOverviewLoading: false, settingsOpen: false, qrUrl: '', qrLoading: false, commitAgent: 'codex', taskAgent: 'codex', repositoryTaskAgent: 'codex', terminal: INITIAL_TERMINAL || 'vibetermi', installedTerminals: INITIAL_INSTALLED_TERMINALS || [], availableAgents: INITIAL_AVAILABLE_AGENTS || [], quickActions: INITIAL_QUICK_ACTIONS || [], editingQuickActionId: null, security: { allowExternalAccess: REQUEST_CONTEXT.allowExternalAccess === true, localAccess: REQUEST_CONTEXT.localAccess !== false, accessAddress: REQUEST_CONTEXT.accessAddress || '', lanAddress: REQUEST_CONTEXT.lanAddress || '' } };
 var taskSpeech = {
   recognition: null,
   supported: false,
@@ -7947,6 +8178,15 @@ var I18N = {
     agentLoading: '正在加载 Agent 列表...',
     agentAvailabilitySaved: 'Agent 可用状态已更新',
     agentAvailabilitySaveFailed: 'Agent 状态保存失败：',
+    terminalSettings: '终端设置',
+    terminalSettingsHelp: '选择打开仓库或在终端中运行 Agent 时使用的默认终端程序。',
+    defaultTerminalSetting: '默认终端程序',
+    defaultTerminalSettingHelp: '支持 VibeTermi、iTerm2、系统自带终端等，未配置时优先使用 VibeTermi。',
+    terminalSettingSaved: '默认终端设置已保存',
+    terminalSettingSaveFailed: '保存终端设置失败：',
+    terminalDefaultBadge: '默认',
+    terminalInstalled: '已安装',
+    terminalNotInstalled: '未检测到',
     homeTitle: '全局 Git 概览',
     homeBadge: 'Git 全局工作台',
     homeHeroTitle: '全局 Git 概览与工作台',
@@ -8333,6 +8573,15 @@ var I18N = {
     agentLoading: 'Loading agent list...',
     agentAvailabilitySaved: 'Agent availability updated',
     agentAvailabilitySaveFailed: 'Failed to update agent availability: ',
+    terminalSettings: 'Terminal Settings',
+    terminalSettingsHelp: 'Select the default terminal emulator used when opening repositories or running CLI agents.',
+    defaultTerminalSetting: 'Default Terminal',
+    defaultTerminalSettingHelp: 'Supports VibeTermi, iTerm2, macOS Terminal, Warp, and Ghostty. Defaults to VibeTermi.',
+    terminalSettingSaved: 'Terminal setting saved',
+    terminalSettingSaveFailed: 'Failed to save terminal setting: ',
+    terminalDefaultBadge: 'Default',
+    terminalInstalled: 'Installed',
+    terminalNotInstalled: 'Not detected',
     themeSettings: 'Theme Settings',
     themeSettingsHelp: 'Choose your preferred dashboard theme style, applied instantly to the entire page.',
     activeTheme: 'Active',
@@ -8675,6 +8924,15 @@ I18N.ja = Object.assign({}, I18N.en, {
   agentLoading: 'Agent リストを読み込み中...',
   agentAvailabilitySaved: 'Agent の利用可能状態を更新しました',
   agentAvailabilitySaveFailed: 'Agent 状態の更新に失敗しました: ',
+  terminalSettings: 'ターミナル設定',
+  terminalSettingsHelp: 'リポジトリを開く際や CLI エージェント実行時に使用する既定のターミナルを選択します。',
+  defaultTerminalSetting: '既定のターミナル',
+  defaultTerminalSettingHelp: 'VibeTermi、iTerm2、macOS 標準ターミナルなどをサポート。既定値は VibeTermi です。',
+  terminalSettingSaved: 'ターミナル設定を保存しました',
+  terminalSettingSaveFailed: 'ターミナル設定の保存に失敗しました: ',
+  terminalDefaultBadge: '既定',
+  terminalInstalled: 'インストール済み',
+  terminalNotInstalled: '未検出',
   needsAttentionTitle: '対応が必要なリポジトリ',
   needsAttentionDesc: '未ステージの変更、未コミット、または未同期のローカルリポジトリ',
   reposNeedingAttentionCount: '件の要確認',
@@ -8929,6 +9187,15 @@ I18N.ko = Object.assign({}, I18N.en, {
   agentLoading: 'Agent 목록 불러오는 중...',
   agentAvailabilitySaved: 'Agent 사용 가능 상태가 저장되었습니다',
   agentAvailabilitySaveFailed: 'Agent 상태 저장 실패: ',
+  terminalSettings: '터미널 설정',
+  terminalSettingsHelp: '저장소를 열거나 CLI 에이전트를 실행할 때 사용할 기본 터미널 프로그램을 선택합니다.',
+  defaultTerminalSetting: '기본 터미널',
+  defaultTerminalSettingHelp: 'VibeTermi, iTerm2, macOS 기본 터미널 등을 지원합니다. 기본값은 VibeTermi입니다.',
+  terminalSettingSaved: '터미널 설정이 저장되었습니다',
+  terminalSettingSaveFailed: '터미널 설정 저장 실패: ',
+  terminalDefaultBadge: '기본',
+  terminalInstalled: '설치됨',
+  terminalNotInstalled: '감지되지 않음',
   needsAttentionTitle: '확인이 필요한 저장소',
   needsAttentionDesc: '미스테이징 변경, 미커밋 또는 동기화되지 않은 로컬 저장소',
   reposNeedingAttentionCount: '개 확인 필요',
@@ -9182,7 +9449,16 @@ I18N.es = Object.assign({}, I18N.en, {
   agentDisabled: 'Deshabilitado',
   agentLoading: 'Cargando lista de agentes...',
   agentAvailabilitySaved: 'Disponibilidad del agente actualizada',
-  agentAvailabilitySaveFailed: 'Error al guardar el estado del agente: '
+  agentAvailabilitySaveFailed: 'Error al guardar el estado del agente: ',
+  terminalSettings: 'Ajustes de terminal',
+  terminalSettingsHelp: 'Selecciona el emulador de terminal predeterminado para abrir repositorios o ejecutar agentes CLI.',
+  defaultTerminalSetting: 'Terminal predeterminado',
+  defaultTerminalSettingHelp: 'Compatible con VibeTermi, iTerm2, Terminal de macOS, etc. Predeterminado: VibeTermi.',
+  terminalSettingSaved: 'Ajuste de terminal guardado',
+  terminalSettingSaveFailed: 'Error al guardar el ajuste de terminal: ',
+  terminalDefaultBadge: 'Predeterminado',
+  terminalInstalled: 'Instalado',
+  terminalNotInstalled: 'No detectado'
 });
 I18N.fr = Object.assign({}, I18N.en, {
   language: 'Langue',
@@ -9418,7 +9694,16 @@ I18N.fr = Object.assign({}, I18N.en, {
   agentDisabled: 'Désactivé',
   agentLoading: 'Chargement de la liste des agents...',
   agentAvailabilitySaved: 'Disponibilité de l’agent mise à jour',
-  agentAvailabilitySaveFailed: 'Échec d’enregistrement de l’état de l’agent : '
+  agentAvailabilitySaveFailed: 'Échec d’enregistrement de l’état de l’agent : ',
+  terminalSettings: 'Paramètres du terminal',
+  terminalSettingsHelp: 'Sélectionnez l’émulateur de terminal par défaut pour ouvrir les dépôts ou exécuter les agents CLI.',
+  defaultTerminalSetting: 'Terminal par défaut',
+  defaultTerminalSettingHelp: 'Prend en charge VibeTermi, iTerm2, Terminal macOS, etc. Par défaut : VibeTermi.',
+  terminalSettingSaved: 'Paramètre du terminal enregistré',
+  terminalSettingSaveFailed: 'Échec de l’enregistrement du paramètre du terminal : ',
+  terminalDefaultBadge: 'Par défaut',
+  terminalInstalled: 'Installé',
+  terminalNotInstalled: 'Non détecté'
 });
 var LANGUAGE_ALIASES = {
   zh: 'zh-CN',
@@ -9557,6 +9842,7 @@ function applyLanguage() {
   renderSecurityControls();
   renderThemeControls();
   renderAvailableAgents();
+  renderTerminalOptions();
   renderTaskBoard();
   renderTaskSpeechState();
   if (targetRepo) {
@@ -12971,6 +13257,7 @@ function openSettings() {
   $('settingsPage').hidden = false;
   renderSecurityControls();
   renderAccessQr();
+  renderTerminalOptions();
   loadAgentSettings();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -13223,6 +13510,7 @@ var AGENTS = ['codex', 'claude', 'antigravity', 'opencode'];
 
 function loadAgentSettings() {
   loadAvailableAgents();
+  loadTerminalSettings();
   fetch('/api/agent', { cache: 'no-store' })
     .then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -13235,14 +13523,22 @@ function loadAgentSettings() {
         state.availableAgents = data.availableAgents;
         renderAvailableAgents();
       }
+      if (data.terminal) {
+        state.terminal = data.terminal;
+      }
+      if (Array.isArray(data.installedTerminals)) {
+        state.installedTerminals = data.installedTerminals;
+      }
       renderAgentOptions('commit');
       renderAgentOptions('task');
+      renderTerminalOptions();
     })
     .catch(function() {
       state.commitAgent = 'codex';
       state.taskAgent = 'codex';
       renderAgentOptions('commit');
       renderAgentOptions('task');
+      renderTerminalOptions();
     });
 }
 
@@ -13335,6 +13631,121 @@ function updateAgentSetting(scope, agent) {
     .catch(function(error) {
       if (status) status.textContent = t('agentSettingSaveFailed') + error.message;
       renderAgentOptions(scope);
+    })
+    .finally(function() {
+      if (inputs) {
+        inputs.forEach(function(input) { input.disabled = false; });
+      }
+    });
+}
+
+var TERMINALS = [
+  { id: 'vibetermi', name: 'VibeTermi', isDefault: true },
+  { id: 'iterm', name: 'iTerm2' },
+  { id: 'terminal', name: 'Terminal' },
+  { id: 'warp', name: 'Warp' },
+  { id: 'ghostty', name: 'Ghostty' },
+  { id: 'auto', name: 'Auto-detect' }
+];
+
+function loadTerminalSettings() {
+  fetch('/api/terminal', { cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      if (data.terminal) {
+        state.terminal = data.terminal;
+      }
+      if (Array.isArray(data.installedTerminals)) {
+        state.installedTerminals = data.installedTerminals;
+      }
+      renderTerminalOptions();
+    })
+    .catch(function() {
+      renderTerminalOptions();
+    });
+}
+
+function renderTerminalOptions() {
+  var container = $('terminalOptions');
+  if (!container) return;
+  var currentTerminal = state.terminal || 'vibetermi';
+  var installedList = state.installedTerminals || [];
+  var installedMap = {};
+  installedList.forEach(function(item) {
+    installedMap[item.id] = item.installed;
+  });
+
+  var html = '';
+  TERMINALS.forEach(function(item) {
+    var checked = item.id === currentTerminal ? ' checked' : '';
+    var isInstalled = item.id === 'terminal' || item.id === 'auto' || Boolean(installedMap[item.id]);
+    var badges = '';
+    if (item.isDefault) {
+      badges += '<span class="terminal-badge default-badge">' + (t('terminalDefaultBadge') || '默认') + '</span>';
+    }
+    if (item.id !== 'auto') {
+      if (isInstalled) {
+        badges += '<span class="terminal-badge installed-badge">' + (t('terminalInstalled') || '已安装') + '</span>';
+      } else {
+        badges += '<span class="terminal-badge uninstalled-badge">' + (t('terminalNotInstalled') || '未检测到') + '</span>';
+      }
+    }
+    html += '<label class="radio-label"><input type="radio" name="gmc-default-terminal" value="' + item.id + '"' + checked + '>' +
+      '<span class="radio-indicator"></span><span class="radio-text">' + item.name + '</span>' + badges + '</label>';
+  });
+  container.innerHTML = html;
+
+  var radios = container.querySelectorAll('input[type="radio"]');
+  radios.forEach(function(radio) {
+    radio.addEventListener('change', function() {
+      if (this.checked) {
+        updateTerminalSetting(this.value);
+      }
+    });
+  });
+}
+
+function updateTerminalSetting(terminalId) {
+  var status = $('terminalStatus');
+  if (status) {
+    status.textContent = t('working') || 'Saving...';
+    status.style.color = '';
+  }
+  var inputs = document.querySelectorAll('input[name="gmc-default-terminal"]');
+  if (inputs) {
+    inputs.forEach(function(input) { input.disabled = true; });
+  }
+  fetch('/api/terminal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ terminal: terminalId })
+  })
+    .then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+        return data;
+      });
+    })
+    .then(function(data) {
+      state.terminal = data.terminal || terminalId;
+      if (Array.isArray(data.installedTerminals)) {
+        state.installedTerminals = data.installedTerminals;
+      }
+      if (status) {
+        status.textContent = t('terminalSettingSaved') || 'Terminal setting saved';
+        status.style.color = '';
+      }
+      renderTerminalOptions();
+    })
+    .catch(function(error) {
+      if (status) {
+        status.textContent = (t('terminalSettingSaveFailed') || 'Failed: ') + error.message;
+        status.style.color = 'var(--rose)';
+      }
+      renderTerminalOptions();
     })
     .finally(function() {
       if (inputs) {

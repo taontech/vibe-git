@@ -8,6 +8,8 @@ var agentAvailability = require('./agent-availability');
 
 var CURRENT_FILE = 'gmc/current.json';
 var DEFAULT_AGENT = 'codex';
+var DEFAULT_TERMINAL = 'vibetermi';
+var SUPPORTED_TERMINALS = ['vibetermi', 'iterm', 'terminal', 'warp', 'ghostty', 'auto'];
 
 function configPath() {
   return agentAvailability.configFilePath();
@@ -111,6 +113,39 @@ function setAgentSetting(agent, gitKey, metadataKey) {
   return selectedAgent;
 }
 
+function normalizeTerminal(terminal) {
+  var value = String(terminal || '').toLowerCase().trim();
+  if (!value) {
+    return DEFAULT_TERMINAL;
+  }
+  return value;
+}
+
+function currentTerminal() {
+  var globalGitTerminal = git.getGlobalConfig('gmc.terminal');
+  if (globalGitTerminal) {
+    return normalizeTerminal(globalGitTerminal);
+  }
+  var metadata = readConfig();
+  if (metadata.terminal) {
+    return normalizeTerminal(metadata.terminal);
+  }
+  return DEFAULT_TERMINAL;
+}
+
+function setTerminal(terminal) {
+  var selectedTerminal = normalizeTerminal(terminal);
+  git.setGlobalConfig('gmc.terminal', selectedTerminal);
+  try {
+    var metadata = readConfig();
+    metadata.terminal = selectedTerminal;
+    writeConfig(metadata);
+  } catch (error) {
+    // Ignore filesystem write errors since git config --global succeeded
+  }
+  return selectedTerminal;
+}
+
 function bindIssue(cwd, issue, agent) {
   var root = git.repoRoot(cwd);
   var branch = git.currentBranch(root);
@@ -187,5 +222,10 @@ module.exports = {
   isAgentEnabled: agentAvailability.isAgentEnabled,
   setAgentAvailability: agentAvailability.setAgentAvailability,
   setAllAgentAvailability: agentAvailability.setAllAgentAvailability,
-  resetAgentAvailability: agentAvailability.resetAgentAvailability
+  resetAgentAvailability: agentAvailability.resetAgentAvailability,
+  currentTerminal: currentTerminal,
+  setTerminal: setTerminal,
+  normalizeTerminal: normalizeTerminal,
+  DEFAULT_TERMINAL: DEFAULT_TERMINAL,
+  SUPPORTED_TERMINALS: SUPPORTED_TERMINALS
 };
