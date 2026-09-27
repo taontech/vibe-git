@@ -19,6 +19,7 @@ var web = require('../lib/web');
 var agentMonitor = require('../lib/agent-monitor');
 var mergeConflict = require('../lib/merge-conflict');
 var Spinner = require('../lib/spinner');
+var CommitHud = require('../lib/commit-hud');
 var packageInfo = require('../package.json');
 
 var COMMANDS = ['agent', 'bind', 'status', 'message', 'commit', 'retry', 'install', 'install-hooks', 'web', 'hook', 'hook-worker', 'resolve-merge', 'help'];
@@ -128,7 +129,8 @@ function parseArgs(argv) {
     quit: false,
     watch: false,
     version: false,
-    list: false
+    list: false,
+    plain: false
   };
   var positional = [];
 
@@ -138,6 +140,8 @@ function parseArgs(argv) {
       flags.agent = argv[++i];
     } else if (arg.indexOf('--agent=') === 0) {
       flags.agent = arg.slice('--agent='.length);
+    } else if (arg === '--plain') {
+      flags.plain = true;
     } else if (arg === '--exec') {
       flags.execMode = true;
     } else if (arg === '--dry-run') {
@@ -292,37 +296,60 @@ async function commitCommand(flags) {
   }
 
   var selectedAgent = flags.agent ? config.normalizeAgent(flags.agent) : config.currentCommitAgent();
-  var spinner = new Spinner({
-    text: 'Generating commit message using ' + selectedAgent + '...'
-  }).start();
+  var branch = git.currentBranch(root) || 'main';
+  var stagedSummary = git.stagedSummary(root);
+  var binding = config.readBinding(root);
+
+  var hud = new CommitHud({
+    root: root,
+    branch: branch,
+    selectedAgent: selectedAgent,
+    model: process.env.GMC_CODEX_MODEL,
+    stagedSummary: stagedSummary,
+    binding: binding,
+    stream: process.stderr
+  });
+
+  if (flags.plain) {
+    hud.isTTY = false;
+  }
+
+  hud.start();
+  hud.setStage(2);
+  hud.setStage(3);
 
   var generated;
   try {
     generated = await generateCommitMessageAsync(root, flags, {
       taskStatus: true,
-      agent: selectedAgent
+      agent: selectedAgent,
+      onProgress: function (event) {
+        hud.updateAgentActivity(event);
+      }
     });
-    spinner.succeed('Generated commit message using ' + selectedAgent);
+    hud.setStage(4);
+    hud.succeed({
+      message: generated.message,
+      taskUpdates: generated.taskUpdates
+    });
   } catch (error) {
-    spinner.fail('Failed to generate commit message using ' + selectedAgent);
+    hud.fail(error);
     throw error;
   }
 
   var message = generated.message;
-  var binding = generated.binding;
+  var bindingContext = generated.binding;
   var messageFile = git.writeGitFile(root, 'GMC_COMMIT_EDITMSG', message);
 
   if (flags.edit && !flags.noEdit) {
+    process.stderr.write('Opening editor to review commit message...\n');
     editFile(messageFile, root);
     message = fs.readFileSync(messageFile, 'utf8');
-    commitMessage.validate(message, binding);
+    commitMessage.validate(message, bindingContext);
   }
 
   var commitOutput = git.runGit(['commit', '-F', messageFile], { cwd: root });
-  if (commitOutput) {
-    console.log(commitOutput);
-  }
-  console.log('Committed with message from ' + messageFile + '.');
+  hud.committed(commitOutput);
   applyTaskUpdates(root, generated.taskUpdates);
 }
 
@@ -761,7 +788,8 @@ function generateCommitMessageAsync(root, flags, options) {
 
   return agent.generateTextAsync(ctx.prompt, root, ctx.selectedAgent, {
     outputPrefix: ctx.tasks.length ? 'gmc-commit-plan' : 'gmc-commit-message',
-    description: ctx.tasks.length ? 'commit plan generation' : 'commit message generation'
+    description: ctx.tasks.length ? 'commit plan generation' : 'commit message generation',
+    onProgress: options && options.onProgress
   }).then(function (raw) {
     return processGeneratedMessage(raw, ctx);
   });
