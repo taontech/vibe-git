@@ -133,6 +133,41 @@ function stagedDiff(cwd) {
   return runGit(['diff', '--cached', '--no-ext-diff'], { cwd: repoRoot(cwd) });
 }
 
+function stagedSummary(cwd) {
+  var root = repoRoot(cwd);
+  var result = runGit(['diff', '--cached', '--numstat'], { cwd: root, allowFailure: true });
+  var files = [];
+  var additions = 0;
+  var deletions = 0;
+
+  if (result.status === 0 && result.stdout) {
+    var lines = result.stdout.split(/\r?\n/);
+    lines.forEach(function (line) {
+      if (!line.trim()) return;
+      var parts = line.split('\t');
+      if (parts.length >= 3) {
+        var add = parseInt(parts[0], 10) || 0;
+        var del = parseInt(parts[1], 10) || 0;
+        var file = parts[2];
+        additions += add;
+        deletions += del;
+        files.push({
+          path: file,
+          additions: add,
+          deletions: del
+        });
+      }
+    });
+  }
+
+  return {
+    filesCount: files.length,
+    additions: additions,
+    deletions: deletions,
+    files: files
+  };
+}
+
 function statusShort(cwd) {
   return runGit(['status', '--short'], { cwd: repoRoot(cwd) });
 }
@@ -391,6 +426,7 @@ module.exports = {
   readJsonGitFile: readJsonGitFile,
   getDefaultBranch: getDefaultBranch,
   getCleanableBranches: getCleanableBranches,
-  deleteBranches: deleteBranches
+  deleteBranches: deleteBranches,
+  stagedSummary: stagedSummary
 };
 
