@@ -198,6 +198,7 @@ function generateCodexText(prompt, cwd, options) {
 }
 
 function generateCodexTextAsync(prompt, cwd, options) {
+  options = options || {};
   var outputFile = path.join(os.tmpdir(), (options.outputPrefix || 'gmc-agent-output') + '-' + Date.now() + '-' + process.pid + '.txt');
   var description = options.description || 'generation';
   var help = codexExecHelp();
@@ -218,12 +219,57 @@ function generateCodexTextAsync(prompt, cwd, options) {
   if (help.indexOf('--output-last-message') >= 0) {
     args.push('--output-last-message', outputFile);
   }
+  if (typeof options.onProgress === 'function') {
+    args.push('--json');
+  }
   args.push('-');
+
+  var codexBuffer = '';
+  var lastAgentMessage = '';
+  var onStdout = null;
+
+  if (typeof options.onProgress === 'function') {
+    onStdout = function (chunk) {
+      codexBuffer += chunk;
+      var lines = codexBuffer.split(/\r?\n/);
+      codexBuffer = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line || line.charAt(0) !== '{') continue;
+        try {
+          var evt = JSON.parse(line);
+          if (evt.type === 'item.completed' || evt.type === 'item.started') {
+            var item = evt.item || {};
+            if (item.type === 'reasoning' || item.type === 'thought') {
+              options.onProgress({
+                type: 'thinking',
+                text: item.text || item.content || ''
+              });
+            } else if (item.type === 'agent_message' && item.text) {
+              lastAgentMessage = item.text;
+              options.onProgress({
+                type: 'text',
+                text: item.text
+              });
+            }
+          } else if (evt.type === 'turn.completed' && evt.usage) {
+            options.onProgress({
+              type: 'usage',
+              usage: evt.usage
+            });
+          }
+        } catch (e) {
+          // Ignore parse errors on debug output
+        }
+      }
+    };
+  }
 
   return spawnTextCommand('codex', args, {
     cwd: cwd,
     input: prompt,
-    timeout: timeoutMs
+    timeout: timeoutMs,
+    onStdout: onStdout
   }).then(function (result) {
     if (result.status !== 0) {
       removeOutputFile(outputFile);
@@ -233,6 +279,9 @@ function generateCodexTextAsync(prompt, cwd, options) {
       var finalMessage = fs.readFileSync(outputFile, 'utf8');
       removeOutputFile(outputFile);
       return cleanAgentOutput(finalMessage);
+    }
+    if (lastAgentMessage) {
+      return cleanAgentOutput(lastAgentMessage);
     }
     return cleanAgentOutput(result.stdout);
   }).catch(function (error) {
@@ -272,9 +321,10 @@ function generateClaudeText(prompt, cwd) {
   return cleanAgentOutput(result.stdout);
 }
 
-function generateClaudeTextAsync(prompt, cwd) {
+function generateClaudeTextAsync(prompt, cwd, options) {
+  options = options || {};
   var timeoutMs = codexTimeoutMs();
-  return spawnTextCommand('claude', [
+  var args = [
     '-p',
     '--no-session-persistence',
     '--disable-slash-commands',
@@ -282,13 +332,64 @@ function generateClaudeTextAsync(prompt, cwd) {
     '--mcp-config', '{"mcpServers":{}}',
     '--tools', '',
     '--system-prompt', CLAUDE_TEXT_SYSTEM_PROMPT
-  ], {
+  ];
+  var onStdout = null;
+  var claudeBuffer = '';
+  var lastResultText = '';
+
+  if (typeof options.onProgress === 'function') {
+    args.push('--output-format', 'stream-json', '--verbose');
+    onStdout = function (chunk) {
+      claudeBuffer += chunk;
+      var lines = claudeBuffer.split(/\r?\n/);
+      claudeBuffer = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line || line.charAt(0) !== '{') continue;
+        try {
+          var evt = JSON.parse(line);
+          if (evt.type === 'assistant' && evt.message && Array.isArray(evt.message.content)) {
+            evt.message.content.forEach(function (block) {
+              if (block.type === 'thinking' && block.thinking) {
+                options.onProgress({
+                  type: 'thinking',
+                  text: block.thinking
+                });
+              } else if (block.type === 'text' && block.text) {
+                lastResultText = block.text;
+                options.onProgress({
+                  type: 'text',
+                  text: block.text
+                });
+              }
+            });
+          } else if (evt.type === 'result' && evt.result) {
+            lastResultText = evt.result;
+            if (evt.usage) {
+              options.onProgress({
+                type: 'usage',
+                usage: evt.usage
+              });
+            }
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+    };
+  }
+
+  return spawnTextCommand('claude', args, {
     cwd: cwd,
     input: prompt,
-    timeout: timeoutMs
+    timeout: timeoutMs,
+    onStdout: onStdout
   }).then(function (result) {
     if (result.status !== 0) {
       throw new Error('claude generation failed with status ' + result.status + ': ' + commandOutput(result));
+    }
+    if (lastResultText) {
+      return cleanAgentOutput(lastResultText);
     }
     return cleanAgentOutput(result.stdout);
   }).catch(function (error) {
@@ -318,14 +419,67 @@ function generateAntigravityText(prompt, cwd) {
   return cleanAgentOutput(result.stdout);
 }
 
-function generateAntigravityTextAsync(prompt, cwd) {
+function generateAntigravityTextAsync(prompt, cwd, options) {
+  options = options || {};
   var timeoutMs = codexTimeoutMs();
-  return spawnTextCommand('agy', ['--prompt', prompt], {
+  var args = ['--prompt', prompt];
+  var onStdout = null;
+  var agyBuffer = '';
+  var lastResultText = '';
+
+  if (typeof options.onProgress === 'function') {
+    args.push('--output-format', 'stream-json');
+    onStdout = function (chunk) {
+      agyBuffer += chunk;
+      var lines = agyBuffer.split(/\r?\n/);
+      agyBuffer = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line || line.charAt(0) !== '{') continue;
+        try {
+          var evt = JSON.parse(line);
+          if (evt.event === 'step_update' && evt.step_update) {
+            var step = evt.step_update;
+            if (step.text_delta) {
+              options.onProgress({
+                type: step.step_type === 'thinking' ? 'thinking' : 'text',
+                delta: step.text_delta
+              });
+            }
+            if (step.usage) {
+              options.onProgress({
+                type: 'usage',
+                usage: step.usage
+              });
+            }
+          } else if (evt.event === 'result' && evt.result) {
+            if (evt.result.response) {
+              lastResultText = evt.result.response;
+            }
+            if (evt.result.usage) {
+              options.onProgress({
+                type: 'usage',
+                usage: evt.result.usage
+              });
+            }
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+    };
+  }
+
+  return spawnTextCommand('agy', args, {
     cwd: cwd,
-    timeout: timeoutMs
+    timeout: timeoutMs,
+    onStdout: onStdout
   }).then(function (result) {
     if (result.status !== 0) {
       throw new Error('antigravity generation failed with status ' + result.status + ': ' + commandOutput(result));
+    }
+    if (lastResultText) {
+      return cleanAgentOutput(lastResultText);
     }
     return cleanAgentOutput(result.stdout);
   }).catch(function (error) {
@@ -355,14 +509,54 @@ function generateOpencodeText(prompt, cwd) {
   return cleanAgentOutput(result.stdout);
 }
 
-function generateOpencodeTextAsync(prompt, cwd) {
+function generateOpencodeTextAsync(prompt, cwd, options) {
+  options = options || {};
   var timeoutMs = codexTimeoutMs();
-  return spawnTextCommand('opencode', ['run', prompt], {
+  var args = ['run', prompt];
+  var onStdout = null;
+  var opencodeBuffer = '';
+  var lastResultText = '';
+
+  if (typeof options.onProgress === 'function') {
+    args.push('--format', 'json');
+    onStdout = function (chunk) {
+      opencodeBuffer += chunk;
+      var lines = opencodeBuffer.split(/\r?\n/);
+      opencodeBuffer = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line || line.charAt(0) !== '{') continue;
+        try {
+          var evt = JSON.parse(line);
+          if (evt.type === 'text' && evt.part && evt.part.text) {
+            lastResultText = (lastResultText ? lastResultText + evt.part.text : evt.part.text);
+            options.onProgress({
+              type: 'text',
+              text: evt.part.text
+            });
+          } else if (evt.type === 'step_finish' && evt.part && evt.part.tokens) {
+            options.onProgress({
+              type: 'usage',
+              usage: evt.part.tokens
+            });
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+    };
+  }
+
+  return spawnTextCommand('opencode', args, {
     cwd: cwd,
-    timeout: timeoutMs
+    timeout: timeoutMs,
+    onStdout: onStdout
   }).then(function (result) {
     if (result.status !== 0) {
       throw new Error('opencode generation failed with status ' + result.status + ': ' + commandOutput(result));
+    }
+    if (lastResultText) {
+      return cleanAgentOutput(lastResultText);
     }
     return cleanAgentOutput(result.stdout);
   }).catch(function (error) {
@@ -406,8 +600,18 @@ function spawnTextCommand(command, args, options) {
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', function (chunk) { stdout += chunk; });
-    child.stderr.on('data', function (chunk) { stderr += chunk; });
+    child.stdout.on('data', function (chunk) {
+      stdout += chunk;
+      if (typeof options.onStdout === 'function') {
+        options.onStdout(chunk);
+      }
+    });
+    child.stderr.on('data', function (chunk) {
+      stderr += chunk;
+      if (typeof options.onStderr === 'function') {
+        options.onStderr(chunk);
+      }
+    });
     child.on('error', function (error) { finish(error); });
     child.on('close', function (status, signal) {
       if (timedOut) {
