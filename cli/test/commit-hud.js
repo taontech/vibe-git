@@ -174,6 +174,28 @@ function run() {
   driftHud.stop();
   assert.strictEqual(cursorY, 0, 'Stopping HUD must return cursor Y to origin 0');
 
+  // 7. Thinking box borders must align with content rows
+  var alignHud = new CommitHud({
+    stream: createMockStream(true),
+    branch: 'main',
+    selectedAgent: 'codex',
+    stagedSummary: {
+      filesCount: 1,
+      additions: 1,
+      deletions: 0,
+      files: [{ path: 'lib/app.js', additions: 1, deletions: 0 }]
+    }
+  });
+  alignHud.setStage(3);
+  alignHud.updateAgentActivity({ type: 'thinking', text: 'Inspecting diff topology for semantic changes' });
+
+  var thinkingBox = alignHud.buildThinkingBox(74).map(function (line) {
+    return line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  });
+  thinkingBox.forEach(function (line) {
+    assert.strictEqual(line.length, thinkingBox[0].length, 'Thinking box lines must share the same width: ' + JSON.stringify(thinkingBox));
+  });
+
   console.log('Commit HUD utility tests passed.');
 }
 
