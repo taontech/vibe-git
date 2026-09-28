@@ -363,7 +363,7 @@ CommitHud.prototype.buildThinkingBox = function (boxWidth) {
   var headerTag = ' * AGENT REASONING STREAM ';
   var headerStyled = this.color('magentaBold', headerTag);
   var borderH = '';
-  var padCount = Math.max(2, boxWidth - 3 - stripAnsi(headerTag).length);
+  var padCount = Math.max(2, boxWidth - 5 - stripAnsi(headerTag).length);
   for (var i = 0; i < padCount; i++) {
     borderH += c.h;
   }
