@@ -4,7 +4,7 @@ var readline = require('readline');
 
 var DEFAULT_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 var WIN_FRAMES = ['-', '\\', '|', '/'];
-var PULSE_GLYPHS = ['◈', '◇', '◆', '◇'];
+var PULSE_GLYPHS = ['*', '+', '*', '+'];
 
 var STAGES = [
   { id: 1, label: 'Inspecting git staging area & diff topology' },
@@ -263,7 +263,7 @@ CommitHud.prototype.buildHeaderLines = function (boxWidth) {
     tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|'
   };
 
-  var titleTag = ' ' + (this.useUnicode ? '◈ ' : '*') + 'GMC NEURAL COMMIT ';
+  var titleTag = ' * GMC NEURAL COMMIT ';
   var titleStyled = this.color('cyanBold', titleTag);
   var headerH = '';
   var rightPaddingCount = Math.max(2, boxWidth - 3 - stripAnsi(titleTag).length);
@@ -295,7 +295,7 @@ CommitHud.prototype.buildHeaderLines = function (boxWidth) {
     if (this.stagedSummary.files.length > 2) {
       fileNames += ' +' + (this.stagedSummary.files.length - 2) + ' more';
     }
-    stagedStr += ' ' + this.color('dim', '• ' + fileNames);
+    stagedStr += ' ' + this.color('dim', '* ' + fileNames);
   }
   lines.push(this.color('cyan', c.v) + padRight(' ' + stagedStr, boxWidth - 2) + this.color('cyan', c.v));
 
@@ -329,7 +329,7 @@ CommitHud.prototype.buildStageLines = function () {
 
     if (stage.id < this.currentStage) {
       // Completed stage
-      var check = this.useUnicode ? '✔' : 'v';
+      var check = 'v';
       line = '  ' + this.color('greenBold', check) + ' ' +
         this.color('dim', stageNum) + ' ' +
         this.color('dim', stage.label);
@@ -342,7 +342,7 @@ CommitHud.prototype.buildStageLines = function () {
         this.color('dim', '(' + elapsedSec + ')');
     } else {
       // Future stage
-      var bullet = this.useUnicode ? '○' : '-';
+      var bullet = '-';
       line = '  ' + this.color('dim', bullet) + ' ' +
         this.color('dim', stageNum + ' ' + stage.label);
     }
@@ -360,7 +360,7 @@ CommitHud.prototype.buildThinkingBox = function (boxWidth) {
     tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|'
   };
 
-  var headerTag = ' ' + (this.useUnicode ? '✦ ' : '*') + 'AGENT REASONING STREAM ';
+  var headerTag = ' * AGENT REASONING STREAM ';
   var headerStyled = this.color('magentaBold', headerTag);
   var borderH = '';
   var padCount = Math.max(2, boxWidth - 3 - stripAnsi(headerTag).length);
@@ -383,7 +383,7 @@ CommitHud.prototype.buildThinkingBox = function (boxWidth) {
     ];
   }
 
-  var icon = this.useUnicode ? '💭 ' : '> ';
+  var icon = '> ';
   for (var k = 0; k < displayLines.length; k++) {
     var rawLine = (k === 0 ? icon : '   ') + displayLines[k];
     var truncated = truncateTo(rawLine, boxWidth - 8);
@@ -418,8 +418,8 @@ CommitHud.prototype.buildTelemetryBar = function () {
   }
 
   var pulseGlyph = PULSE_GLYPHS[Math.floor(this.frameIndex / 2) % PULSE_GLYPHS.length];
-  var glyphStyled = this.useUnicode ? this.color('cyanBold', pulseGlyph) : '*';
-  return '  [ ' + glyphStyled + ' ] ' + parts.join(this.color('dim', ' • '));
+  var glyphStyled = this.color('cyanBold', pulseGlyph);
+  return '  [ ' + glyphStyled + ' ] ' + parts.join(this.color('dim', ' | '));
 };
 
 CommitHud.prototype.render = function () {
@@ -521,7 +521,7 @@ CommitHud.prototype.succeed = function (details) {
     tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|'
   };
 
-  var headerTag = ' ' + (this.useUnicode ? '✦ ' : '*') + 'GENERATED COMMIT MESSAGE ';
+  var headerTag = ' * GENERATED COMMIT MESSAGE ';
   var headerStyled = this.color('greenBold', headerTag);
   var borderH = '';
   var padCount = Math.max(2, boxWidth - 3 - stripAnsi(headerTag).length);
@@ -551,8 +551,8 @@ CommitHud.prototype.succeed = function (details) {
 
   // Footer inside card
   var footerStats = '  ' + this.color('dim', 'Agent: ') + this.color('magentaBold', this.selectedAgent) +
-    this.color('dim', ' • Took: ') + this.color('whiteBold', duration) +
-    this.color('dim', ' • Conventional: ') + this.color('greenBold', 'verified');
+    this.color('dim', ' | Took: ') + this.color('whiteBold', duration) +
+    this.color('dim', ' | Conventional: ') + this.color('greenBold', 'verified');
   card.push(this.color('green', c.v) + padRight(footerStats, boxWidth - 2) + this.color('green', c.v));
 
   var bottomH = '';
@@ -566,7 +566,7 @@ CommitHud.prototype.succeed = function (details) {
 };
 
 CommitHud.prototype.committed = function (commitOutput) {
-  var check = this.useUnicode ? '✔' : 'v';
+  var check = 'v';
   var banner = this.color('greenBold', check + ' Commit successfully applied to ' + this.branch);
   this.stream.write(banner + '\n');
   if (commitOutput) {
@@ -582,7 +582,7 @@ CommitHud.prototype.fail = function (error) {
   var duration = this.startTime ? formatDuration(Date.now() - this.startTime) : '';
   this.stop();
 
-  var cross = this.useUnicode ? '✖' : 'x';
+  var cross = 'x';
   var msg = error ? (error.message || String(error)) : 'Unknown error';
 
   var lines = [
