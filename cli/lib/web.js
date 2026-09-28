@@ -2179,7 +2179,7 @@ function openTerminalAtRepository(root) {
     throwHttpError('Repository path does not exist: ' + repoRoot);
   }
 
-  var command = 'cd ' + shellQuote(repoRoot);
+  var command = 'cd ' + shellQuote(repoRoot) + ' && ls';
   return openPreferredTerminal(repoRoot, command);
 }
 
