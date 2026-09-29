@@ -88,7 +88,7 @@ async function main() {
   }
 
   if (command === 'web') {
-    await gitWebCommand(parsed.flags);
+    await gitWebCommand(parsed.flags, parsed.args);
     return;
   }
 
@@ -395,13 +395,14 @@ function installHooks(root) {
   });
 }
 
-async function gitWebCommand(flags) {
+async function gitWebCommand(flags, args) {
   var port = flags.port || process.env.GMC_GITWEB_PORT || web.DEFAULT_PORT;
   var isRunning = await web.checkRunning(port);
-  var root = tryGetRepoRoot();
+  var targetPath = (args && args[0]) ? path.resolve(process.cwd(), args[0]) : process.cwd();
+  var root = tryGetRepoRoot(targetPath);
 
   if (flags.watch) {
-    await runWatchedGitWeb(root || process.cwd(), flags, port, isRunning);
+    await runWatchedGitWeb(root, flags, port, isRunning);
     return;
   }
 
@@ -425,10 +426,14 @@ async function gitWebCommand(flags) {
   }
 
   if (isRunning) {
-    var address = web.authenticatedUrl(null, {
+    var address = web.authenticatedUrl(root, {
       port: port
     });
     console.log('GMC Web is already running on port ' + port + '.');
+    if (root) {
+      web.recordRepositoryVisitIfValid(root);
+      console.log('Repository: ' + root);
+    }
     if (!flags.noOpen) {
       console.log('Opening ' + address);
       web.openBrowser(address);
@@ -456,6 +461,10 @@ async function gitWebCommand(flags) {
       port: port
     });
     console.log('GMC Web server started in background on port ' + port + '.');
+    if (root) {
+      web.recordRepositoryVisitIfValid(root);
+      console.log('Repository: ' + root);
+    }
     if (!flags.noOpen) {
       console.log('Opening ' + address);
       web.openBrowser(address);
@@ -478,7 +487,7 @@ async function gitWebCommand(flags) {
 
   var started;
   try {
-    started = await web.start(root || process.cwd(), {
+    started = await web.start(root, {
       port: flags.port,
       noOpen: flags.noOpen,
       agentMonitor: monitorState,
@@ -578,6 +587,10 @@ async function runWatchedGitWeb(root, flags, port, isRunning) {
     web.openBrowser(address);
   }
   console.log('GMC Web watch: ' + address);
+  if (root) {
+    web.recordRepositoryVisitIfValid(root);
+    console.log('Repository: ' + root);
+  }
   console.log('Watching: ' + watchFiles.map(function(filePath) { return path.relative(process.cwd(), filePath); }).join(', '));
   console.log('Press Ctrl-C to stop.');
 
@@ -827,9 +840,9 @@ async function loadIssue(issueRef, root) {
   return github.fetchIssue(repo, parsed.number, token);
 }
 
-function tryGetRepoRoot() {
+function tryGetRepoRoot(targetDir) {
   try {
-    return git.repoRoot(process.cwd());
+    return git.repoRoot(targetDir || process.cwd());
   } catch (error) {
     return null;
   }
@@ -901,12 +914,13 @@ function getCommandHelp(command) {
   var helps = {
     web: [
       'Usage:',
-      '  gmc web [options]',
+      '  gmc web [path] [options]',
       '',
       'Description:',
       '  Start the local GitWeb browser dashboard and Agent Monitor.',
       '  By default, runs as a background daemon and opens the dashboard in your default browser.',
       '  If already running, opens the browser to the existing server.',
+      '  If in a repository (or a repository path is given), directly opens the repository detail page.',
       '',
       'Options:',
       '  --port <port>        Port to listen on (default: 4277, or GMC_GITWEB_PORT)',

@@ -117,7 +117,13 @@ function authenticatedUrl(root, options) {
   var displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
   var query = {};
   if (root) {
-    query.repo = root;
+    var resolvedRepo = root;
+    try {
+      resolvedRepo = git.repoRoot(root);
+    } catch (e) {
+      resolvedRepo = path.resolve(root);
+    }
+    query.repo = resolvedRepo;
   }
   query[AUTH_QUERY_PARAM] = getAuthToken();
   return 'http://' + formatUrlHost(displayHost) + ':' + port + '/?' + new URLSearchParams(query).toString();
@@ -21109,5 +21115,6 @@ module.exports = {
   createWebloc: createWebloc,
   authenticatedUrl: authenticatedUrl,
   openBrowser: openBrowser,
+  recordRepositoryVisitIfValid: recordRepositoryVisitIfValid,
   DEFAULT_PORT: DEFAULT_PORT
 };
