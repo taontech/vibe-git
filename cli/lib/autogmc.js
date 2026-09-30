@@ -66,6 +66,43 @@ function startTask(root, scriptPath, targetOid, createdAt) {
   child.unref();
 }
 
+function recordForegroundCommit(root, options) {
+  options = options || {};
+  var oid = options.targetOid;
+  if (!oid) {
+    return;
+  }
+
+  var completedAt = options.completedAt || new Date().toISOString();
+  var startedAt = options.startedAt || completedAt;
+  var logPath = path.join(LOG_DIR, oid + '.log');
+  var logFile = gitFile(root, logPath);
+  var entries = [
+    [startedAt, 'started foreground commit message generation for ' + oid]
+  ];
+  if (options.agent) {
+    entries.push([startedAt, 'requesting commit message from ' + options.agent]);
+    entries.push([completedAt, 'received commit message from ' + options.agent]);
+  }
+  entries.push([completedAt, 'committed ' + oid + ' with the generated message (no background rewrite)']);
+
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  fs.writeFileSync(logFile, entries.map(function (entry) {
+    return '[' + entry[0] + '] ' + entry[1] + '\n';
+  }).join(''));
+
+  writeTask(root, oid, {
+    status: 'done',
+    targetOid: oid,
+    createdAt: startedAt,
+    startedAt: startedAt,
+    completedAt: completedAt,
+    newOid: oid,
+    logPath: logPath,
+    message: options.message || ''
+  });
+}
+
 function worker(targetOid) {
   var root = git.repoRoot(process.cwd());
   var logFile = gitFile(root, path.join(LOG_DIR, targetOid + '.log'));
@@ -711,6 +748,7 @@ module.exports = {
   commitMsgHook: commitMsgHook,
   postCommitHook: postCommitHook,
   startTask: startTask,
+  recordForegroundCommit: recordForegroundCommit,
   worker: worker,
   taskSummaries: taskSummaries
 };

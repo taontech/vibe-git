@@ -4544,6 +4544,8 @@ function commitSelectedStagedFiles(root, selectedFiles, language) {
   var result;
   var taskUpdates = [];
   var savedIndexTree = null;
+  var foregroundCommit = null;
+  var foregroundStartedAt = null;
 
   if (unselectedPaths.length) {
     savedIndexTree = writeIndexTree(repoRoot);
@@ -4586,6 +4588,7 @@ function commitSelectedStagedFiles(root, selectedFiles, language) {
         promptOptions
       );
       var aiMessage;
+      foregroundStartedAt = new Date().toISOString();
       try {
         var selectedAgent = config.currentCommitAgent();
         var generated = agent.generateText(prompt, repoRoot, selectedAgent, {
@@ -4612,6 +4615,11 @@ function commitSelectedStagedFiles(root, selectedFiles, language) {
         cwd: repoRoot,
         encoding: 'utf8'
       });
+      foregroundCommit = {
+        startedAt: foregroundStartedAt,
+        message: aiMessage,
+        agent: selectedAgent
+      };
     }
   } finally {
     if (savedIndexTree) restoreIndexTree(repoRoot, savedIndexTree);
@@ -4628,9 +4636,18 @@ function commitSelectedStagedFiles(root, selectedFiles, language) {
   }
 
   var appliedTaskUpdates = applyTaskUpdatesAfterCommit(repoRoot, taskUpdates);
+  var committedOid = runGitOptional(repoRoot, ['rev-parse', 'HEAD']);
+  if (foregroundCommit && committedOid) {
+    autogmc.recordForegroundCommit(repoRoot, {
+      targetOid: committedOid,
+      startedAt: foregroundCommit.startedAt,
+      message: foregroundCommit.message,
+      agent: foregroundCommit.agent
+    });
+  }
   return {
     status: 'ok',
-    oid: runGitOptional(repoRoot, ['rev-parse', 'HEAD']),
+    oid: committedOid,
     output: ((result.stdout || '') + (result.stderr || '')).trim(),
     taskUpdates: appliedTaskUpdates.updates,
     tasks: safeTasks(repoRoot)

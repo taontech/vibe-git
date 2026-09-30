@@ -299,6 +299,7 @@ async function commitCommand(flags) {
   var branch = git.currentBranch(root) || 'main';
   var stagedSummary = git.stagedSummary(root);
   var binding = config.readBinding(root);
+  var startedAt = new Date().toISOString();
 
   var hud = new CommitHud({
     root: root,
@@ -351,6 +352,14 @@ async function commitCommand(flags) {
   var commitOutput = git.runGit(['commit', '-F', messageFile], { cwd: root });
   hud.committed(commitOutput);
   applyTaskUpdates(root, generated.taskUpdates);
+
+  var committedOid = git.runGit(['rev-parse', 'HEAD'], { cwd: root });
+  autogmc.recordForegroundCommit(root, {
+    targetOid: committedOid,
+    startedAt: startedAt,
+    message: message,
+    agent: selectedAgent
+  });
 }
 
 function retryCommand(ref) {
