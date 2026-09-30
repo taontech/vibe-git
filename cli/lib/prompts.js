@@ -173,7 +173,7 @@ function commitMessagePlanPrompt(binding, diff, status, tasks, options) {
     '- Do not move a task backward, for example from done to doing.',
     '- Do not change unrelated tasks.',
     '- If no task should change, use an empty taskUpdates array.',
-    '- The only status this plan may assign is done. Current in-progress lane statuses may be codex, claude, or antigravity.',
+    '- The only status this plan may assign is done. Current in-progress lane statuses may be codex, claude, antigravity, or opencode.',
     ''
   ]);
   if (binding) {

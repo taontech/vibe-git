@@ -429,8 +429,8 @@ async function run() {
 
     // Test getVisibleTaskBoardStatuses in sandbox
     var initialVisible = vmContext.getVisibleTaskBoardStatuses();
-    assert.strictEqual(initialVisible.length, 5, 'Initially all 5 columns should be visible');
-    assert.deepStrictEqual(toPlain(initialVisible.map(function (c) { return c.id; })), ['todo', 'codex', 'claude', 'antigravity', 'done']);
+    assert.strictEqual(initialVisible.length, 6, 'Initially all 6 columns should be visible');
+    assert.deepStrictEqual(toPlain(initialVisible.map(function (c) { return c.id; })), ['todo', 'codex', 'claude', 'antigravity', 'opencode', 'done']);
 
     // Disable codex in sandbox
     vmContext.state.availableAgents = [
@@ -440,8 +440,8 @@ async function run() {
       { agentId: 'opencode', name: 'OpenCode', enabled: true }
     ];
     var visibleAfterDisableCodex = vmContext.getVisibleTaskBoardStatuses();
-    assert.strictEqual(visibleAfterDisableCodex.length, 4, 'Codex should be removed when disabled');
-    assert.deepStrictEqual(toPlain(visibleAfterDisableCodex.map(function (c) { return c.id; })), ['todo', 'claude', 'antigravity', 'done']);
+    assert.strictEqual(visibleAfterDisableCodex.length, 5, 'Codex should be removed when disabled');
+    assert.deepStrictEqual(toPlain(visibleAfterDisableCodex.map(function (c) { return c.id; })), ['todo', 'claude', 'antigravity', 'opencode', 'done']);
     assert.strictEqual(vmContext.isAgentAvailable('codex'), false);
     assert.strictEqual(vmContext.isAgentAvailable('claude'), true);
 
@@ -498,6 +498,18 @@ async function run() {
     assert.strictEqual(reEnabledVisible.length, 4);
     assert.deepStrictEqual(toPlain(reEnabledVisible.map(function (c) { return c.id; })), ['todo', 'codex', 'claude', 'done']);
     assert.deepStrictEqual(toPlain(vmContext.getEnabledAgentIds()), ['codex', 'claude']);
+
+    // Only opencode enabled: its column must still be visible
+    vmContext.state.availableAgents = [
+      { agentId: 'codex', enabled: false },
+      { agentId: 'claude', enabled: false },
+      { agentId: 'antigravity', enabled: false },
+      { agentId: 'opencode', enabled: true }
+    ];
+    var opencodeOnlyVisible = vmContext.getVisibleTaskBoardStatuses();
+    assert.strictEqual(opencodeOnlyVisible.length, 3);
+    assert.deepStrictEqual(toPlain(opencodeOnlyVisible.map(function (c) { return c.id; })), ['todo', 'opencode', 'done']);
+    assert.deepStrictEqual(toPlain(vmContext.getEnabledAgentIds()), ['opencode']);
 
     console.log('Agent availability tests passed.');
   } finally {

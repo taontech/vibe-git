@@ -4,12 +4,13 @@ var fs = require('fs');
 var path = require('path');
 var git = require('./git');
 
-var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'doing', 'review', 'done'];
+var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'opencode', 'doing', 'review', 'done'];
 var STATUS_RANK = {
   todo: 0,
   codex: 1,
   claude: 1,
   antigravity: 1,
+  opencode: 1,
   doing: 1,
   review: 2,
   done: 3

@@ -37,8 +37,8 @@ var TASK_EVENT_HEARTBEAT_MS = 15000;
 var AGENT_MONITOR_DEFAULT_PORT = 8898;
 var AGENT_MONITOR_TIMEOUT_MS = 1500;
 var AGENT_MONITOR_MAX_RESPONSE_BYTES = 256 * 1024;
-var TASK_AGENT_STATUSES = ['codex', 'claude', 'antigravity'];
-var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'doing', 'review', 'done'];
+var TASK_AGENT_STATUSES = ['codex', 'claude', 'antigravity', 'opencode'];
+var TASK_STATUSES = ['todo', 'codex', 'claude', 'antigravity', 'opencode', 'doing', 'review', 'done'];
 var recentRepoVisitTimes = {};
 var statusCache = {};
 var repoQuickStatusCache = {};
@@ -8117,6 +8117,7 @@ var I18N = {
     taskStatusCodex: 'Codex',
     taskStatusClaude: 'Claude',
     taskStatusAntigravity: 'Antigravity',
+    taskStatusOpencode: 'OpenCode',
     taskStatusDoing: '进行中',
     taskStatusReview: '待确认',
     taskStatusDone: '已完成',
@@ -8512,6 +8513,7 @@ var I18N = {
     taskStatusCodex: 'Codex',
     taskStatusClaude: 'Claude',
     taskStatusAntigravity: 'Antigravity',
+    taskStatusOpencode: 'OpenCode',
     taskStatusDoing: 'Doing',
     taskStatusReview: 'Review',
     taskStatusDone: 'Done',
@@ -8883,6 +8885,7 @@ I18N.ja = Object.assign({}, I18N.en, {
   taskStatusCodex: 'Codex',
   taskStatusClaude: 'Claude',
   taskStatusAntigravity: 'Antigravity',
+  taskStatusOpencode: 'OpenCode',
   taskStatusDoing: '進行中',
   taskStatusReview: 'レビュー',
   taskStatusDone: '完了',
@@ -9146,6 +9149,7 @@ I18N.ko = Object.assign({}, I18N.en, {
   taskStatusCodex: 'Codex',
   taskStatusClaude: 'Claude',
   taskStatusAntigravity: 'Antigravity',
+  taskStatusOpencode: 'OpenCode',
   taskStatusDoing: '진행 중',
   taskStatusReview: '검토',
   taskStatusDone: '완료',
@@ -9409,6 +9413,7 @@ I18N.es = Object.assign({}, I18N.en, {
   taskStatusCodex: 'Codex',
   taskStatusClaude: 'Claude',
   taskStatusAntigravity: 'Antigravity',
+  taskStatusOpencode: 'OpenCode',
   taskStatusDoing: 'En curso',
   taskStatusReview: 'Revisión',
   taskStatusDone: 'Hecho',
@@ -9654,6 +9659,7 @@ I18N.fr = Object.assign({}, I18N.en, {
   taskStatusCodex: 'Codex',
   taskStatusClaude: 'Claude',
   taskStatusAntigravity: 'Antigravity',
+  taskStatusOpencode: 'OpenCode',
   taskStatusDoing: 'En cours',
   taskStatusReview: 'Revue',
   taskStatusDone: 'Terminé',
@@ -9743,6 +9749,7 @@ var TASK_BOARD_STATUSES = [
   { id: 'codex', label: 'taskStatusCodex', color: '#16a34a', agent: true, monitorIds: ['codex-cli', 'codex-app'] },
   { id: 'claude', label: 'taskStatusClaude', color: '#d97706', agent: true, monitorIds: ['claude-code'] },
   { id: 'antigravity', label: 'taskStatusAntigravity', color: '#7c3aed', agent: true, monitorIds: ['antigravity'] },
+  { id: 'opencode', label: 'taskStatusOpencode', color: '#0d9488', agent: true, monitorIds: ['opencode'] },
   { id: 'done', label: 'taskStatusDone', color: '#64748b' }
 ];
 
@@ -11114,7 +11121,8 @@ function agentMonitorSourceLabel(agentId) {
     'codex-cli': 'Codex CLI',
     'codex-app': 'Codex App',
     'claude-code': 'Claude Code',
-    'antigravity': 'Antigravity'
+    'antigravity': 'Antigravity',
+    'opencode': 'OpenCode'
   }[agentId] || agentId;
 }
 
