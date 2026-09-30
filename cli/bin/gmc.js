@@ -263,14 +263,14 @@ function showStatus() {
   console.log('Branch:     ' + branch);
   if (!binding) {
     console.log('Issue:      (none)');
-    console.log('Agent:      ' + config.currentAgent());
+    console.log('Agent:      ' + config.currentCommitAgent());
     printBackgroundTasks(root);
     return;
   }
   console.log('Issue:      ' + binding.issue);
   console.log('Title:      ' + (binding.title || '(none)'));
   console.log('URL:        ' + (binding.url || '(none)'));
-  console.log('Agent:      ' + (binding.agent || 'codex'));
+  console.log('Agent:      ' + config.currentCommitAgent());
   printBackgroundTasks(root);
 }
 
