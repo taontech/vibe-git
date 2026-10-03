@@ -190,10 +190,42 @@ function run() {
   alignHud.updateAgentActivity({ type: 'thinking', text: 'Inspecting diff topology for semantic changes' });
 
   var thinkingBox = alignHud.buildThinkingBox(74).map(function (line) {
-    return line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    return line.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
   });
   thinkingBox.forEach(function (line) {
     assert.strictEqual(line.length, thinkingBox[0].length, 'Thinking box lines must share the same width: ' + JSON.stringify(thinkingBox));
+  });
+
+  // 8. Card borders must align when message contains wide (CJK) characters
+  function visualWidth(line) {
+    var plain = line.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+    var width = 0;
+    for (var i = 0; i < plain.length; i++) {
+      var code = plain.charCodeAt(i);
+      var wide = (code >= 0x1100 && code <= 0x115f) ||
+        (code >= 0x2e80 && code <= 0xa4cf) ||
+        (code >= 0xac00 && code <= 0xd7a3) ||
+        (code >= 0xf900 && code <= 0xfaff) ||
+        (code >= 0xfe30 && code <= 0xfe6f) ||
+        (code >= 0xff00 && code <= 0xff60) ||
+        (code >= 0xffe0 && code <= 0xffe6);
+      width += wide ? 2 : 1;
+    }
+    return width;
+  }
+
+  var cjkStream = createMockStream(true);
+  var cjkHud = new CommitHud({
+    stream: cjkStream,
+    branch: 'main',
+    selectedAgent: 'codex'
+  });
+  cjkHud.succeed({
+    message: 'feat(cli): 支持中文提交信息\n\n- 修复中文宽度计算错误，保证绿色竖线对齐\n- 添加回归测试覆盖宽字符场景'
+  });
+  var cardLines = cjkStream.getOutput().replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').split('\n').filter(function (l) { return l.length > 0; });
+  cardLines.forEach(function (line) {
+    assert.strictEqual(visualWidth(line), visualWidth(cardLines[0]), 'CJK card lines must share the same visual width: ' + JSON.stringify(cardLines));
   });
 
   console.log('Commit HUD utility tests passed.');

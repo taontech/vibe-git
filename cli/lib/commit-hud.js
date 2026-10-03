@@ -31,9 +31,67 @@ function stripAnsi(str) {
   return String(str || '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 }
 
+function codePointWidth(code) {
+  if (code === 0) {
+    return 0;
+  }
+  if (code < 32 || (code >= 0x7f && code < 0xa0)) {
+    return 0;
+  }
+  if (
+    (code >= 0x0300 && code <= 0x036f) ||
+    (code >= 0x1ab0 && code <= 0x1aff) ||
+    (code >= 0x1dc0 && code <= 0x1dff) ||
+    (code >= 0x20d0 && code <= 0x20ff) ||
+    (code >= 0xfe00 && code <= 0xfe0f) ||
+    (code >= 0xfe20 && code <= 0xfe2f)
+  ) {
+    return 0;
+  }
+  if (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2329 && code <= 0x232a) ||
+    (code >= 0x2e80 && code <= 0x303e) ||
+    (code >= 0x3041 && code <= 0x33ff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xa000 && code <= 0xa4cf) ||
+    (code >= 0xa960 && code <= 0xa97f) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe10 && code <= 0xfe19) ||
+    (code >= 0xfe30 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1f64f) ||
+    (code >= 0x1f900 && code <= 0x1f9ff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function stringWidth(str) {
+  var s = stripAnsi(str);
+  var width = 0;
+  for (var i = 0; i < s.length; i++) {
+    var code = s.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+      var next = s.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        code = (code - 0xd800) * 0x400 + (next - 0xdc00) + 0x10000;
+        i++;
+      }
+    }
+    width += codePointWidth(code);
+  }
+  return width;
+}
+
 function padRight(str, len) {
   var s = String(str || '');
-  var visualLen = stripAnsi(s).length;
+  var visualLen = stringWidth(s);
   if (visualLen >= len) {
     return s;
   }
@@ -46,8 +104,7 @@ function padRight(str, len) {
 
 function truncateTo(str, maxLen) {
   var s = String(str || '');
-  var plainLen = stripAnsi(s).length;
-  if (plainLen <= maxLen) {
+  if (stringWidth(s) <= maxLen) {
     return s;
   }
 
@@ -67,11 +124,23 @@ function truncateTo(str, maxLen) {
         inAnsi = false;
       }
     } else {
-      if (visible >= target) {
+      var code = s.charCodeAt(i);
+      var width = codePointWidth(code);
+      var chunk = ch;
+      if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+        var next = s.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          code = (code - 0xd800) * 0x400 + (next - 0xdc00) + 0x10000;
+          width = codePointWidth(code);
+          chunk = ch + s.charAt(i + 1);
+          i++;
+        }
+      }
+      if (visible + width > target) {
         break;
       }
-      out += ch;
-      visible++;
+      out += chunk;
+      visible += width;
     }
   }
 
