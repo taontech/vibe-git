@@ -2860,7 +2860,8 @@ function getRepoQuickStatus(repoPath, force, lazy) {
       clean: isClean,
       staged: parsedStatus.staged || 0,
       unstaged: parsedStatus.unstaged || 0,
-      untracked: parsedStatus.untracked || 0
+      untracked: parsedStatus.untracked || 0,
+      conflicted: statusHasConflict(parsedStatus.files)
     };
 
     repoQuickStatusCache[resolved] = { at: Date.now(), status: result };
@@ -2905,7 +2906,8 @@ function getRepoQuickStatusAsync(repoPath, force, callback) {
               clean: isClean,
               staged: parsedStatus.staged || 0,
               unstaged: parsedStatus.unstaged || 0,
-              untracked: parsedStatus.untracked || 0
+              untracked: parsedStatus.untracked || 0,
+              conflicted: statusHasConflict(parsedStatus.files)
             };
             repoQuickStatusCache[resolved] = { at: Date.now(), status: result };
             callback(result);
@@ -3935,6 +3937,18 @@ function parseStatusOutput(output) {
     untracked: untracked,
     files: files
   };
+}
+
+function statusHasConflict(files) {
+  if (!Array.isArray(files)) return false;
+  for (var i = 0; i < files.length; i++) {
+    var code = files[i] && files[i].code;
+    if (code === 'UU' || code === 'AA' || code === 'DD' ||
+        code === 'AU' || code === 'UA' || code === 'DU' || code === 'UD') {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parseAheadBehind(value) {
@@ -14038,6 +14052,7 @@ var City3DEngine = (function() {
   var bloomPass = null;
   var gammaPass = null;
   var fxaaPass = null;
+  var cinematicPass = null;
   var depthTexture = null;
   var isGTAOEnabled = true;
   var currentAOMode = 'gtao'; // 'gtao' | 'ssao' | 'off'
@@ -14334,6 +14349,132 @@ var City3DEngine = (function() {
         '  }',
         '}'
       ].join('\\n')
+    },
+
+    // Cinematic finishing pass: animated film grain, vignette and slight lens dispersion
+    CinematicShader: {
+      uniforms: {
+        tDiffuse: { value: null },
+        uTime: { value: 0.0 },
+        uResolution: { value: null },
+        uGrain: { value: 0.030 },
+        uVignette: { value: 0.38 },
+        uAberration: { value: 0.0008 }
+      },
+      vertexShader: [
+        'varying vec2 vUv;',
+        'void main() {',
+        '  vUv = uv;',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}'
+      ].join('\\n'),
+      fragmentShader: [
+        'uniform sampler2D tDiffuse;',
+        'uniform float uTime;',
+        'uniform vec2 uResolution;',
+        'uniform float uGrain;',
+        'uniform float uVignette;',
+        'uniform float uAberration;',
+        'varying vec2 vUv;',
+        'float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }',
+        'void main() {',
+        '  vec2 centered = vUv - 0.5;',
+        '  float r2 = dot(centered, centered);',
+        '  vec2 dispersion = centered * (uAberration * (0.35 + r2 * 2.4));',
+        '  vec3 col;',
+        '  col.r = texture2D(tDiffuse, vUv + dispersion).r;',
+        '  col.g = texture2D(tDiffuse, vUv).g;',
+        '  col.b = texture2D(tDiffuse, vUv - dispersion).b;',
+        '  vec2 grainUv = vUv * uResolution;',
+        '  float grainFrame = fract(mod(floor(uTime * 24.0), 97.0) * 0.6180339887);',
+        '  float n = hash(grainUv + grainFrame * 137.0);',
+        '  float grainLuma = dot(col, vec3(0.299, 0.587, 0.114));',
+        '  float grainMask = uGrain * (0.10 + 0.90 * smoothstep(0.02, 0.55, grainLuma));',
+        '  col += (n - 0.5) * grainMask;',
+        '  float vig = 1.0 - smoothstep(0.24, 0.82, length(centered));',
+        '  col *= mix(1.0, vig, uVignette);',
+        '  col = clamp(col, 0.0, 1.0);',
+        '  gl_FragColor = vec4(col, 1.0);',
+        '}'
+      ].join('\\n')
+    },
+
+    // Commit signal light pillar: an energy band travels along the column
+    CommitPillarShader: {
+      uniforms: {
+        uTime: { value: 0.0 },
+        uPhase: { value: 0.0 },
+        uDir: { value: 1.0 },
+        uColor: { value: null },
+        uOpacity: { value: 1.0 }
+      },
+      vertexShader: [
+        'varying vec2 vUv;',
+        'void main() {',
+        '  vUv = uv;',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}'
+      ].join('\\n'),
+      fragmentShader: [
+        'uniform float uTime;',
+        'uniform float uPhase;',
+        'uniform float uDir;',
+        'uniform vec3 uColor;',
+        'uniform float uOpacity;',
+        'varying vec2 vUv;',
+        'void main() {',
+        '  float y = vUv.y;',
+        '  float pos = fract(uTime * 0.45 + uPhase);',
+        '  float pulseY = uDir > 0.0 ? pos : 1.0 - pos;',
+        '  float band = 1.0 - smoothstep(0.0, 0.16, abs(y - pulseY));',
+        '  float body = 0.09 + 0.05 * sin(y * 26.0 - uTime * 3.0);',
+        '  float alpha = (body + band * 1.5) * uOpacity;',
+        '  alpha *= smoothstep(0.0, 0.04, y) * (1.0 - smoothstep(0.9, 1.0, y));',
+        '  gl_FragColor = vec4(uColor, alpha);',
+        '}'
+      ].join('\\n')
+    },
+
+    // Tron-style flowing traffic light streaks painted onto the boulevards
+    RoadTrailShader: {
+      uniforms: {
+        uTime: { value: 0.0 },
+        uNight: { value: 1.0 },
+        uColorA: { value: null },
+        uColorB: { value: null }
+      },
+      vertexShader: [
+        'varying vec2 vUv;',
+        'void main() {',
+        '  vUv = uv;',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}'
+      ].join('\\n'),
+      fragmentShader: [
+        'uniform float uTime;',
+        'uniform float uNight;',
+        'uniform vec3 uColorA;',
+        'uniform vec3 uColorB;',
+        'varying vec2 vUv;',
+        'float hash(float n) { return fract(sin(n) * 43758.5453123); }',
+        'void main() {',
+        '  float lanes = 4.0;',
+        '  float ly = vUv.y * lanes;',
+        '  float laneId = floor(ly);',
+        '  float lanePos = fract(ly);',
+        '  float laneMask = 1.0 - smoothstep(0.02, 0.22, abs(lanePos - 0.5));',
+        '  float dir = mod(laneId, 2.0) < 0.5 ? 1.0 : -1.0;',
+        '  float speed = 0.10 + 0.05 * hash(laneId * 7.13);',
+        '  float travel = vUv.x * 90.0 + uTime * speed * dir * 6.0 + hash(laneId * 3.71) * 9.0;',
+        '  float band = pow(max(0.0, sin(travel * 6.2831853)), 22.0);',
+        '  float flick = 0.65 + 0.35 * sin(uTime * 2.3 + laneId * 1.7);',
+        '  float alpha = laneMask * (0.035 + band * 0.85) * flick;',
+        '  alpha *= 0.22 + 0.78 * uNight;',
+        '  alpha *= smoothstep(0.0, 0.015, vUv.x) * (1.0 - smoothstep(0.985, 1.0, vUv.x));',
+        '  vec3 col = mix(uColorA, uColorB, hash(laneId * 5.37));',
+        '  gl_FragColor = vec4(col, alpha);',
+        '}'
+      ].join('\\n')
     }
   };
 
@@ -14375,6 +14516,8 @@ var City3DEngine = (function() {
   var buildingMaterials = [];
   var roadMaterials = [];
   var megaScreenMaterials = [];
+  var roadTrailMaterials = [];
+  var trailGradientTex = null;
 
   // Building growth + view-center height focus state
   // Each entry: { group, x, z, baseHeight, districtIndex, delay, duration, elapsed, progress, focus, done }
@@ -14383,6 +14526,13 @@ var City3DEngine = (function() {
   var FOCUS_INNER_RADIUS = 55;
   var FOCUS_OUTER_RADIUS = 330;
   var FOCUS_MIN_SCALE = 0.32;
+
+  // Cinematic camera
+  var BASE_FOV = 18;
+  var currentFov = 18;
+  var camDriftTheta = 0;
+  var camDriftPhi = 0;
+  var camDriftRadiusFactor = 0;
 
   // Emissive Texture Cache per Building/Repo (Git Contribution Heatmap Light Maps)
   var emissiveTexCache = {};
@@ -14595,12 +14745,33 @@ var City3DEngine = (function() {
             }
             composer.addPass(fxaaPass);
           }
+
+          // 6. Cinematic Film Pass (grain + vignette + subtle lens dispersion)
+          if (typeof THREE.ShaderPass !== 'undefined') {
+            var cinematicConfig = {
+              uniforms: {
+                tDiffuse: { value: null },
+                uTime: { value: 0.0 },
+                uResolution: { value: new THREE.Vector2(rw, rh) },
+                uGrain: { value: 0.030 },
+                uVignette: { value: 0.38 },
+                uAberration: { value: 0.0008 }
+              },
+              vertexShader: City3DShaders.CinematicShader.vertexShader,
+              fragmentShader: City3DShaders.CinematicShader.fragmentShader
+            };
+            cinematicPass = new THREE.ShaderPass(cinematicConfig);
+            cinematicPass.material.depthTest = false;
+            cinematicPass.material.depthWrite = false;
+            composer.addPass(cinematicPass);
+          }
         } catch (compErr) {
           console.warn('EffectComposer init fallback:', compErr);
           composer = null;
           bloomPass = null;
           gtaoPass = null;
           fxaaPass = null;
+          cinematicPass = null;
         }
       }
 
@@ -14812,6 +14983,14 @@ var City3DEngine = (function() {
     if (streetlightGlowDecals.length > 0) {
       for (var sg = 0; sg < streetlightGlowDecals.length; sg++) {
         streetlightGlowDecals[sg].opacity = night * 0.45;
+      }
+    }
+
+    if (roadTrailMaterials.length > 0) {
+      for (var rt = 0; rt < roadTrailMaterials.length; rt++) {
+        if (roadTrailMaterials[rt].uniforms && roadTrailMaterials[rt].uniforms.uNight) {
+          roadTrailMaterials[rt].uniforms.uNight.value = night;
+        }
       }
     }
   }
@@ -16014,17 +16193,23 @@ var City3DEngine = (function() {
     }).join('|');
 
     if (currentCitySignature && newSig && currentCitySignature === newSig) {
+      var statusVisualsChanged = false;
       if (Array.isArray(districtData) && Array.isArray(targetList)) {
         targetList.forEach(function(r) {
           for (var d = 0; d < districtData.length; d++) {
             if (districtData[d].repo && (districtData[d].repo.path === r.path || districtData[d].repo.name === r.name)) {
               districtData[d].repo.status = r.status;
               districtData[d].repo.contributions = r.contributions;
+              if (repoStatusSignature(districtData[d].repo.status) !== districtData[d].statusSignature) {
+                buildRepoStatusVisualsForDistrict(districtData[d]);
+                statusVisualsChanged = true;
+              }
               break;
             }
           }
         });
       }
+      if (statusVisualsChanged) requestRender(4);
       return;
     }
     if (newSig) {
@@ -16091,6 +16276,7 @@ var City3DEngine = (function() {
     buildingMaterials = [];
     roadMaterials = [];
     megaScreenMaterials = [];
+    roadTrailMaterials = [];
     buildingInstances = [];
     growthClock = 0;
 
@@ -16142,6 +16328,7 @@ var City3DEngine = (function() {
     cityGroup.add(groundMesh);
 
     buildRoadNetwork(cols, rows, stepX, stepZ, originX, originZ, BW, BD, RW, totalCityW, totalCityD);
+    buildRoadLightTrails(totalCityW, BW, BD, RW);
 
     for (var i = 0; i < N; i++) {
       var repo = repos[i];
@@ -16276,6 +16463,59 @@ var City3DEngine = (function() {
         }
       }
     }
+  }
+
+  function buildRoadLightTrails(totalW, BW, BD, RW) {
+    if (!City3DShaders || !City3DShaders.RoadTrailShader) return;
+
+    var southAvenueZ = BD / 2 + RW / 2;
+    var northAvenueZ = -(BD / 2 + RW / 2);
+    var planeGeo = new THREE.PlaneGeometry(totalW, RW);
+
+    var avenues = [southAvenueZ, northAvenueZ];
+    for (var a = 0; a < avenues.length; a++) {
+      var trailMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: totalElapsedTime },
+          uNight: { value: modeTransition },
+          uColorA: { value: new THREE.Color(0x22d3ee) },
+          uColorB: { value: new THREE.Color(0xfbbf24) }
+        },
+        vertexShader: City3DShaders.RoadTrailShader.vertexShader,
+        fragmentShader: City3DShaders.RoadTrailShader.fragmentShader,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
+      });
+      var trailMesh = new THREE.Mesh(planeGeo, trailMat);
+      trailMesh.rotation.x = -Math.PI / 2;
+      trailMesh.position.set(0, 0.13, avenues[a]);
+      trailMesh.renderOrder = 2;
+      cityGroup.add(trailMesh);
+      roadTrailMaterials.push(trailMat);
+    }
+  }
+
+  function getTrailGradientTexture() {
+    if (trailGradientTex || typeof THREE === 'undefined') return trailGradientTex;
+    var canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 32;
+    var ctx = canvas.getContext('2d');
+    var grad = ctx.createLinearGradient(0, 0, 128, 0);
+    grad.addColorStop(0.0, 'rgba(255, 40, 70, 0)');
+    grad.addColorStop(0.55, 'rgba(255, 60, 90, 0.18)');
+    grad.addColorStop(0.86, 'rgba(255, 90, 110, 0.55)');
+    grad.addColorStop(1.0, 'rgba(255, 150, 160, 0.95)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 32);
+    trailGradientTex = new THREE.CanvasTexture(canvas);
+    trailGradientTex.minFilter = THREE.LinearFilter;
+    trailGradientTex.magFilter = THREE.LinearFilter;
+    trailGradientTex.wrapS = THREE.ClampToEdgeWrapping;
+    trailGradientTex.wrapT = THREE.ClampToEdgeWrapping;
+    return trailGradientTex;
   }
 
   function buildAvenueStreetTrees(posX, posZ, BW, BD) {
@@ -16422,6 +16662,23 @@ var City3DEngine = (function() {
     var tailLightMat = new THREE.MeshBasicMaterial({ color: 0xff0044 });
     var lightGeo = new THREE.BoxGeometry(0.3, 0.3, 0.5);
 
+    // Shared taillight streak used to paint light trails on the asphalt
+    var trailTexture = getTrailGradientTexture();
+    var trailGeo = new THREE.PlaneGeometry(11, 2.2);
+    var trailMat = null;
+    if (trailTexture) {
+      trailMat = new THREE.MeshBasicMaterial({
+        map: trailTexture,
+        color: 0xff4d6d,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+        side: THREE.DoubleSide
+      });
+    }
+
     for (var i = 0; i < carCount; i++) {
       var isEastBound = (i % 2 === 0);
       var laneZ = isEastBound ? (southZ - 4.5 + (i % 2) * 4.0) : (northZ + 4.5 - (i % 2) * 4.0);
@@ -16449,6 +16706,14 @@ var City3DEngine = (function() {
       var tl2 = new THREE.Mesh(lightGeo, isEastBound ? tailLightMat : headLightMat);
       tl2.position.set(-2.1, 0.8, -0.7);
       carMesh.add(tl2);
+
+      // Rear light trail streaking across the road surface
+      if (trailMat) {
+        var lightTrail = new THREE.Mesh(trailGeo, trailMat);
+        lightTrail.rotation.x = -Math.PI / 2;
+        lightTrail.position.set(-8.4, 0.36, 0);
+        carMesh.add(lightTrail);
+      }
 
       if (!isEastBound) {
         carMesh.rotation.y = Math.PI;
@@ -17162,6 +17427,10 @@ var City3DEngine = (function() {
 
     var groundMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 });
 
+    var districtStatus = repo.status || null;
+    var districtChanges = districtStatus ? ((districtStatus.staged || 0) + (districtStatus.unstaged || 0) + (districtStatus.untracked || 0)) : 0;
+    var districtDirty = !!(districtStatus && districtChanges > 0);
+
     var nonTextCount = repo.nonTextCount || 0;
     var parkW = Math.min(32, Math.max(16, 14 + Math.sqrt(nonTextCount) * 3.5));
     var parkD = Math.min(26, Math.max(14, 12 + Math.sqrt(nonTextCount) * 3.0));
@@ -17193,6 +17462,9 @@ var City3DEngine = (function() {
       var tx = parkPosX + Math.cos(angle) * dist;
       var tz = parkPosZ + Math.sin(angle) * (dist * (parkD / parkW));
 
+      // Leave the construction plot clear when the repository has pending work
+      if (districtDirty && Math.abs(tx - parkPosX) < 11 && Math.abs(tz - parkPosZ) < 10) continue;
+
       var trunk = new THREE.Mesh(trunkGeo, trunkMat);
       trunk.position.y = 1.6;
       treeGroup.add(trunk);
@@ -17214,7 +17486,7 @@ var City3DEngine = (function() {
       districtGroup.add(treeGroup);
     }
 
-    if (nonTextCount >= 4) {
+    if (nonTextCount >= 4 && !districtDirty) {
       var pondGeo = new THREE.CylinderGeometry(parkW * 0.16, parkW * 0.16, 0.4, 16);
       var pondMat = new THREE.MeshStandardMaterial({
         color: 0x0284c7,
@@ -17382,15 +17654,414 @@ var City3DEngine = (function() {
       revealAt: bannerRevealAt
     });
 
-    districtData.push({
+    var statusGroup = new THREE.Group();
+    statusGroup.position.set(posX, 0, posZ);
+    cityGroup.add(statusGroup);
+
+    var distEntry = {
       index: index,
       repo: repo,
       center: new THREE.Vector3(posX, 15, posZ),
       tallestPos: tallestBuildingPos.clone(),
-      height: maxHeight
-    });
+      height: maxHeight,
+      bw: BW,
+      bd: BD,
+      statusGroup: statusGroup,
+      statusSignature: '',
+      bannerSignature: repoStatusSignature(repo.status),
+      statusCranes: [],
+      statusPulseMats: [],
+      statusRings: [],
+      commitPillarMaterials: []
+    };
+    districtData.push(distEntry);
+    buildRepoStatusVisualsForDistrict(distEntry);
 
     cityGroup.add(districtGroup);
+  }
+
+  function repoStatusSignature(status) {
+    if (!status) return 'none';
+    return [
+      status.clean ? 1 : 0,
+      status.staged || 0,
+      status.unstaged || 0,
+      status.untracked || 0,
+      status.ahead || 0,
+      status.behind || 0,
+      status.conflicted ? 1 : 0
+    ].join('|');
+  }
+
+  function clearDistrictStatusVisuals(dist) {
+    if (!dist) return;
+    if (dist.statusGroup) {
+      while (dist.statusGroup.children.length > 0) {
+        var child = dist.statusGroup.children[0];
+        dist.statusGroup.remove(child);
+        child.traverse(function (node) {
+          if (node.geometry) node.geometry.dispose();
+          if (node.material) {
+            if (Array.isArray(node.material)) {
+              node.material.forEach(function (m) { if (m) m.dispose(); });
+            } else {
+              node.material.dispose();
+            }
+          }
+        });
+      }
+    }
+    dist.statusCranes = [];
+    dist.statusPulseMats = [];
+    dist.statusRings = [];
+    dist.commitPillarMaterials = [];
+  }
+
+  function refreshRepoBannerVisual(dist, status) {
+    if (!dist || !dist.repo) return;
+    var sig = repoStatusSignature(status);
+    if (dist.bannerSignature === sig) return;
+    dist.bannerSignature = sig;
+
+    var badge = null;
+    for (var i = 0; i < repoBadges.length; i++) {
+      if (repoBadges[i] && repoBadges[i].repo === dist.repo) {
+        badge = repoBadges[i];
+        break;
+      }
+    }
+    if (!badge || !badge.sprite) return;
+
+    var fresh = createRepoBannerSprite(
+      dist.repo.name,
+      dist.repo.totalFiles,
+      (dist.repo.tallest ? dist.repo.tallest.size : 0),
+      targetMode === 'night',
+      status
+    );
+    var oldMaterial = badge.sprite.material;
+    badge.sprite.material = fresh.material;
+    if (oldMaterial) {
+      if (oldMaterial.map) oldMaterial.map.dispose();
+      oldMaterial.dispose();
+    }
+    badge.isConflict = !!(status && status.conflicted);
+    badge.hasChanges = !!(status && ((status.staged || 0) + (status.unstaged || 0) + (status.untracked || 0) > 0));
+  }
+
+  function buildRepoStatusVisualsForDistrict(dist) {
+    if (!dist || !dist.statusGroup) return;
+    clearDistrictStatusVisuals(dist);
+    var repo = dist.repo;
+    var status = repo && repo.status;
+    dist.statusSignature = repoStatusSignature(status);
+    if (!status) return;
+    refreshRepoBannerVisual(dist, status);
+
+    var localX = dist.tallestPos ? (dist.tallestPos.x - dist.center.x) : 0;
+    var localZ = dist.tallestPos ? (dist.tallestPos.z - dist.center.z) : 0;
+    var changes = (status.staged || 0) + (status.unstaged || 0) + (status.untracked || 0);
+    var dirty = changes > 0;
+
+    if (dirty) {
+      var crane = createConstructionCrane(dist.height);
+      dist.statusGroup.add(crane.group);
+      dist.statusCranes.push(crane);
+      if (crane.pulseMat) {
+        dist.statusPulseMats.push({
+          material: crane.pulseMat,
+          type: 'opacity',
+          min: 0.2,
+          max: 0.95,
+          speed: 5.0,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+      createScaffoldTower(dist, -7.5, 4.5);
+    }
+
+    if (status.conflicted) {
+      createConflictAlert(dist, localX, localZ);
+    }
+
+    if ((status.ahead || 0) > 0) {
+      createCommitPillars(dist, status.ahead, 'ahead');
+    }
+    if ((status.behind || 0) > 0) {
+      createCommitPillars(dist, status.behind, 'behind');
+    }
+  }
+
+  function createConstructionCrane(maxHeight) {
+    var crane = new THREE.Group();
+    var mastH = Math.max(24, Math.min(70, (maxHeight || 30) * 1.05));
+
+    var steelMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      roughness: 0.45,
+      metalness: 0.62,
+      emissive: new THREE.Color(0x92400e),
+      emissiveIntensity: 0.28
+    });
+
+    var mast = new THREE.Mesh(new THREE.BoxGeometry(0.95, mastH, 0.95), steelMat);
+    mast.position.y = mastH / 2;
+    mast.castShadow = true;
+    crane.add(mast);
+
+    for (var b = 1; b < 7; b++) {
+      var brace = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.18, 1.7), steelMat);
+      brace.position.y = (mastH / 7) * b;
+      crane.add(brace);
+    }
+
+    var jibPivot = new THREE.Group();
+    jibPivot.position.y = mastH;
+    var jibMat = new THREE.MeshStandardMaterial({
+      color: 0xfbbf24,
+      roughness: 0.4,
+      metalness: 0.55,
+      emissive: new THREE.Color(0x78350f),
+      emissiveIntensity: 0.35
+    });
+
+    var jib = new THREE.Mesh(new THREE.BoxGeometry(19, 0.45, 0.6), jibMat);
+    jib.position.x = 6.5;
+    jib.castShadow = true;
+    jibPivot.add(jib);
+
+    var counterJib = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.55, 0.7), jibMat);
+    counterJib.position.x = -4.6;
+    jibPivot.add(counterJib);
+
+    var counterWeight = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6, 1.6, 1.5),
+      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8, metalness: 0.3 })
+    );
+    counterWeight.position.set(-7.1, -0.9, 0);
+    jibPivot.add(counterWeight);
+
+    var cableGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(11.5, 0, 0),
+      new THREE.Vector3(11.5, -7.5, 0)
+    ]);
+    jibPivot.add(new THREE.Line(cableGeo, new THREE.LineBasicMaterial({ color: 0xfde68a, transparent: true, opacity: 0.75 })));
+    var hook = new THREE.Mesh(
+      new THREE.BoxGeometry(1.3, 1.0, 1.3),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.35, metalness: 0.7 })
+    );
+    hook.position.set(11.5, -7.5, 0);
+    jibPivot.add(hook);
+
+    var beaconMat = new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.85, toneMapped: false });
+    var beacon = new THREE.Mesh(new THREE.SphereGeometry(0.48, 8, 8), beaconMat);
+    beacon.position.y = mastH + 1.3;
+    crane.add(beacon);
+
+    var base = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.7, 3.3, 0.85, 10),
+      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.9 })
+    );
+    base.position.y = 0.42;
+    crane.add(base);
+
+    crane.add(jibPivot);
+    crane.position.set(0, 1.85, 0);
+
+    return {
+      group: crane,
+      jib: jibPivot,
+      baseAngle: 0.7,
+      speed: 0.34 + Math.random() * 0.12,
+      phase: Math.random() * Math.PI * 2,
+      pulseMat: beaconMat
+    };
+  }
+
+  function createScaffoldTower(dist, x, z) {
+    var group = new THREE.Group();
+    group.position.set(x, 1.85, z);
+
+    var w = 8.0;
+    var d = 8.0;
+    var h = 10.5;
+    var corners = [[-w / 2, -d / 2], [w / 2, -d / 2], [-w / 2, d / 2], [w / 2, d / 2]];
+    var points = [];
+
+    // Vertical poles
+    for (var c = 0; c < corners.length; c++) {
+      points.push(new THREE.Vector3(corners[c][0], 0, corners[c][1]));
+      points.push(new THREE.Vector3(corners[c][0], h, corners[c][1]));
+    }
+
+    // Horizontal platform rings
+    for (var level = 1; level <= 3; level++) {
+      var y = (h / 4) * level;
+      points.push(new THREE.Vector3(-w / 2, y, -d / 2), new THREE.Vector3(w / 2, y, -d / 2));
+      points.push(new THREE.Vector3(-w / 2, y, d / 2), new THREE.Vector3(w / 2, y, d / 2));
+      points.push(new THREE.Vector3(-w / 2, y, -d / 2), new THREE.Vector3(-w / 2, y, d / 2));
+      points.push(new THREE.Vector3(w / 2, y, -d / 2), new THREE.Vector3(w / 2, y, d / 2));
+    }
+
+    var frameGeo = new THREE.BufferGeometry().setFromPoints(points);
+    var frameMat = new THREE.LineBasicMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.88,
+      toneMapped: false
+    });
+    group.add(new THREE.LineSegments(frameGeo, frameMat));
+
+    var netMat = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.07,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    var net = new THREE.Mesh(new THREE.PlaneGeometry(w, h), netMat);
+    net.position.set(0, h / 2, d / 2);
+    group.add(net);
+
+    var lampMat = new THREE.MeshBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.9, toneMapped: false });
+    var lampGeo = new THREE.SphereGeometry(0.26, 6, 6);
+    for (var lc = 0; lc < corners.length; lc++) {
+      var lamp = new THREE.Mesh(lampGeo, lampMat);
+      lamp.position.set(corners[lc][0], h + 0.2, corners[lc][1]);
+      group.add(lamp);
+    }
+
+    dist.statusGroup.add(group);
+    dist.statusPulseMats.push({
+      material: lampMat,
+      type: 'opacity',
+      min: 0.15,
+      max: 0.95,
+      speed: 4.2,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+
+  function createConflictAlert(dist, localX, localZ) {
+    for (var i = 0; i < 2; i++) {
+      var ringGeo = new THREE.RingGeometry(3.2, 4.0, 40);
+      var ringMat = new THREE.MeshBasicMaterial({
+        color: 0xff3b30,
+        transparent: true,
+        opacity: 0.55,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false
+      });
+      var ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(localX, 2.35, localZ);
+      dist.statusGroup.add(ring);
+      dist.statusRings.push({
+        mesh: ring,
+        material: ringMat,
+        speed: 0.55,
+        phase: i * 0.5,
+        maxScale: 4.2,
+        opacity: 0.55
+      });
+    }
+
+    var alertMat = new THREE.MeshBasicMaterial({ color: 0xff2d55, transparent: true, opacity: 0.9, toneMapped: false });
+    var alertLight = new THREE.Mesh(new THREE.SphereGeometry(0.75, 10, 10), alertMat);
+    alertLight.position.set(localX, (dist.tallestPos ? dist.tallestPos.y : dist.height) + 2.5, localZ);
+    dist.statusGroup.add(alertLight);
+    dist.statusPulseMats.push({
+      material: alertMat,
+      type: 'opacity',
+      min: 0.25,
+      max: 1.0,
+      speed: 6.0,
+      phase: 0
+    });
+  }
+
+  function createCommitPillars(dist, commitCount, direction) {
+    var count = Math.min(commitCount, 12);
+    if (count <= 0) return;
+
+    var isAhead = direction === 'ahead';
+    var color = new THREE.Color(isAhead ? 0x22d3ee : 0xc084fc);
+    var pillarHeight = Math.max(58, Math.min(115, 58 + (dist.height || 30) * 0.55));
+    var pillarGeo = new THREE.CylinderGeometry(0.58, 0.58, pillarHeight, 8, 1, true);
+    var spacing = count > 1 ? Math.min(9.5, (dist.bw * 0.72) / (count - 1)) : 0;
+    var startX = -spacing * (count - 1) / 2;
+    var z = isAhead ? (dist.bd / 2 + 2.5) : -(dist.bd / 2 + 2.5);
+
+    for (var i = 0; i < count; i++) {
+      var pillarMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: totalElapsedTime },
+          uPhase: { value: (i * 0.17) % 1.0 },
+          uDir: { value: isAhead ? 1.0 : -1.0 },
+          uColor: { value: color },
+          uOpacity: { value: 0.92 }
+        },
+        vertexShader: City3DShaders.CommitPillarShader.vertexShader,
+        fragmentShader: City3DShaders.CommitPillarShader.fragmentShader,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false
+      });
+      var pillar = new THREE.Mesh(pillarGeo, pillarMat);
+      var scaleY = 0.82 + (i % 3) * 0.12;
+      pillar.scale.y = scaleY;
+      pillar.position.set(startX + i * spacing, 0.2 + (pillarHeight * scaleY) / 2, z);
+      pillar.renderOrder = 3;
+      dist.statusGroup.add(pillar);
+      dist.commitPillarMaterials.push(pillarMat);
+    }
+  }
+
+  function updateStatusAnimations() {
+    if (!districtData || !districtData.length) return;
+    for (var d = 0; d < districtData.length; d++) {
+      var dist = districtData[d];
+
+      if (dist.statusCranes && dist.statusCranes.length) {
+        for (var c = 0; c < dist.statusCranes.length; c++) {
+          var crane = dist.statusCranes[c];
+          if (crane.jib) {
+            crane.jib.rotation.y = crane.baseAngle + Math.sin(totalElapsedTime * crane.speed + crane.phase) * 1.1;
+          }
+        }
+      }
+
+      if (dist.statusPulseMats && dist.statusPulseMats.length) {
+        for (var p = 0; p < dist.statusPulseMats.length; p++) {
+          var pulse = dist.statusPulseMats[p];
+          if (!pulse.material) continue;
+          var value = pulse.min + (pulse.max - pulse.min) * (0.5 + 0.5 * Math.sin(totalElapsedTime * pulse.speed + pulse.phase));
+          if (pulse.type === 'emissive') pulse.material.emissiveIntensity = value;
+          else pulse.material.opacity = value;
+        }
+      }
+
+      if (dist.statusRings && dist.statusRings.length) {
+        for (var r = 0; r < dist.statusRings.length; r++) {
+          var ringData = dist.statusRings[r];
+          var t = (totalElapsedTime * ringData.speed + ringData.phase) % 1;
+          var scale = 1 + t * ringData.maxScale;
+          ringData.mesh.scale.set(scale, scale, scale);
+          ringData.material.opacity = (1 - t) * ringData.opacity;
+        }
+      }
+
+      if (dist.commitPillarMaterials && dist.commitPillarMaterials.length) {
+        for (var q = 0; q < dist.commitPillarMaterials.length; q++) {
+          var mat = dist.commitPillarMaterials[q];
+          if (mat.uniforms && mat.uniforms.uTime) mat.uniforms.uTime.value = totalElapsedTime;
+        }
+      }
+    }
   }
 
   // Airplane Cruise Flight Spline (moves the sphere center along the central avenue)
@@ -17518,6 +18189,32 @@ var City3DEngine = (function() {
       bItem.sprite.position.y = bItem.tallestPos.y * bFocus + 12.0;
       if (bItem.line) bItem.line.scale.y = bFocus;
     }
+
+    // Freeze status overlays at a clean resting pose
+    if (districtData && districtData.length) {
+      for (var d = 0; d < districtData.length; d++) {
+        var dist = districtData[d];
+        if (dist.statusCranes) {
+          for (var c = 0; c < dist.statusCranes.length; c++) {
+            var crane = dist.statusCranes[c];
+            if (crane.jib) crane.jib.rotation.y = crane.baseAngle;
+          }
+        }
+        if (dist.statusRings) {
+          for (var r = 0; r < dist.statusRings.length; r++) {
+            dist.statusRings[r].mesh.scale.set(1.6, 1.6, 1.6);
+            dist.statusRings[r].material.opacity = dist.statusRings[r].opacity * 0.7;
+          }
+        }
+        if (dist.commitPillarMaterials) {
+          for (var q = 0; q < dist.commitPillarMaterials.length; q++) {
+            if (dist.commitPillarMaterials[q].uniforms && dist.commitPillarMaterials[q].uniforms.uTime) {
+              dist.commitPillarMaterials[q].uniforms.uTime.value = 0.0;
+            }
+          }
+        }
+      }
+    }
   }
 
   function animate(timestamp) {
@@ -17587,7 +18284,7 @@ var City3DEngine = (function() {
       cruiseProgress = (cruiseProgress + dt * cruiseSpeed * 0.0022) % 1.0;
       var targetPos = flightSpline.getPointAt(cruiseProgress);
       orbit.target.x = targetPos.x;
-      orbit.target.y = targetPos.y;
+      orbit.target.y = targetPos.y + Math.sin(cruiseProgress * Math.PI * 8.0) * 2.0;
       orbit.target.z = targetPos.z;
 
       if (districtData.length > 0) {
@@ -17668,6 +18365,18 @@ var City3DEngine = (function() {
           }
         }
       }
+
+      // Boulevard light-trail shader flow
+      if (roadTrailMaterials && roadTrailMaterials.length > 0) {
+        for (var rt = 0; rt < roadTrailMaterials.length; rt++) {
+          if (roadTrailMaterials[rt].uniforms && roadTrailMaterials[rt].uniforms.uTime) {
+            roadTrailMaterials[rt].uniforms.uTime.value = totalElapsedTime;
+          }
+        }
+      }
+
+      // Repository status overlays (crane rotation, hazard lights, commit pillars)
+      updateStatusAnimations();
     } else {
       if (hasModeTransition && buildingMaterials && buildingMaterials.length > 0) {
         for (var sbm = 0; sbm < buildingMaterials.length; sbm++) {
@@ -17745,12 +18454,55 @@ var City3DEngine = (function() {
       );
     }
 
+    // --- Cinematic camera: gentle drift, focus push-in and banked turns ---
+    var focusActive = !!(hoveredDistrict || pendingFocusRepo);
+    var fovTarget = BASE_FOV;
+    if (isAutoCruising && isDynamicActive) fovTarget = 17.25;
+    if (focusActive) fovTarget = 16.45;
+    if (isDynamicActive) fovTarget += Math.sin(totalElapsedTime * 0.6) * 0.22;
+    currentFov += (fovTarget - currentFov) * Math.min(1, dt * 2.6);
+    if (Math.abs(camera.fov - currentFov) > 0.004) {
+      camera.fov = currentFov;
+      camera.updateProjectionMatrix();
+    }
+
+    var desiredBank = 0;
+    if (isAutoCruising && isDynamicActive && flightSpline) {
+      desiredBank = -calcBankAngle(flightSpline, cruiseProgress) * 2.6;
+    }
+    if (isDynamicActive) desiredBank += Math.sin(totalElapsedTime * 0.37) * 0.008;
+    if (!isFinite(desiredBank)) desiredBank = 0;
+    desiredBank = Math.max(-0.34, Math.min(0.34, desiredBank));
+    bankAngle += (desiredBank - bankAngle) * Math.min(1, dt * 3.0);
+    if (!isFinite(bankAngle)) bankAngle = 0;
+
+    var driftTheta = 0;
+    var driftPhi = 0;
+    var driftRadiusFactor = 0;
+    if (isDynamicActive) {
+      driftTheta = Math.sin(totalElapsedTime * 0.27) * 0.010 + Math.sin(totalElapsedTime * 0.73 + 1.3) * 0.004;
+      driftPhi = Math.cos(totalElapsedTime * 0.21) * 0.006;
+      driftRadiusFactor = Math.sin(totalElapsedTime * 0.33 + 0.7) * 0.012;
+    }
+    var driftLerp = Math.min(1, dt * 1.5);
+    camDriftTheta += (driftTheta - camDriftTheta) * driftLerp;
+    camDriftPhi += (driftPhi - camDriftPhi) * driftLerp;
+    camDriftRadiusFactor += (driftRadiusFactor - camDriftRadiusFactor) * driftLerp;
+
+    var camTheta = orbit.theta + camDriftTheta;
+    var camPhi = Math.max(0.02, Math.min(Math.PI / 2.05, orbit.phi + camDriftPhi));
+    var camRadius = Math.max(40, Math.min(900, orbit.radius * (1 + camDriftRadiusFactor)));
+
     // Camera sits on the sphere around orbit.target with angles (theta, phi) and radius
-    camera.up.set(0, 1, 0);
-    var ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
-    var oy = orbit.target.y + orbit.radius * Math.cos(orbit.phi);
-    var oz = orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta);
+    var ox = orbit.target.x + camRadius * Math.sin(camPhi) * Math.sin(camTheta);
+    var oy = orbit.target.y + camRadius * Math.cos(camPhi);
+    var oz = orbit.target.z + camRadius * Math.sin(camPhi) * Math.cos(camTheta);
     camera.position.set(ox, oy, oz);
+
+    var camForward = new THREE.Vector3(orbit.target.x - ox, orbit.target.y - oy, orbit.target.z - oz);
+    if (camForward.lengthSq() < 0.0001) camForward.set(0, 0, -1);
+    camForward.normalize();
+    camera.up.set(0, 1, 0).applyAxisAngle(camForward, bankAngle);
     camera.lookAt(orbit.target.x, orbit.target.y, orbit.target.z);
 
     // Mouse Hover Intersections
@@ -17767,6 +18519,11 @@ var City3DEngine = (function() {
         canvasEl.style.cursor = isDragging ? 'grabbing' : 'grab';
         hoveredBadge = null;
       }
+    }
+
+    // Cinematic pass time (grain animation)
+    if (cinematicPass && cinematicPass.uniforms && cinematicPass.uniforms['uTime']) {
+      cinematicPass.uniforms['uTime'].value = totalElapsedTime;
     }
 
     // Post-Processing / Fallback Render
@@ -17787,6 +18544,15 @@ var City3DEngine = (function() {
           gtaoPass.uniforms['tDepth'].value = depthTexture;
         }
       }
+
+      // RenderPass writes into readBuffer. Pin it to the depth-texture target every
+      // frame so AO/EDL never samples a stale or cleared depth buffer (post-pass
+      // ping-pong parity must not decide depth validity).
+      if (composer.renderTarget2 && composer.renderTarget1 && depthTexture) {
+        composer.readBuffer = composer.renderTarget2;
+        composer.writeBuffer = composer.renderTarget1;
+      }
+
       composer.render();
     } else {
       renderer.render(scene, camera);
@@ -18514,6 +19280,9 @@ var City3DEngine = (function() {
     if (fxaaPass && fxaaPass.uniforms && fxaaPass.uniforms['resolution']) {
       fxaaPass.uniforms['resolution'].value.set(1.0 / rw, 1.0 / rh);
     }
+    if (cinematicPass && cinematicPass.uniforms && cinematicPass.uniforms['uResolution']) {
+      cinematicPass.uniforms['uResolution'].value.set(rw, rh);
+    }
     requestRender(3);
   }
 
@@ -18642,12 +19411,18 @@ var City3DEngine = (function() {
       if (r && r.path) map[r.path] = r.status;
       if (r && r.name) map[r.name] = r.status;
     });
+    var statusVisualsChanged = false;
     districtData.forEach(function(dist) {
       if (dist && dist.repo) {
         var s = map[dist.repo.path] || map[dist.repo.name];
         if (s) dist.repo.status = s;
+        if (dist.statusGroup && repoStatusSignature(dist.repo.status) !== dist.statusSignature) {
+          buildRepoStatusVisualsForDistrict(dist);
+          statusVisualsChanged = true;
+        }
       }
     });
+    if (statusVisualsChanged) requestRender(4);
   }
 
   return {
