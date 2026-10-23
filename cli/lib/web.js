@@ -14352,7 +14352,13 @@ var City3DEngine = (function() {
   var moonLight = null;
   var ambientLight = null;
   var hemiLight = null;
+  var fillLight = null;
+  var cityGlowLight = null;
   var starField = null;
+
+  // Dynamic sunlight orbit (slowly revolves when motion is enabled)
+  var sunOrbitAzimuth = Math.PI * 0.22;
+  var lightPalette = null;
 
   // Dynamic Scene Elements
   var repoBadges = [];
@@ -14369,6 +14375,14 @@ var City3DEngine = (function() {
   var buildingMaterials = [];
   var roadMaterials = [];
   var megaScreenMaterials = [];
+
+  // Building growth + view-center height focus state
+  // Each entry: { group, x, z, baseHeight, districtIndex, delay, duration, elapsed, progress, focus, done }
+  var buildingInstances = [];
+  var growthClock = 0;
+  var FOCUS_INNER_RADIUS = 55;
+  var FOCUS_OUTER_RADIUS = 330;
+  var FOCUS_MIN_SCALE = 0.32;
 
   // Emissive Texture Cache per Building/Repo (Git Contribution Heatmap Light Maps)
   var emissiveTexCache = {};
@@ -14674,6 +14688,11 @@ var City3DEngine = (function() {
     ambientLight = new THREE.AmbientLight(0x1e293b, 0.95);
     scene.add(ambientLight);
 
+    // Sky/ground hemisphere bounce gives facades a natural gradient instead of flat ambient
+    hemiLight = new THREE.HemisphereLight(0xbfd7ff, 0x0a0f1a, 0.42);
+    hemiLight.position.set(0, 380, 0);
+    scene.add(hemiLight);
+
     sunLight = new THREE.DirectionalLight(0xfff5e0, 1.35);
     sunLight.position.set(280, 420, 200);
     sunLight.castShadow = true;
@@ -14690,6 +14709,111 @@ var City3DEngine = (function() {
       sunLight.shadow.normalBias = 0.05;
     }
     scene.add(sunLight);
+
+    // Cool counter-fill from the opposite side of the sun (rim separation, no shadow cost)
+    fillLight = new THREE.DirectionalLight(0x6ea8ff, 0.26);
+    fillLight.position.set(-240, 220, -180);
+    scene.add(fillLight);
+
+    // Soft cyan city glow hugging the skyline at night
+    cityGlowLight = new THREE.PointLight(0x38bdf8, 0.0, 1500, 1.4);
+    cityGlowLight.position.set(0, 58, 0);
+    scene.add(cityGlowLight);
+
+    updateLightingState(0);
+  }
+
+  function ensureLightPalette() {
+    if (lightPalette || typeof THREE === 'undefined') return lightPalette;
+    lightPalette = {
+      ambientDay: new THREE.Color(0xEEEEEE),
+      ambientNight: new THREE.Color(0x1e293b),
+      sunDay: new THREE.Color(0xfffaf0),
+      sunNight: new THREE.Color(0x818cf8),
+      fillDay: new THREE.Color(0x9fc4ff),
+      fillNight: new THREE.Color(0x4b6dff),
+      hemiSkyDay: new THREE.Color(0xbfd7ff),
+      hemiSkyNight: new THREE.Color(0x22314f),
+      hemiGroundDay: new THREE.Color(0x40465a),
+      hemiGroundNight: new THREE.Color(0x0a0f1a),
+      backgroundDay: new THREE.Color(0x0a1324),
+      backgroundNight: new THREE.Color(0x04060d)
+    };
+    return lightPalette;
+  }
+
+  // Recomputes every light each frame. Sun orbit advances only in dynamic mode,
+  // so the static low-power mode stays completely deterministic.
+  function updateLightingState(dt) {
+    var pal = ensureLightPalette();
+    if (!pal) return;
+    var night = modeTransition;
+    var day = 1 - night;
+
+    if (isDynamicActive) {
+      sunOrbitAzimuth += (dt || 0) * 0.030;
+    }
+
+    var sunRadius = 560;
+    var sx = Math.cos(sunOrbitAzimuth) * sunRadius;
+    var sz = Math.sin(sunOrbitAzimuth) * sunRadius * 0.78;
+    var sy = 300 + Math.sin(sunOrbitAzimuth * 0.55 + 0.6) * 140;
+
+    if (sunLight) {
+      sunLight.position.set(sx, Math.max(170, sy), sz);
+      sunLight.color.copy(pal.sunDay).lerp(pal.sunNight, night);
+      sunLight.intensity = day * 1.45 + night * 0.55;
+    }
+
+    if (fillLight) {
+      fillLight.position.set(-sx * 0.75, 240, -sz * 0.75);
+      fillLight.color.copy(pal.fillDay).lerp(pal.fillNight, night);
+      fillLight.intensity = day * 0.34 + night * 0.14;
+    }
+
+    if (hemiLight) {
+      hemiLight.color.copy(pal.hemiSkyDay).lerp(pal.hemiSkyNight, night);
+      hemiLight.groundColor.copy(pal.hemiGroundDay).lerp(pal.hemiGroundNight, night);
+      hemiLight.intensity = day * 0.70 + night * 0.22;
+    }
+
+    if (ambientLight) {
+      ambientLight.color.copy(pal.ambientDay).lerp(pal.ambientNight, night);
+      ambientLight.intensity = day * 0.78 + night * 0.46;
+    }
+
+    var pulse = 0.5 + 0.5 * Math.sin(totalElapsedTime * 0.85);
+    if (cityGlowLight) {
+      cityGlowLight.intensity = night * (0.55 + pulse * 0.35);
+      cityGlowLight.position.y = 55 + pulse * 8;
+    }
+
+    if (renderer) {
+      renderer.toneMappingExposure = day * 1.36 + night * 1.02;
+    }
+
+    if (bloomPass) {
+      if (targetMode === 'clay') {
+        bloomPass.strength = 0.0;
+      } else {
+        bloomPass.strength = night * (0.70 + (isDynamicActive ? pulse * 0.08 : 0));
+        bloomPass.threshold = 0.9;
+        bloomPass.radius = 0.35;
+      }
+    }
+
+    // Streetlights breathe a little at night when motion is enabled
+    if (streetlightLenses.length > 0) {
+      for (var sl = 0; sl < streetlightLenses.length; sl++) {
+        var flicker = isDynamicActive ? (0.90 + 0.10 * Math.sin(totalElapsedTime * 4.2 + sl * 1.7)) : 1.0;
+        streetlightLenses[sl].emissiveIntensity = night * 2.5 * flicker;
+      }
+    }
+    if (streetlightGlowDecals.length > 0) {
+      for (var sg = 0; sg < streetlightGlowDecals.length; sg++) {
+        streetlightGlowDecals[sg].opacity = night * 0.45;
+      }
+    }
   }
 
   function setupSkyAndStars() {
@@ -15322,6 +15446,25 @@ var City3DEngine = (function() {
     return Math.max(7.0, Math.min(86.0, h));
   }
 
+  // Height ratio based on the current view-centre (orbit target).
+  // 1.0 at the very centre, smoothly falling to FOCUS_MIN_SCALE far away.
+  function computeFocusFactor(x, z) {
+    if (!orbit || !orbit.target) return 1.0;
+    var dx = x - orbit.target.x;
+    var dz = z - orbit.target.z;
+    var dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist <= FOCUS_INNER_RADIUS) return 1.0;
+    if (dist >= FOCUS_OUTER_RADIUS) return FOCUS_MIN_SCALE;
+    var t = (dist - FOCUS_INNER_RADIUS) / (FOCUS_OUTER_RADIUS - FOCUS_INNER_RADIUS);
+    var smooth = t * t * (3.0 - 2.0 * t); // smoothstep
+    return 1.0 - smooth * (1.0 - FOCUS_MIN_SCALE);
+  }
+
+  function easeOutCubic(t) {
+    var inv = 1.0 - t;
+    return 1.0 - inv * inv * inv;
+  }
+
   function clusterBuildings(files, tallestFile) {
     if (!files || !files.length) return [];
     var tallestName = tallestFile ? (tallestFile.name || tallestFile.path) : '';
@@ -15888,26 +16031,37 @@ var City3DEngine = (function() {
       currentCitySignature = newSig;
     }
 
+    var disposeNodeResources = function (node) {
+      if (!node) return;
+      if (node.geometry) node.geometry.dispose();
+      var mats = node.material;
+      if (Array.isArray(mats)) {
+        for (var mi = 0; mi < mats.length; mi++) {
+          if (mats[mi] && mats[mi] !== clayMaterial) mats[mi].dispose();
+        }
+      } else if (mats && mats !== clayMaterial) {
+        mats.dispose();
+      }
+      if (node.userData && node.userData.origMaterial) {
+        var orig = node.userData.origMaterial;
+        if (Array.isArray(orig)) {
+          for (var oi = 0; oi < orig.length; oi++) {
+            if (orig[oi] && orig[oi] !== clayMaterial) orig[oi].dispose();
+          }
+        } else if (orig !== clayMaterial) {
+          orig.dispose();
+        }
+      }
+    };
+
     var cleanGroup = function(grp) {
       if (!grp) return;
       while (grp.children.length > 0) {
         var obj = grp.children[0];
         grp.remove(obj);
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach(function(m) { if (m && m !== clayMaterial) m.dispose(); });
-          } else if (obj.material !== clayMaterial) {
-            obj.material.dispose();
-          }
-        }
-        if (obj.userData && obj.userData.origMaterial) {
-          if (Array.isArray(obj.userData.origMaterial)) {
-            obj.userData.origMaterial.forEach(function(m) { if (m) m.dispose(); });
-          } else if (obj.userData.origMaterial) {
-            obj.userData.origMaterial.dispose();
-          }
-        }
+        obj.traverse(function (child) {
+          disposeNodeResources(child);
+        });
       }
     };
 
@@ -15937,6 +16091,8 @@ var City3DEngine = (function() {
     buildingMaterials = [];
     roadMaterials = [];
     megaScreenMaterials = [];
+    buildingInstances = [];
+    growthClock = 0;
 
     var repos = (cachedCityData && cachedCityData.length) ? cachedCityData : (cityDataList && cityDataList.length) ? cityDataList : [
       {
@@ -16592,6 +16748,10 @@ var City3DEngine = (function() {
       districtGroup.add(aoMesh);
     }
 
+    // Everything added after this index belongs to this single building and will
+    // be re-parented into a dedicated growth group (so it can rise from the ground).
+    var growthChildStart = districtGroup.children.length;
+
     var buildingTopY = 1.8 + bHeight;
     var buildingCenterX = posX + bx;
     var buildingCenterZ = posZ + bz;
@@ -16941,6 +17101,36 @@ var City3DEngine = (function() {
       districtGroup.add(signMesh);
     }
 
+    // Re-parent all just-added building meshes into a growth group whose origin is
+    // the ground plane. Scaling it on Y makes the tower sprout upward.
+    var growthChildren = districtGroup.children.slice(growthChildStart);
+    if (growthChildren.length) {
+      var buildingGroup = new THREE.Group();
+      for (var gc = 0; gc < growthChildren.length; gc++) {
+        districtGroup.remove(growthChildren[gc]);
+        buildingGroup.add(growthChildren[gc]);
+      }
+      buildingGroup.scale.y = 0.0001;
+      buildingGroup.visible = false;
+      districtGroup.add(buildingGroup);
+
+      var growthDelay = Math.max(0, districtIndex) * 0.11 + bIndex * 0.065 + ((styleSeed % 7) * 0.028);
+      var growthDuration = 0.85 + Math.min(0.75, bHeight / 120.0);
+      buildingInstances.push({
+        group: buildingGroup,
+        x: buildingCenterX,
+        z: buildingCenterZ,
+        baseHeight: bHeight,
+        districtIndex: districtIndex,
+        delay: growthDelay,
+        duration: growthDuration,
+        elapsed: 0,
+        progress: 0,
+        focus: 1.0,
+        done: false
+      });
+    }
+
     return {
       topY: buildingTopY,
       posX: buildingCenterX,
@@ -17147,6 +17337,15 @@ var City3DEngine = (function() {
     var isAhead = status && status.ahead > 0;
     var isBehind = status && status.behind > 0;
 
+    // When should this district's banner appear? After its tallest building sprouted.
+    var districtGrowthEnd = 0;
+    for (var gi = 0; gi < buildingInstances.length; gi++) {
+      if (buildingInstances[gi].districtIndex === index) {
+        districtGrowthEnd = Math.max(districtGrowthEnd, buildingInstances[gi].delay + buildingInstances[gi].duration);
+      }
+    }
+    var bannerRevealAt = districtGrowthEnd * 0.82;
+
     var beaconColor = 0x10b981;
     if (isConflict) beaconColor = 0xff0055;
     else if (hasChanges) beaconColor = 0xf59e0b;
@@ -17156,7 +17355,7 @@ var City3DEngine = (function() {
     var bannerSprite = createRepoBannerSprite(repo.name, repo.totalFiles, (repo.tallest ? repo.tallest.size : 0), targetMode === 'night', status);
     bannerSprite.position.set(tallestBuildingPos.x, tallestBuildingPos.y + 12.0, tallestBuildingPos.z);
     bannerSprite.userData = { repoIndex: index, repo: repo, districtCenter: new THREE.Vector3(posX, 15, posZ) };
-    bannerSprite.visible = true;
+    bannerSprite.visible = false;
     cityGroup.add(bannerSprite);
 
     var tetherGeo = new THREE.BufferGeometry();
@@ -17167,7 +17366,7 @@ var City3DEngine = (function() {
     tetherGeo.setFromPoints(tetherPoints);
     var tetherMat = new THREE.LineBasicMaterial({ color: beaconColor, linewidth: 2, toneMapped: false });
     var tetherLine = new THREE.Line(tetherGeo, tetherMat);
-    tetherLine.visible = true;
+    tetherLine.visible = false;
     cityGroup.add(tetherLine);
 
     repoBadges.push({
@@ -17178,7 +17377,9 @@ var City3DEngine = (function() {
       hasChanges: hasChanges,
       districtCenter: new THREE.Vector3(posX, 15, posZ),
       tallestPos: tallestBuildingPos.clone(),
-      height: maxHeight
+      height: maxHeight,
+      focus: 1.0,
+      revealAt: bannerRevealAt
     });
 
     districtData.push({
@@ -17313,7 +17514,9 @@ var City3DEngine = (function() {
     }
     for (var bg = 0; bg < repoBadges.length; bg++) {
       var bItem = repoBadges[bg];
-      bItem.sprite.position.y = bItem.tallestPos.y + 12.0;
+      var bFocus = (typeof bItem.focus === 'number') ? bItem.focus : 1.0;
+      bItem.sprite.position.y = bItem.tallestPos.y * bFocus + 12.0;
+      if (bItem.line) bItem.line.scale.y = bFocus;
     }
   }
 
@@ -17327,56 +17530,28 @@ var City3DEngine = (function() {
     var targetVal = targetMode === 'night' ? 1.0 : 0.0;
     var hasModeTransition = Math.abs(modeTransition - targetVal) > 0.0005;
     if (hasModeTransition) {
-      modeTransition += (targetVal - modeTransition) * 0.08;
+      modeTransition += (targetVal - modeTransition) * Math.min(1.0, dt * 4.2);
       if (Math.abs(modeTransition - targetVal) <= 0.0005) {
         modeTransition = targetVal;
       }
-
-      // Crystal Clear Studio Background (Zero Fog!)
-      var bgDay = new THREE.Color(0x060913);
-      var bgNight = new THREE.Color(0x060913);
-      scene.background = bgDay.clone().lerp(bgNight, modeTransition);
-
-      // Balanced 1 Ambient Light + 1 Directional Light
-      var ambDay = new THREE.Color(0xEEEEEE);
-      var ambNight = new THREE.Color(0x1e293b);
-      ambientLight.color = ambDay.clone().lerp(ambNight, modeTransition);
-      ambientLight.intensity = (1.0 - modeTransition) * 0.75 + modeTransition * 0.55;
-
-      var sunDay = new THREE.Color(0xfffaf0);
-      var sunNight = new THREE.Color(0x818cf8);
-      sunLight.color = sunDay.clone().lerp(sunNight, modeTransition);
-      sunLight.intensity = (1.0 - modeTransition) * 1.35 + modeTransition * 0.65;
-      sunLight.position.lerpVectors(new THREE.Vector3(220, 320, 180), new THREE.Vector3(-180, 260, -140), modeTransition);
-
-      if (starField) {
-        starField.material.opacity = modeTransition * 0.95;
-      }
-
-      // Streetlights Night Illumination
-      if (streetlightLenses.length > 0) {
-        for (var sl = 0; sl < streetlightLenses.length; sl++) {
-          streetlightLenses[sl].emissiveIntensity = modeTransition * 2.5;
-        }
-      }
-      if (streetlightGlowDecals.length > 0) {
-        for (var sg = 0; sg < streetlightGlowDecals.length; sg++) {
-          streetlightGlowDecals[sg].opacity = modeTransition * 0.45;
-        }
-      }
-
-      // Unreal Bloom Dynamic Adaptation
-      if (bloomPass) {
-        bloomPass.strength = (targetMode === 'clay') ? 0.0 : (modeTransition * 0.75);
-        bloomPass.threshold = 0.9;
-        bloomPass.radius = 0.35;
-      }
-      renderer.toneMappingExposure = (1.0 - modeTransition) * 1.35 + modeTransition * 1.0;
     }
 
-    if (targetMode === 'clay' && bloomPass && bloomPass.strength !== 0.0) {
-      bloomPass.strength = 0.0;
+    // Subtle day/night sky gradient
+    var lightPal = ensureLightPalette();
+    if (lightPal) {
+      var bgDay = lightPal.backgroundDay;
+      var bgNight = lightPal.backgroundNight;
+      if (!scene.background || typeof scene.background.copy !== 'function') {
+        scene.background = new THREE.Color();
+      }
+      scene.background.copy(bgDay).lerp(bgNight, modeTransition);
     }
+    if (starField) {
+      starField.material.opacity = modeTransition * 0.95;
+    }
+
+    // All lighting (sun orbit, hemisphere, fill, glow, exposure, bloom) in one place
+    updateLightingState(dt);
 
     var hasCameraLerp = false;
     if (hoveredDistrict) {
@@ -17464,12 +17639,7 @@ var City3DEngine = (function() {
         }
       }
 
-      // Badge floating sine bobbing
-      for (var bg = 0; bg < repoBadges.length; bg++) {
-        var bItem = repoBadges[bg];
-        var bob = Math.sin(totalElapsedTime * 2.0 + bg) * 0.6;
-        bItem.sprite.position.y = bItem.tallestPos.y + 12.0 + bob;
-      }
+      // (Badge bobbing is handled in the growth/height-focus pass below)
 
       // Traffic Cars Movement
       if (trafficCars && trafficCars.length > 0) {
@@ -17509,6 +17679,72 @@ var City3DEngine = (function() {
       }
     }
 
+    // --- Building growth + view-centre height focus ---------------------
+    var growthFramePending = false;
+    var focusFramePending = false;
+
+    growthClock += dt;
+    if (buildingInstances.length > 0) {
+      for (var bi = 0; bi < buildingInstances.length; bi++) {
+        var inst = buildingInstances[bi];
+        if (!inst.done) {
+          inst.elapsed += dt;
+          var gt = (inst.elapsed - inst.delay) / inst.duration;
+          if (gt < 0) {
+            inst.group.visible = false;
+            inst.group.scale.y = 0.0001;
+            growthFramePending = true;
+            continue;
+          }
+          if (gt >= 1) {
+            inst.progress = 1.0;
+            inst.done = true;
+          } else {
+            inst.progress = easeOutCubic(gt);
+            growthFramePending = true;
+          }
+          inst.group.visible = true;
+        }
+
+        var targetFocus = computeFocusFactor(inst.x, inst.z);
+        if (Math.abs(targetFocus - inst.focus) > 0.0008) {
+          inst.focus += (targetFocus - inst.focus) * Math.min(1.0, dt * 4.5);
+          focusFramePending = true;
+        } else {
+          inst.focus = targetFocus;
+        }
+        inst.group.scale.y = Math.max(0.0001, inst.progress * inst.focus);
+      }
+    }
+
+    // Repo banners fade in after their district has grown, then follow focus height
+    for (var bb = 0; bb < repoBadges.length; bb++) {
+      var badge = repoBadges[bb];
+      if (!badge.sprite.visible) {
+        if (growthClock >= (badge.revealAt || 0)) {
+          badge.sprite.visible = true;
+          if (badge.line) badge.line.visible = true;
+        } else {
+          growthFramePending = true;
+          continue;
+        }
+      }
+      var badgeTarget = computeFocusFactor(badge.tallestPos.x, badge.tallestPos.z);
+      if (Math.abs(badgeTarget - badge.focus) > 0.0008) {
+        badge.focus += (badgeTarget - badge.focus) * Math.min(1.0, dt * 4.5);
+        focusFramePending = true;
+      } else {
+        badge.focus = badgeTarget;
+      }
+      if (badge.line) badge.line.scale.y = badge.focus;
+      var bob = isDynamicActive ? Math.sin(totalElapsedTime * 2.0 + bb) * 0.6 : 0;
+      badge.sprite.position.set(
+        badge.tallestPos.x,
+        badge.tallestPos.y * badge.focus + 12.0 + bob,
+        badge.tallestPos.z
+      );
+    }
+
     // Camera sits on the sphere around orbit.target with angles (theta, phi) and radius
     camera.up.set(0, 1, 0);
     var ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
@@ -17520,8 +17756,10 @@ var City3DEngine = (function() {
     // Mouse Hover Intersections
     if (raycaster && mouse && camera && repoBadges.length > 0) {
       raycaster.setFromCamera(mouse, camera);
-      var spriteList = repoBadges.map(function(item) { return item.sprite; });
-      var intersects = raycaster.intersectObjects(spriteList, false);
+      var spriteList = repoBadges.filter(function(item) {
+        return item.sprite && item.sprite.visible;
+      }).map(function(item) { return item.sprite; });
+      var intersects = spriteList.length ? raycaster.intersectObjects(spriteList, false) : [];
       if (intersects.length > 0) {
         canvasEl.style.cursor = 'pointer';
         hoveredBadge = intersects[0].object;
@@ -17555,11 +17793,12 @@ var City3DEngine = (function() {
     }
 
     // Decide whether next animation frame is needed
+    var extraAnimationPending = growthFramePending || focusFramePending;
     if (isDynamicActive) {
       requestRender(1);
-    } else if (hasModeTransition || hasCameraLerp || isDragging || dirtyFramesCount > 0) {
+    } else if (hasModeTransition || hasCameraLerp || isDragging || extraAnimationPending || dirtyFramesCount > 0) {
       dirtyFramesCount = Math.max(0, dirtyFramesCount - 1);
-      if (dirtyFramesCount > 0 || hasModeTransition || hasCameraLerp || isDragging) {
+      if (dirtyFramesCount > 0 || hasModeTransition || hasCameraLerp || isDragging || extraAnimationPending) {
         requestRender(1);
       }
     } else {
